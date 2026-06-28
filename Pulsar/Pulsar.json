@@ -1,0 +1,10 @@
+{
+    "Author": "Drovolon",
+    "Name": "Pulsar",
+    "Punchline": "A plugin to sync sound files.",
+    "Description": "A plugin to sync sound files. /pulsar or /pulse to open config.",
+    "ApplicableVersion": "any",
+    "Tags": [
+        "sync"
+    ]
+}
