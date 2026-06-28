@@ -5,12 +5,14 @@
     <PackageProjectUrl>https://github.com/Drovolon/Pulsar</PackageProjectUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <IsPackable>false</IsPackable>
+
+    <!-- Need net10.0-windows10 to get WASAPI. Which needed for FLAC etc. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="..\Data\goat.png">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Visible>false</Visible>
-    </Content>
+    <PackageReference Include="NAudio" Version="3.0.0-preview.14" />
+    <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.14" />
   </ItemGroup>
 </Project>

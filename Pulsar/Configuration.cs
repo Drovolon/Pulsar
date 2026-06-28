@@ -11,6 +11,8 @@ public class Configuration : IPluginConfiguration
     public bool IsConfigWindowMovable { get; set; } = true;
     public bool SomePropertyToBeSavedAndWithADefault { get; set; } = true;
 
+    public float Volume { get; set; } = 1.0f;
+
     // The below exists just to make saving less cumbersome
     public void Save()
     {
