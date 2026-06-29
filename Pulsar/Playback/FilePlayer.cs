@@ -19,6 +19,12 @@ internal sealed class ProgressProvider(AudioFileReader source, Action<PlaybackPo
     }
 }
 
+/// <summary>
+/// FilePlayer uses NAudio to actually *play* audio files. Like, audible to the user.
+/// It's a pretty simple API: play a file path, stop playing, adjust volume, seek to a position.
+/// Exposes a LastError if something goes wrong, a NowPlaying that will be true if audio is playing,
+/// and offers an event for when the track finishes playing naturally.
+/// </summary>
 public sealed class FilePlayer : IAsyncDisposable
 {
     private abstract record Command;
@@ -46,16 +52,16 @@ public sealed class FilePlayer : IAsyncDisposable
     // Triggered when a track finishes on its own, not stopped or a new track started.
     public event Action? OnTrackFinished;
 
-    private async Task Unload(WaveOut? device, AudioFileReader? reader, TaskCompletionSource? trackEnded)
+    private async Task Unload(IWavePlayer? device, AudioFileReader? reader, TaskCompletionSource? trackEnded)
     {
-        Plugin.Log.Info($"DBG Unload enter (device={(device is null ? "null" : "present")})");
+        Plugin.Log.Debug($"Unload enter (device={(device is null ? "null" : "present")})");
         if (device is null) return;
         try
         {
             device.Stop();
-            Plugin.Log.Info("DBG Unload: Stop() returned, awaiting trackEnded");
+            Plugin.Log.Debug("Unload: Stop() returned, awaiting trackEnded");
             if (trackEnded is not null) await trackEnded.Task;
-            Plugin.Log.Info("DBG Unload: trackEnded done, disposing");
+            Plugin.Log.Debug("Unload: trackEnded done, disposing");
         }
         catch (Exception e)
         {
@@ -71,7 +77,7 @@ public sealed class FilePlayer : IAsyncDisposable
 
     private async Task ProcessAsync()
     {
-        WaveOut? device = null;
+        IWavePlayer? device = null;
         AudioFileReader? reader = null;
         TaskCompletionSource? trackEnded = null;
         var volume = 1.0f;
@@ -87,7 +93,7 @@ public sealed class FilePlayer : IAsyncDisposable
                 if (trackEnded is not null
                     && await Task.WhenAny(next, trackEnded.Task) == trackEnded.Task)
                 {
-                    Plugin.Log.Info("DBG >> NATURAL-END branch");
+                    Plugin.Log.Debug(">> NATURAL-END branch");
                     await Unload(device, reader, trackEnded);
                     device = null; reader = null; trackEnded = null;
                     OnTrackFinished?.Invoke();
@@ -98,7 +104,7 @@ public sealed class FilePlayer : IAsyncDisposable
                 try { cmd = await next; }
                 catch (ChannelClosedException) { break; }
                 next = mailbox.Reader.ReadAsync().AsTask();
-                Plugin.Log.Info($"DBG cmd={cmd.GetType().Name}  trackEnded={(trackEnded is null ? "null" : trackEnded.Task.Status.ToString())}");
+                Plugin.Log.Debug($"cmd={cmd.GetType().Name}  trackEnded={(trackEnded is null ? "null" : trackEnded.Task.Status.ToString())}");
 
                 try
                 {
@@ -150,13 +156,13 @@ public sealed class FilePlayer : IAsyncDisposable
         }
     }
 
-    private TaskCompletionSource BuildDevice(ref WaveOut? device)
+    private TaskCompletionSource BuildDevice(ref IWavePlayer? device)
     {
-        device = new WaveOut();
+        device = new WasapiPlayerBuilder().Build();
         var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         device.PlaybackStopped += (_, e) =>
         {
-            Plugin.Log.Info($"DBG PlaybackStopped (ex={e.Exception?.Message ?? "none"})");
+            Plugin.Log.Debug($"PlaybackStopped (ex={e.Exception?.Message ?? "none"})");
             NowPlaying = false;
             if (e.Exception is not null) ended.TrySetException(e.Exception);
             else ended.TrySetResult();
