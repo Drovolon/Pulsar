@@ -9,7 +9,7 @@ public class Configuration : IPluginConfiguration
     public int Version { get; set; } = 0;
 
     public bool IsConfigWindowMovable { get; set; } = true;
-    public bool SomePropertyToBeSavedAndWithADefault { get; set; } = true;
+    public bool DebugMode { get; set; } = false;
 
     public float Volume { get; set; } = 1.0f;
 

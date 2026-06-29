@@ -55,6 +55,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     public Task LoadAsync(CancellationToken cancellationToken)
     {
+        if (Configuration.DebugMode)
+            ToggleMainUi();
+
         return Task.CompletedTask;
     }
 
