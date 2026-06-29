@@ -12,6 +12,9 @@ namespace Pulsar.Playback;
 /// supported music files in the directory (recursively). Then it offers
 /// play/stop/next/prev with shuffle controls. It automatically advances
 /// to the next song once the current one finishes.
+///
+/// DirectoryPlayer doesn't interface with any actual audio API. That's handled
+/// by FilePlayer.
 /// </summary>
 /// <param name="directory">a directory hopefully containing music files</param>
 public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
@@ -57,7 +60,12 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
     /// </summary>
     public bool NowPlaying => player.NowPlaying;
 
-    private static readonly string[] Extensions = ["*.wav", "*.mp3", "*.flac"]; // TODO: refine
+    // TODO: move somewhere that makes more sense
+    private static readonly string[] Extensions = [
+        "*.aac", "*.aiff", "*.flac", ".m4a",
+        "*.mp3", "*.ogg", "*.opus", "*.wav",
+        "*.wma", "*.wv", "*.m4a"
+        ];
 
     /// <summary>
     /// Initializes the DirectoryPlayer by doing a recursive scan.
@@ -76,6 +84,12 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
         // Note: Next wraps around to the playlist beginning once it hits the end.
         // So, this is a repeat-all player, currently.
         player.OnTrackFinished += Next;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        player.OnTrackFinished -= Next;
+        await player.DisposeAsync();
     }
 
     public void ToggleShuffle()
@@ -185,11 +199,5 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
                 Play();
             }
         }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        player.OnTrackFinished -= Next;
-        await player.DisposeAsync();
     }
 }
