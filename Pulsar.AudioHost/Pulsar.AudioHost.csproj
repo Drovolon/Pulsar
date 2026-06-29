@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+    <PropertyGroup>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <UserSecretsId>dotnet-Pulsar.AudioHost-5224ad04-f745-491f-9f20-2efa19dcde9d</UserSecretsId>
+
+        <!-- Need net10.0-windows10 to get WASAPI. Which needed for FLAC etc. -->
+        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+        <!-- Emit a Windows apphost (.exe) even when building on Linux: the plugin spawns this
+             as a real process inside the game's (Wine) environment. Without a RID the SDK
+             emits a Linux apphost, which Wine can't start. -->
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <SelfContained>false</SelfContained>
+
+        <!-- FileDescription: what Task Manager (and some mixer surfaces) show as the app name. -->
+        <AssemblyTitle>Pulsar Audio Host</AssemblyTitle>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
+        <PackageReference Include="NAudio" Version="3.0.0-preview.16" />
+        <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16" />
+        <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16" />
+        <PackageReference Include="NAudio.Wasapi" Version="3.0.0-preview.16" />
+        <PackageReference Include="Serilog" Version="4.3.1" />
+        <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+        <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
+        <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+        <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj" />
+    </ItemGroup>
+</Project>

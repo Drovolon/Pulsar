@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using NAudio.Wave;
+using Pulsar.Common.Api;
 
 namespace Pulsar.Playback;
 
@@ -16,8 +18,7 @@ namespace Pulsar.Playback;
 /// DirectoryPlayer doesn't interface with any actual audio API. That's handled
 /// by FilePlayer.
 /// </summary>
-/// <param name="directory">a directory hopefully containing music files</param>
-public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
+public sealed class DirectoryPlayer : IAsyncDisposable
 {
     // the original files, sorted by filename. this is only kept for reference
     // and is never mutated except inside Initialize()
@@ -26,8 +27,22 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
     // working copy of the files, could be shuffled or original
     private string[]? playlist;
 
-    private readonly FilePlayer player = new();
     private readonly Lock @lock = new();
+
+    /// <summary>
+    /// Whether the user wants us to be playing music, right now.
+    /// </summary>
+    private bool playing;
+    
+    /// <summary>
+    /// Number of consecutive load failures.
+    /// </summary>
+    private int consecutiveFailures;
+
+    /// <summary>
+    /// Original directory used for this player.
+    /// </summary>
+    public string Directory { get; init; }
 
     /// <summary>
     /// The current play order. Could be shuffled or could be sorted.
@@ -38,34 +53,58 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
     /// Which track is the current. Starts at index 0.
     /// Next() will advance to index 1. Etc.
     /// </summary>
-    public int Index { get; private set; } = 0;
+    public int Index { get; private set; }
 
     /// <summary>
-    /// Whether or not the file list is currently shuffled.
+    /// Whether the file list is currently shuffled.
     /// ToggleShuffle() will flip this on or off, and take care
     /// of updating Tracks.
     /// </summary>
-    public bool Shuffle { get; private set; } = false;
+    public bool Shuffle { get; private set; }
 
     /// <summary>
     /// Where the current track is (how far into the song, and
     /// how long the song is). Null if not playing.
     /// </summary>
-    public PlaybackPosition? Position => player.Position;
+    public PlaybackPosition? Position { get; private set; }
+
+    public PlaybackState State { get; private set; }
 
     /// <summary>
-    /// Whether or not something is currently playing.
-    /// This really means playing. Like, sound will be playing
-    /// from the user's speakers.
+    /// Fired by us on a cursor event (track change / play / pause / resume / seek / stop).
     /// </summary>
-    public bool NowPlaying => player.NowPlaying;
+    public event Action? OnChanged;
+
+    /// <summary>
+    /// Handler fired *by the engine* when something changed: like a playback failure, track ended, etc.
+    /// </summary>
+    private void OnEngineChanged(object? _, EngineSnapshot snapshot)
+    {
+        State = snapshot.State;
+        Position = snapshot.Position;
+        OnChanged?.Invoke();
+    }
 
     // TODO: move somewhere that makes more sense
     private static readonly string[] Extensions = [
         "*.aac", "*.aiff", "*.flac", ".m4a",
         "*.mp3", "*.ogg", "*.opus", "*.wav",
-        "*.wma", "*.wv", "*.m4a"
-        ];
+        "*.wma", "*.wv", "*.m4a",
+        "*.scd" // hmmm...
+    ];
+
+    private readonly CancellationTokenSource asyncCts = new();
+    private Task? updateLoop;
+
+    private readonly IRemoteEngine player;
+    private readonly EngineQueueManager eqm;
+
+    public DirectoryPlayer(IRemoteEngine player, string directory)
+    {
+        this.player = player;
+        Directory = directory;
+        eqm = new EngineQueueManager(player, asyncCts.Token);
+    }
 
     /// <summary>
     /// Initializes the DirectoryPlayer by doing a recursive scan.
@@ -73,23 +112,124 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
     /// </summary>
     public async Task Initialize()
     {
-        originalFiles = await Task.Run(() => Extensions
-             .SelectMany(searchPattern =>
-                    Directory.EnumerateFiles(directory, searchPattern, SearchOption.AllDirectories))
-             .OrderBy(f => f)
-            .ToArray());
+        originalFiles = await Task.Run(ScanFiles);
         playlist = originalFiles;
 
         // Go to next once current finishes! Easy.
         // Note: Next wraps around to the playlist beginning once it hits the end.
         // So, this is a repeat-all player, currently.
-        player.OnTrackFinished += Next;
+        player.OnPlaybackEnded += OnEngineEnded;
+        player.OnChanged += OnEngineChanged;
+
+        updateLoop = Task.Run(() => UpdateStateLoop(asyncCts.Token), asyncCts.Token);
+    }
+
+    // This is purely for Position. Updating state here can lead to some tricky race conditions.
+    private async Task UpdateStateLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                if (State == PlaybackState.Playing)
+                {
+                    var state = await player.GetStateAsync(ct);
+                    Position = state.Position;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.Error(ex, "DirectoryPlayer: UpdateStateLoop failed");
+                // back off
+                try { await Task.Delay(1000, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            }
+
+            try { await Task.Delay(State == PlaybackState.Playing ? 250 : 500, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+        }
+    }
+
+    // Recursive scan of the directory for supported files, sorted by path in
+    // human-friendly numeric order (so "11" precedes "113", not the reverse).
+    private string[] ScanFiles() => [
+        .. Extensions
+           .SelectMany(searchPattern =>
+                           System.IO.Directory.EnumerateFiles(Directory, searchPattern, SearchOption.AllDirectories))
+           .OrderBy(f => f, NaturalPathComparer.Instance)
+    ];
+
+    /// <summary>
+    /// Rescan the directory for new files.
+    /// </summary>
+    public async Task Rescan()
+    {
+        string[] scanned;
+        try
+        {
+            scanned = await Task.Run(ScanFiles);
+        }
+        catch (Exception e)
+        {
+            Plugin.Log.Error(e, "DirectoryPlayer: rescan failed");
+            return;
+        }
+
+        lock (@lock)
+        {
+            var current = playlist is null or { Length: 0 } ? null : playlist[Index];
+            originalFiles = scanned;
+            playlist = Shuffle ? [.. scanned.Shuffle()] : scanned;
+            var idx = current is null ? -1 : Array.IndexOf(playlist, current);
+            Index = idx >= 0 ? idx : 0;
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        player.OnTrackFinished -= Next;
-        await player.DisposeAsync();
+        player.OnPlaybackEnded -= OnEngineEnded;
+        player.OnChanged -= OnEngineChanged;
+        asyncCts.Cancel();
+        await eqm.DisposeAsync();
+        if (updateLoop is not null) await updateLoop;
+    }
+
+    /// <summary>
+    /// We automatically go to the Next() track when the current ends.
+    /// But along the way, check if we're having load failures - there's no reason
+    /// to burn CPU cycles trying to continually loop an entirely-failing library.
+    /// </summary>
+    private void OnEngineEnded(object? _, EndReason reason)
+    {
+        lock (@lock)
+        {
+            if (!playing) return;
+
+            if (reason == EndReason.Failed)
+            {
+                consecutiveFailures++;
+                var count = playlist?.Length ?? 0;
+                if (count == 0 || consecutiveFailures >= count)
+                {
+                    Plugin.Log.Warning(
+                        $"DirectoryPlayer: no playable tracks ({consecutiveFailures} consecutive load failures); stopping.");
+                    playing = false;
+                    consecutiveFailures = 0;
+                    eqm.Stop();
+                    return;
+                }
+            }
+            else
+            {
+                consecutiveFailures = 0;
+            }
+
+            UnsafeAdvance();
+        }
     }
 
     public void ToggleShuffle()
@@ -104,9 +244,24 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
         }
     }
 
-    public void Stop() => player.Stop();
-    public void Volume(float volume) => player.Volume(volume);
-    public void Seek(TimeSpan position) => player.Seek(position);
+    public void Stop()
+    {
+        lock (@lock)
+        {
+            playing = false;
+            consecutiveFailures = 0;
+        }
+
+        eqm.Stop();
+    }
+
+    // Called after host reset, since the host will come back up with volume=1 (probably)
+    public void ReapplyVolume() => eqm.ReapplyVolume();
+
+    public void Pause() => eqm.Pause();
+    public void Resume() => eqm.Resume();
+    public void Volume(float volume) => eqm.Volume(volume);
+    public void Seek(TimeSpan position) => eqm.Seek(position);
 
     /// <summary>
     /// File name of the currently selected track. Might not necessarily be playing.
@@ -122,6 +277,18 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
         }
     }
 
+    /// <summary>The track that Next()/auto-advance will play.</summary>
+    public string? NextTrack
+    {
+        get
+        {
+            lock (@lock)
+            {
+                return playlist is not (null or { Length: 0 }) ? playlist[(Index + 1) % playlist.Length] : null;
+            }
+        }
+    }
+
     /// <summary>
     /// Play a specific track index. This will begin playing audio.
     /// </summary>
@@ -132,7 +299,9 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
         {
             if (playlist is null || index < 0 || index >= playlist.Length) return;
             Index = index;
-            Play();
+            playing = true;
+            consecutiveFailures = 0;
+            UnsafePlay();
         }
     }
 
@@ -144,8 +313,9 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
     {
         lock (@lock)
         {
-            if (playlist is null or { Length: 0 }) return;
-            player.Play(playlist[Index]);
+            playing = true;
+            consecutiveFailures = 0;
+            UnsafePlay();
         }
     }
 
@@ -158,16 +328,9 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
     {
         lock (@lock)
         {
-            Index++;
-            if (Index < playlist!.Length)
-            {
-                Play();
-            }
-            else
-            {
-                Index = 0;
-                Play();
-            }
+            playing = true;
+            consecutiveFailures = 0;
+            UnsafeAdvance();
         }
     }
 
@@ -181,23 +344,29 @@ public sealed class DirectoryPlayer(string directory) : IAsyncDisposable
     {
         lock (@lock)
         {
-            if (player.NowPlaying && player.Position?.Current.TotalSeconds <= 5)
+            playing = true;
+            consecutiveFailures = 0;
+            if (Position?.Current.TotalSeconds <= 5)
             {
                 Index--;
-                if (Index >= 0)
-                {
-                    Play();
-                }
-                else
-                {
-                    Index++;
-                    Play();
-                }
+                if (Index < 0) Index++;
             }
-            else
-            {
-                Play();
-            }
+            UnsafePlay();
         }
     }
+
+    private void UnsafePlay()
+    {
+        if (playlist is null or { Length: 0 }) return;
+        eqm.Load(playlist[Index], TimeSpan.Zero, true);
+    }
+
+    private void UnsafeAdvance()
+    {
+        if (playlist is null or { Length: 0 }) return;
+        Index++;
+        if (Index >= playlist.Length) Index = 0;
+        UnsafePlay();
+    }
+
 }

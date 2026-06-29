@@ -9,10 +9,50 @@
     <!-- Need net10.0-windows10 to get WASAPI. Which needed for FLAC etc. -->
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="NAudio" Version="3.0.0-preview.14" />
-    <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.14" />
+    <PackageReference Include="Beefweb.Client" Version="0.4.0" />
+    <PackageReference Include="NAudio" Version="3.0.0-preview.16" />
+    <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16" />
+    <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16" />
+    <PackageReference Include="Penumbra.Api" Version="5.13.1" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- used for NAudio.SoundFile -->
+    <None Include="lib\libsndfile.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>libsndfile.dll</TargetPath>
+    </None>
+    <!-- used for libebur128 loudness analysis (DJ-side) -->
+    <None Include="lib\libebur128.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>libebur128.dll</TargetPath>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj" />
+    <!-- Sidecar host processes: build them with the plugin, but never reference their assemblies. -->
+    <ProjectReference Include="..\Pulsar.AudioHost\Pulsar.AudioHost.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Pulsar.TranscodeHost\Pulsar.TranscodeHost.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!-- HostProcessManager spawns the hosts from the plugin directory, so their build output has
+       to land in ours. The ItemGroup lives inside the target so it's evaluated after the hosts
+       build; at the top level it would be empty on a clean first build. -->
+  <Target Name="CopyHostProcesses" AfterTargets="Build">
+    <ItemGroup>
+      <HostFiles Include="..\Pulsar.AudioHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\win-x64\*.*" />
+      <HostFiles Include="..\Pulsar.TranscodeHost\bin\$(Configuration)\net10.0-windows10.0.19041.0\win-x64\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(HostFiles)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyNativeLibs" AfterTargets="Build">
+    <Copy SourceFiles="lib\libsndfile.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="Exists('lib\libsndfile.dll')" />
+    <Copy SourceFiles="lib\libebur128.dll" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="Exists('lib\libebur128.dll')" />
+  </Target>
 </Project>
