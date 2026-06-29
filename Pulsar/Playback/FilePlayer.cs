@@ -19,7 +19,7 @@ internal sealed class ProgressProvider(AudioFileReader source, Action<PlaybackPo
     }
 }
 
-public sealed class LocalMusicPlayer : IAsyncDisposable
+public sealed class FilePlayer : IAsyncDisposable
 {
     private abstract record Command;
     private sealed record PlayCommand(string Path) : Command;
@@ -30,7 +30,7 @@ public sealed class LocalMusicPlayer : IAsyncDisposable
     private readonly Channel<Command> mailbox = Channel.CreateUnbounded<Command>(new() { SingleReader = true });
     private readonly Task loop;
 
-    public LocalMusicPlayer() => loop = Task.Run(ProcessAsync);
+    public FilePlayer() => loop = Task.Run(ProcessAsync);
 
     public void Play(string path) => mailbox.Writer.TryWrite(new PlayCommand(path));
     public void Stop() => mailbox.Writer.TryWrite(new StopCommand());

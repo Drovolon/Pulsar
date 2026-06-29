@@ -29,9 +29,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
     public readonly WindowSystem WindowSystem = new("Pulsar");
     private ConfigWindow ConfigWindow { get; init; }
     private MainWindow MainWindow { get; init; }
-    
-    private volatile Jukebox? jukebox;
-    public Jukebox? CurrentJukebox => jukebox;
+
+    private volatile DirectoryPlayer? player;
+    public DirectoryPlayer? CurrentPlayer => player;
 
     public Plugin()
     {
@@ -58,24 +58,24 @@ public sealed class Plugin : IAsyncDalamudPlugin
         return Task.CompletedTask;
     }
 
-    // Builds a fresh Jukebox for the chosen folder, replacing any current one.
+    // Builds a fresh player for the chosen folder, replacing any current one.
     public async Task LoadFolder(string directory)
     {
         try
         {
-            var old = jukebox;
-            jukebox = null;
+            var old = player;
+            player = null;
             if (old is not null) await old.DisposeAsync();
-            var jb = new Jukebox(directory);
-            await jb.Initialize();
-            jukebox = jb;
+            var p = new DirectoryPlayer(directory);
+            await p.Initialize();
+            player = p;
         }
         catch (Exception e)
         {
             Log.Error(e, "Failed to load folder");
         }
     }
-    
+
     // Things that need to dispose on the framework thread.
     // (Hypothetically - these are from SamplePlugin. I'm not
     // *actually* sure they *need* the framework thread.
@@ -97,7 +97,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
     public async ValueTask DisposeAsync()
     {
         await Framework.RunOnFrameworkThread(FrameworkDispose);
-        if (jukebox is not null) await jukebox.DisposeAsync();
+        if (player is not null) await player.DisposeAsync();
     }
 
     private void OnCommand(string command, string args)

@@ -36,7 +36,7 @@ public class MainWindow : Window, IDisposable
     private bool seeking = false;
     private float? pendingSeek = null;
     private float seekValue = 0f;
-    private Jukebox? lastJukebox;
+    private DirectoryPlayer? lastJukebox;
     private int lastScrolledIndex = -1;
 
     public override void Draw()
@@ -60,7 +60,7 @@ public class MainWindow : Window, IDisposable
                 });
             }
 
-            var jukebox = plugin.CurrentJukebox;
+            var jukebox = plugin.CurrentPlayer;
 
             if (jukebox is not null && !ReferenceEquals(jukebox, lastJukebox))
             {
