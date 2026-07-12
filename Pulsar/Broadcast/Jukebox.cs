@@ -20,7 +20,7 @@ public sealed class Jukebox(IRemoteEngine player, string directory) : IMusicSour
     public async Task Initialize()
     {
         await Player.Initialize();
-        Player.OnChanged += OnPlayerChanged;
+        Player.OnSnapshotChanged += OnPlayerChanged;
     }
 
     public SourceSnapshot? Current
@@ -47,12 +47,12 @@ public sealed class Jukebox(IRemoteEngine player, string directory) : IMusicSour
         }
     }
 
-    public event Action? OnChanged;
-    private void OnPlayerChanged() => OnChanged?.Invoke();
+    public event Action<SourceSnapshot?>? SnapshotChanged;
+    private void OnPlayerChanged(EngineSnapshot _) => SnapshotChanged?.Invoke(Current);
 
     public async ValueTask DisposeAsync()
     {
-        Player.OnChanged -= OnPlayerChanged;
+        Player.OnSnapshotChanged -= OnPlayerChanged;
         await Player.DisposeAsync();
     }
 }

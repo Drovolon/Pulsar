@@ -10,8 +10,6 @@ namespace Pulsar.Windows;
 
 internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManager)
 {
-    private const ulong MonitorIdent = ulong.MaxValue;
-
     private bool monitoring;
 
     private int dbgIdent = 1;
@@ -37,58 +35,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
     private void DrawMonitor()
     {
         if (ImGui.Checkbox("Loopback broadcast locally", ref monitoring))
-        {
-            if (monitoring)
-            {
-                plugin.Broadcast?.OnPlayerDataChanged += OnMonitor;
-                OnMonitor(plugin.Broadcast?.CurrentPlayerData());
-            }
-            else
-            {
-                plugin.Broadcast?.OnPlayerDataChanged -= OnMonitor;
-                ClearMonitor();
-            }
-        }
-    }
-
-    private void OnMonitor((string, string[], PulsarCursor)? data)
-    {
-        _ = Plugin.Framework.RunOnFrameworkThread(() =>
-        {
-            if (!monitoring) return;
-            try
-            {
-                if (data is null)
-                {
-                    ClearMonitor();
-                    return;
-                }
-
-                var (currentFile, prefetch, cursor) = data.Value;
-                var cursorJson = JsonSerializer.Serialize(cursor);
-                Plugin.PluginInterface
-                    .GetIpcSubscriber<ulong, string, string[], string, object?>("Pulsar.SetPlayerData")
-                    .InvokeAction(MonitorIdent, currentFile, prefetch, cursorJson);
-            }
-            catch (Exception e)
-            {
-                Plugin.Log.Error(e, "Monitor: routing failed");
-            }
-        });
-    }
-
-    private void ClearMonitor()
-    {
-        try
-        {
-            Plugin.PluginInterface
-                .GetIpcSubscriber<ulong, object?>("Pulsar.ClearPlayerData")
-                .InvokeAction(MonitorIdent);
-        }
-        catch (Exception e)
-        {
-            Plugin.Log.Error(e, "Monitor: clear failed");
-        }
+            plugin.SetDebugLoopback(monitoring);
     }
 
     private void DrawIpcTester()

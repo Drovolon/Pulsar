@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -14,9 +13,8 @@ using Xunit;
 namespace Pulsar.Tests;
 
 /// <summary>
-/// End-to-end flows over the real broadcast->listen chain, glued together the same
-/// way Plugin + DebugTab wire the loopback: OnPlayerDataChanged drives SetBroadcasting
-/// and the loopback pair (SetPlayerData/ClearPlayerData), which drives the listener
+/// End-to-end flows over the real broadcast->listen chain. ApplicationCoordinator routes
+/// typed broadcast outputs to IPC and ListeningManager; the loopback pair then drives the listener
 /// engine. Only the process boundaries (audio host RPC, transcode host RPC) are faked.
 /// </summary>
 public class LoopbackFlowTests : IAsyncLifetime
@@ -26,13 +24,13 @@ public class LoopbackFlowTests : IAsyncLifetime
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-e2e-test-");
     private readonly ControllablePrepareService service = new();
     private readonly FakeRemoteEngine listenEngine = new();
-    private readonly List<(string, string[], PulsarCursor)?> manifests = [];
-
     private readonly SyncPrep prep;
     private readonly BroadcastManager broadcast;
     private readonly ListeningManager listening;
     private readonly FakeIpcGates gates = new();
     private readonly IpcProvider ipc;
+    private readonly DebugLoopbackController debugLoopback;
+    private readonly ApplicationCoordinator coordinator;
 
     public LoopbackFlowTests()
     {
@@ -40,34 +38,21 @@ public class LoopbackFlowTests : IAsyncLifetime
         broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, () => new Configuration());
         listening = new ListeningManager(listenEngine);
 
-        // Same wiring as Plugin.cs: "broadcasting" means we have a live source, carried
-        // on its own edge-detected event rather than the manifest wire.
-        broadcast.OnBroadcastingChanged += b => listening.SetBroadcasting(b);
-        // Keep the raw manifest feed purely for assertions.
-        broadcast.OnPlayerDataChanged += data =>
-        {
-            lock (manifests) manifests.Add(data);
-        };
-
-        // The loopback rides the REAL IPC surface end to end: broadcast → IpcProvider
-        // serialize → wire triple → deserialize+map → listening. Same loop DebugTab's
-        // monitor drives in production.
+        // The loopback rides IpcProvider's real JSON and inbound mapping path:
+        // broadcast → coordinator → serialize/deserialize+map → listening.
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
-        gates.PlayerDataChanged.OnSent = args =>
-        {
-            var (file, prefetch, cursorJson) = ((string)args[0]!, (string[])args[1]!, (string)args[2]!);
-            if (file.Length == 0) gates.ClearPlayerData.Action!(MonitorIdent);
-            else gates.SetPlayerData.Action!(MonitorIdent, file, prefetch, cursorJson);
-        };
+        debugLoopback = new DebugLoopbackController(ipc);
+        coordinator = new ApplicationCoordinator(broadcast, listening, ipc, debugLoopback);
+        debugLoopback.SetEnabled(true, coordinator.CurrentPlayerData);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()
     {
+        await coordinator.DisposeAsync();
         ipc.Dispose();
-        await broadcast.DisposeAsync();
         await listening.DisposeAsync();
         await prep.DisposeAsync();
         dir.Delete(recursive: true);
@@ -79,15 +64,11 @@ public class LoopbackFlowTests : IAsyncLifetime
         => TestData.Snap(file, playing);
 
     private string? LatestSyncedFile
-    {
-        get { lock (manifests) return manifests.LastOrDefault(m => m is not null)?.Item1; }
-    }
+        => coordinator.CurrentPlayerData?.Item1;
 
     // Synced paths are content-hash names: identify tracks by the manifest's OriginalFileName.
     private string? LatestManifestName
-    {
-        get { lock (manifests) return manifests.LastOrDefault(m => m is not null)?.Item3.Meta?.OriginalFileName; }
-    }
+        => coordinator.CurrentPlayerData?.Item3.Meta?.OriginalFileName;
 
     /// <summary>Start the DJ on a track and pin the loopback pair, like a real loopback session.</summary>
     private async Task<FakeMusicSource> StartLoopbackSession(string track)
@@ -99,6 +80,30 @@ public class LoopbackFlowTests : IAsyncLifetime
         await TestWait.Assert(() => listening.View.Any(p => p.Ident == MonitorIdent), "loopback pair registered");
         listening.SetActive(MonitorIdent); // pin: playback is otherwise suppressed while we broadcast
         return source;
+    }
+
+    [Fact]
+    public async Task Debug_loopback_enablement_drives_future_tracks_without_ui_polling()
+    {
+        debugLoopback.SetEnabled(false, null);
+        var first = CreateTrack("first.flac");
+        var source = new FakeMusicSource { Current = Snap(first) };
+        await broadcast.SetSource(source);
+        await TestWait.Assert(() => LatestManifestName == "first.flac", "first manifest is published");
+        Assert.DoesNotContain(listening.View, p => p.Ident == MonitorIdent);
+
+        debugLoopback.SetEnabled(true, coordinator.CurrentPlayerData);
+        await TestWait.Assert(
+            () => listening.View.Any(p => p is { Ident: MonitorIdent, Meta.OriginalFileName: "first.flac" }),
+            "enabling immediately routes the current manifest");
+
+        var second = CreateTrack("second.flac");
+        source.Current = Snap(second);
+        source.RaiseChanged();
+
+        await TestWait.Assert(
+            () => listening.View.Any(p => p is { Ident: MonitorIdent, Meta.OriginalFileName: "second.flac" }),
+            "later track changes route without any UI draw");
     }
 
     [Fact]

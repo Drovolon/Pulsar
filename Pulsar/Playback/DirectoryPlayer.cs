@@ -73,7 +73,7 @@ public sealed class DirectoryPlayer : IAsyncDisposable
     /// <summary>
     /// Fired by us on a cursor event (track change / play / pause / resume / seek / stop).
     /// </summary>
-    public event Action? OnChanged;
+    public event Action<EngineSnapshot>? OnSnapshotChanged;
 
     /// <summary>
     /// Handler fired *by the engine* when something changed: like a playback failure, track ended, etc.
@@ -82,7 +82,7 @@ public sealed class DirectoryPlayer : IAsyncDisposable
     {
         State = snapshot.State;
         Position = snapshot.Position;
-        OnChanged?.Invoke();
+        OnSnapshotChanged?.Invoke(snapshot);
     }
 
     // TODO: move somewhere that makes more sense

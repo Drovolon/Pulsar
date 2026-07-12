@@ -38,6 +38,8 @@ public class SyncPrepTests : IAsyncLifetime
     {
         var sp = Create();
         var track = CreateTrack("late.flac");
+        Assert.IsType<PrepResult.Successful>(
+            await Within(sp.PrepareActive(track), "priming a result before disposal"));
         await sp.DisposeAsync();
 
         // Reachable during unload: a source event already past BroadcastManager's fences
@@ -169,6 +171,28 @@ public class SyncPrepTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Worker_drains_active_then_prefetch_when_both_slots_are_populated()
+    {
+        var sp = Create();
+        var stale = CreateTrack("stale.flac");
+        var activeTrack = CreateTrack("active.flac");
+        var future = CreateTrack("future.flac");
+        service.GateFor(stale);
+
+        var stalePrefetch = sp.PreparePrefetch(stale);
+        Assert.True(await service.WaitForPrepare(stale), "stale prefetch starts");
+
+        var active = sp.PrepareActive(activeTrack); // cancels the running prefetch
+        var futurePrefetch = sp.PreparePrefetch(future); // both pending slots are now occupied
+
+        Assert.IsType<PrepResult.Preempted>(await Within(stalePrefetch, "stale work is cancelled"));
+        Assert.IsType<PrepResult.Successful>(await Within(active, "active slot runs first"));
+        Assert.IsType<PrepResult.Successful>(await Within(futurePrefetch, "prefetch slot runs afterward"));
+
+        Assert.Equal([stale, activeTrack, future], service.PrepareCalls);
+    }
+
+    [Fact]
     public async Task Repeated_prep_of_a_prepared_track_reuses_the_cached_result()
     {
         // PrepareThenReemit re-requests the active track on every cursor event; a 10s+
@@ -223,6 +247,32 @@ public class SyncPrepTests : IAsyncLifetime
 
         Assert.IsType<PrepResult.Successful>(fromCache);
         Assert.IsType<PrepResult.Preempted>(await Within(staleJob, "the abandoned transcode"));
+    }
+
+    [Fact]
+    public async Task Cached_prefetch_request_supersedes_stale_queued_prefetch()
+    {
+        var sp = Create();
+        var cached = CreateTrack("cached-next.flac");
+        var current = CreateTrack("current.flac");
+        var stale = CreateTrack("stale-next.flac");
+        Assert.IsType<PrepResult.Successful>(
+            await Within(sp.PrepareActive(cached), "priming the next-track cache"));
+
+        var currentGate = service.GateFor(current);
+        var currentPrep = sp.PrepareActive(current);
+        Assert.True(await service.WaitForPrepare(current), "active prep occupies the worker");
+
+        var stalePrefetch = sp.PreparePrefetch(stale);
+        Assert.IsType<PrepResult.Successful>(
+            await Within(sp.PreparePrefetch(cached), "the latest prediction is cache-served"));
+
+        currentGate.Open();
+        await Within(currentPrep, "current track completes");
+
+        Assert.IsType<PrepResult.Preempted>(
+            await Within(stalePrefetch, "the stale prediction is superseded"));
+        Assert.DoesNotContain(stale, service.PrepareCalls);
     }
 
     [Fact]

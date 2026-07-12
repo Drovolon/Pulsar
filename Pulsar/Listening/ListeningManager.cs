@@ -1,7 +1,7 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using NAudio.Wave;
 using Pulsar.Common.Api;
@@ -19,14 +19,13 @@ public record PairData(
     TrackMeta? Meta
 );
 
-internal class PairState(PairData desired)
+internal class PairState(PairData data)
 {
-    internal PairData? Current;           // last applied state
-    internal PairData? Desired = desired; // latest desired state
+    internal PairData Data = data;
     internal string? DisplayName;         // resolved character name; null if the address couldn't be resolved
     internal float Volume = 1f;
     internal bool Muted;
-    internal int FailCount; // consecutive load failures for the current desired state
+    internal int FailCount; // consecutive load failures for Data
 }
 
 /// <summary>
@@ -45,83 +44,107 @@ public readonly record struct PairView(
     public string NameOrFallback => DisplayName ?? $"{Ident:X}";
 }
 
+public enum ListenerPlaybackStatus { Idle, Loading, Playing, Paused, Ended, Failed }
+
+/// <summary>Atomic UI-facing state of the one listening playback engine.</summary>
+public sealed record ListenerPlaybackView(
+    ListenerPlaybackStatus Status,
+    string? TargetPath,
+    PlaybackPosition? Position);
+
 /// <summary>
 /// ListeningManager coordinates listening to songs streamed from other players, via IPC.
 /// It drives a single playback engine, fed by at most one "active" source at a time.
 ///
-/// After a lot of thought, this class works like this. UnsafeResolveActive() picks WHICH
+/// ResolveActive() picks WHICH
 /// source should be actually playing audio, right now, by looking at whom the user has pinned
 /// (if anyone), whether the user is broadcasting, and whether the user has autoplay enabled.
 ///
 /// On the flip side, SyncDecider.Decide() picks HOW to make the engine match that source's
 /// desired state. Like, whether to load a new song, seek in the current song, stop playing, etc.
 ///
-/// Reconciliation is event based. Every pair update or control change calls Reevaluate, which
-/// does both source resolution AND engine updates.
+/// Uses the 'actor' model. The processing loop owns all mutable state, and handles
+/// source selection and engine state after message processing.
 /// </summary>
 public class ListeningManager : IAsyncDisposable
 {
     private const int MaxLoadRetries = 3;
 
+    private abstract record Message;
+    private sealed record PairUpdated(ulong Ident, string? DisplayName, PairData Data) : Message;
+    private sealed record PairCleared(ulong Ident) : Message;
+    private sealed record ActiveSet(ulong Ident) : Message;
+    private sealed record Unpinned : Message;
+    private sealed record AutoPlaySet(bool Value) : Message;
+    private sealed record BroadcastingSet(bool Value) : Message;
+    private sealed record MasterVolumeSet(float Value) : Message;
+    private sealed record MasterMutedSet(bool Value) : Message;
+    private sealed record PairVolumeSet(ulong Ident, float Value) : Message;
+    private sealed record PairMutedSet(ulong Ident, bool Value) : Message;
+    private sealed record PlaybackEnded(EndReason Reason) : Message;
+    private sealed record EngineReconnected : Message;
+    private sealed record PlaybackTarget(ulong SourceId, int CursorEpoch, string Path);
+
+    private sealed record PublishedState(
+        IReadOnlyList<PairView> View,
+        bool AutoPlay,
+        bool HasPin);
+
     private readonly Dictionary<ulong, PairState> pairs = [];
     private readonly IRemoteEngine engine;
-    private readonly SemaphoreSlim stateLock = new(1, 1);
-
-    // To avoid exposing callers to `stateLock`, all calls are funneled through this queue,
-    // which is drained by the reconcile loop. This preserves operation order, prevents races,
-    // and stops callers from accidentally deadlocking themselves. (Even if it was hard to do so.)
-    private readonly ConcurrentQueue<Action> mutations = new();
-
-    private void EnqueueMutation(Action mutate)
-    {
-        mutations.Enqueue(mutate);
-        ScheduleReevaluate();
-    }
+    // This is the manager's synchronization boundary: callers and engine callbacks only post
+    // messages; the single reader below is the sole owner of all non-published state.
+    private readonly Channel<Message> mailbox = Channel.CreateUnbounded<Message>(
+        new UnboundedChannelOptions { SingleReader = true });
 
     private float masterVolume;
     private bool masterMuted;
 
     // True when broadcasting. While broadcasting, we never tune into a nearby broadcaster.
-    private volatile bool broadcasting;
+    private bool broadcasting;
 
     // Pinned character name. This is the user selecting "I want to listen to John Finalfantasy".
     // Note, pins aren't saved in config, so they won't survive a plugin reload etc.
-    private volatile string? pinnedName;
+    private string? pinnedName;
 
-    // Which pair is currently playing, if any. Only meaningful while AutoPlay is on
-    // and the pair still exists; UnsafeResolveActive re-derives it otherwise.
-    private ulong? currentActiveId;
+    // The stable ambient selection. Pins temporarily override it without destroying it.
+    private ulong? autoplaySourceId;
+    private ulong? selectedSourceId;
 
     // Per-source volumes, a map of character name -> volume. Persisted in config by the UI code.
     // Then the UI code calls into this class to push down updates.
     private readonly Dictionary<string, float> preferredVolumes;
 
-    private volatile IReadOnlyList<PairView> view = []; // maintained by UnsafePublishView()
+    private volatile PublishedState published;
     /// <summary>View for UI code, so it doesn't need to take locks.</summary>
-    public IReadOnlyList<PairView> View => view;
+    public IReadOnlyList<PairView> View => published.View;
 
-    /// <summary>Live position of the active source (the ticking progress bar). Lock-free.</summary>
-    public PlaybackPosition? ActivePosition { get; private set; }
+    private ListenerPlaybackView playback = new(ListenerPlaybackStatus.Idle, null, null);
+    public ListenerPlaybackView Playback => Volatile.Read(ref playback);
 
-    /// <summary>Whether the active source is currently producing sound. Lock-free.</summary>
-    public bool ActiveNowPlaying { get; private set; }
+    // Kept as convenience views for callers that only need the old two facts.
+    public PlaybackPosition? ActivePosition => Playback.Position;
+    public bool ActiveNowPlaying => Playback.Status == ListenerPlaybackStatus.Playing;
 
     /// <summary>
     /// Whether to play nearby broadcasters automatically. Off means silence, and stops
     /// autoplay. A pin overrides all this.
     /// </summary>
-    public bool AutoPlay => autoPlay;
-    private volatile bool autoPlay;
+    public bool AutoPlay => published.AutoPlay;
+    private bool autoPlay;
 
     /// <summary>Whether anyone is pinned.</summary>
-    public bool HasPin => pinnedName is not null;
+    public bool HasPin => published.HasPin;
 
-    private readonly SemaphoreSlim reevaluateSignal = new(0);
-    private readonly Task reevaluateLoop;
+    private readonly Task messageLoop;
 
     private readonly Task updateLoop;
     
     private readonly CancellationTokenSource asyncCts  = new();
+
+    // A reconnect should end the connection-loss backoff immediately. Keep this
+    // bounded so repeated reconnect notifications cannot accumulate stale wakes.
+    private readonly SemaphoreSlim reconnectSignal = new(0, 1);
 
     private readonly TimeSpan updatePoll;
     private readonly TimeSpan errorBackoff;
@@ -146,9 +169,11 @@ public class ListeningManager : IAsyncDisposable
         this.masterVolume = masterVolume;
         preferredVolumes = savedPairVolumes is null ? [] : new Dictionary<string, float>(savedPairVolumes);
         this.autoPlay = autoPlay;
+        published = new PublishedState([], autoPlay, false);
         this.engine.OnPlaybackEnded += OnPlaybackEnded;
+        this.engine.OnChanged += OnEngineChanged;
 
-        reevaluateLoop = Task.Run(() => ReevaluateRunLoop(asyncCts.Token));
+        messageLoop = Task.Run(() => MessageLoop(asyncCts.Token));
         updateLoop = Task.Run(() => UpdateLoop(asyncCts.Token));
     }
 
@@ -156,8 +181,10 @@ public class ListeningManager : IAsyncDisposable
     {
         GC.SuppressFinalize(this);
         engine.OnPlaybackEnded -= OnPlaybackEnded;
+        engine.OnChanged -= OnEngineChanged;
         asyncCts.Cancel();
-        await reevaluateLoop;
+        mailbox.Writer.TryComplete();
+        await messageLoop;
         await updateLoop;
     }
 
@@ -166,103 +193,68 @@ public class ListeningManager : IAsyncDisposable
     /// </summary>
     public void OnEngineReconnected()
     {
-        // after reset, volume will prob be at 1f host-side; reset it so reevaluate re-applies the correct value
-        lastVolumeSet = -1f;
-        ScheduleReevaluate();
+        Post(new EngineReconnected());
+        try { reconnectSignal.Release(); }
+        catch (SemaphoreFullException) { }
     }
 
-    public void AddOrUpdatePair(ulong ident, string? displayName, PairData data) => EnqueueMutation(() =>
-    {
-        if (pairs.TryGetValue(ident, out var pair))
-        {
-            pair.Desired = data;
-            pair.FailCount = 0;
-            if (displayName is not null) pair.DisplayName = displayName;
-        }
-        else
-        {
-            pairs[ident] = new PairState(data)
-            {
-                DisplayName = displayName,
-                Volume = displayName != null ? preferredVolumes.GetValueOrDefault(displayName, 1f) : 1f,
-            };
-        }
-    });
+    public void AddOrUpdatePair(ulong ident, string? displayName, PairData data)
+        => Post(new PairUpdated(ident, displayName, data));
 
-    public void ClearPair(ulong ident) => EnqueueMutation(() =>
-    {
-        // Note: if this was the active source, reconcile will stop the playback engine for us.
-        pairs.Remove(ident);
-    });
+    public void ClearPair(ulong ident) => Post(new PairCleared(ident));
 
     /// <summary>Pin a specific source. Ignored if the address can't be resolved to a character name.</summary>
-    public void SetActive(ulong ident) => EnqueueMutation(() =>
-    {
-        if (!pairs.TryGetValue(ident, out var p)) return;
-        // Name is required to persist volumes to config.
-        if (p.DisplayName is not { } name) return;
-        pinnedName = name;
-    });
+    public void SetActive(ulong ident) => Post(new ActiveSet(ident));
 
     /// <summary>Unpin makes us fall back to either autoplay or off (depending on what's configured).</summary>
-    public void Unpin() => EnqueueMutation(() => pinnedName = null);
+    public void Unpin() => Post(new Unpinned());
 
-    public void SetAutoPlay(bool value) => EnqueueMutation(() => autoPlay = value);
+    public void SetAutoPlay(bool value) => Post(new AutoPlaySet(value));
 
-    public void SetBroadcasting(bool value)
-    {
-        if (broadcasting == value) return;
-        broadcasting = value;
-        ScheduleReevaluate();
-        // Note: Reevaluate will stop playback automatically while broadcasting.
-    }
+    public void SetBroadcasting(bool value) => Post(new BroadcastingSet(value));
 
-    public void SetMasterVolume(float volume) => EnqueueMutation(() =>
-        masterVolume = Math.Clamp(volume, 0f, 1f));
+    public void SetMasterVolume(float volume) => Post(new MasterVolumeSet(volume));
 
-    public void SetMasterMuted(bool muted) => EnqueueMutation(() => masterMuted = muted);
+    public void SetMasterMuted(bool muted) => Post(new MasterMutedSet(muted));
 
-    public void SetPairVolume(ulong ident, float volume) => EnqueueMutation(() =>
-    {
-        if (!pairs.TryGetValue(ident, out var p)) return;
-        p.Volume = Math.Clamp(volume, 0f, 1f);
-        if (p.DisplayName is { } name) preferredVolumes[name] = p.Volume;
-    });
+    public void SetPairVolume(ulong ident, float volume) => Post(new PairVolumeSet(ident, volume));
 
-    public void SetPairMuted(ulong ident, bool muted) => EnqueueMutation(() =>
-    {
-        if (!pairs.TryGetValue(ident, out var p)) return;
-        p.Muted = muted;
-    });
+    public void SetPairMuted(ulong ident, bool muted) => Post(new PairMutedSet(ident, muted));
+
+    private void Post(Message message) => mailbox.Writer.TryWrite(message);
 
     /// <summary>
     /// This publishes a "view" used for the ListeningTab of the UI.
     /// Just to avoid having the UI call methods that lock, since it's all
     /// per-frame stuff.
     /// </summary>
-    private void UnsafePublishView()
+    private void PublishState()
     {
-        var activeId = UnsafeResolveActive();
         var list = new List<PairView>(pairs.Count);
         foreach (var (ident, p) in pairs)
         {
-            var data = p.Desired ?? p.Current;
+            // A newer cursor may be pending while the applied track finishes its outro.
+            // Keep the active row on what the listener is actually hearing until the
+            // pending cursor is committed.
+            var data = ident == selectedSourceId && ident == appliedSourceId
+                ? appliedData ?? p.Data
+                : p.Data;
             list.Add(new PairView(
                          ident,
                          p.DisplayName,
-                         data?.Meta,
-                         data?.FilePath,
+                         data.Meta,
+                         data.FilePath,
                          p.Volume,
                          p.Muted,
-                         ident == activeId,
+                         ident == selectedSourceId,
                          pinnedName is not null && p.DisplayName == pinnedName));
         }
-        view = list;
+        published = new PublishedState(list, autoPlay, pinnedName is not null);
     }
 
     /// <summary>
-    /// Polls the playback engine every 50ms to get the current position and state.
-    /// This is used for the UI, strictly.
+    /// Polls the playback engine periodically to refresh the ticking position. Discrete
+    /// transitions arrive immediately through OnEngineChanged; this is UI-only interpolation.
     /// </summary>
     private async Task UpdateLoop(CancellationToken token)
     {
@@ -271,8 +263,9 @@ public class ListeningManager : IAsyncDisposable
             try
             {
                 var state = await engine.GetStateAsync(token);
-                ActivePosition = state.Position;
-                ActiveNowPlaying = state.State == PlaybackState.Playing;
+                PublishEngineSnapshot(state);
+                // A successful poll makes any unconsumed reconnect wake obsolete.
+                while (reconnectSignal.Wait(0, token)) { }
                 await Task.Delay(updatePoll, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -287,7 +280,7 @@ public class ListeningManager : IAsyncDisposable
             {
                 Plugin.Log.Warning("Connection to audio host lost");
                 // back off
-                try { await Task.Delay(lostBackoff, token); }
+                try { await reconnectSignal.WaitAsync(lostBackoff, token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             }
             catch (Exception ex)
@@ -300,47 +293,113 @@ public class ListeningManager : IAsyncDisposable
         }
     }
 
-    private void OnPlaybackEnded(object? _, EndReason reason) => EnqueueMutation(() =>
-    {
-        if (UnsafePeekActive() is not { } id) return;
-        var active = pairs[id];
+    private void OnPlaybackEnded(object? _, EndReason reason) => Post(new PlaybackEnded(reason));
+    private void OnEngineChanged(object? _, EngineSnapshot snapshot) => PublishEngineSnapshot(snapshot);
 
-        if (reason == EndReason.Failed)
-        {
-            active.FailCount++;
-            if (active.FailCount <= MaxLoadRetries)
-                active.Current = null;
-        }
-        else
-        {
-            active.FailCount = 0;
-        }
-    });
-
-    private void ScheduleReevaluate()
+    private void Apply(Message message)
     {
-        reevaluateSignal.Release();
+        switch (message)
+        {
+            case PairUpdated(var ident, var displayName, var data):
+                if (pairs.TryGetValue(ident, out var pair))
+                {
+                    pair.Data = data;
+                    pair.FailCount = 0;
+                    if (displayName is not null) pair.DisplayName = displayName;
+                }
+                else
+                {
+                    pairs[ident] = new PairState(data)
+                    {
+                        DisplayName = displayName,
+                        Volume = displayName is not null
+                            ? preferredVolumes.GetValueOrDefault(displayName, 1f)
+                            : 1f,
+                    };
+                }
+                break;
+
+            case PairCleared(var ident):
+                pairs.Remove(ident);
+                break;
+
+            case ActiveSet(var ident):
+                if (pairs.TryGetValue(ident, out var toPin)
+                    && toPin.DisplayName is { } name)
+                    pinnedName = name;
+                break;
+
+            case Unpinned:
+                pinnedName = null;
+                break;
+
+            case AutoPlaySet(var value):
+                autoPlay = value;
+                break;
+
+            case BroadcastingSet(var value):
+                broadcasting = value;
+                break;
+
+            case MasterVolumeSet(var value):
+                masterVolume = Math.Clamp(value, 0f, 1f);
+                break;
+
+            case MasterMutedSet(var value):
+                masterMuted = value;
+                break;
+
+            case PairVolumeSet(var ident, var value):
+                if (!pairs.TryGetValue(ident, out var volumePair)) break;
+                volumePair.Volume = Math.Clamp(value, 0f, 1f);
+                if (volumePair.DisplayName is { } volumeName)
+                    preferredVolumes[volumeName] = volumePair.Volume;
+                break;
+
+            case PairMutedSet(var ident, var value):
+                if (pairs.TryGetValue(ident, out var mutePair)) mutePair.Muted = value;
+                break;
+
+            case PlaybackEnded(var reason):
+                if (PeekActive() is not { } activeId || !pairs.TryGetValue(activeId, out var active))
+                    break;
+                if (reason == EndReason.Failed)
+                {
+                    active.FailCount++;
+                    if (active.FailCount <= MaxLoadRetries && appliedSourceId == activeId)
+                    {
+                        appliedSourceId = null;
+                        appliedData = null;
+                        MarkPlayback(ListenerPlaybackStatus.Loading);
+                    }
+                    else MarkPlayback(ListenerPlaybackStatus.Failed);
+                }
+                else
+                {
+                    active.FailCount = 0;
+                    MarkPlayback(ListenerPlaybackStatus.Ended);
+                }
+                break;
+
+            case EngineReconnected:
+                // A fresh host has neither our track nor our volume.
+                appliedSourceId = null;
+                appliedData = null;
+                lastVolumeSet = -1f;
+                if (playbackTarget is not null) MarkPlayback(ListenerPlaybackStatus.Loading);
+                break;
+        }
     }
 
-    private async Task ReevaluateRunLoop(CancellationToken token)
+    private async Task MessageLoop(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
             try
             {
-                await reevaluateSignal.WaitAsync(token);
-
-                await stateLock.WaitAsync(token);
-                try
-                {
-                    while (mutations.TryDequeue(out var mutate)) mutate();
-                    await UnsafeReconcileActive();
-                    UnsafePublishView();
-                }
-                finally
-                {
-                    stateLock.Release();
-                }
+                if (!await mailbox.Reader.WaitToReadAsync(token)) break;
+                while (mailbox.Reader.TryRead(out var message)) Apply(message);
+                await ReconcileActive(token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -352,52 +411,133 @@ public class ListeningManager : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                Plugin.Log.Error(ex, "Error in ListeningManager ReevaluateRunLoop");
+                Plugin.Log.Error(ex, "Error in ListeningManager message loop");
+            }
+            finally
+            {
+                PublishState();
             }
         }
     }
 
-    // unsafe methods assume lock(@lock) held by caller
+    private ulong? appliedSourceId;
+    private PairData? appliedData;
+    private PlaybackTarget? playbackTarget;
 
-    private async Task UnsafeReconcileActive()
+    private async Task ReconcileActive(CancellationToken token)
     {
-        var activeId = UnsafeResolveActive();
+        var activeId = ResolveActive();
+        selectedSourceId = activeId;
 
         PairState? active = null;
         if (activeId is { } aid)
-        {
-            await UnsafeApplyActiveVolume();
             active = pairs[aid];
+
+        var snapshot = await engine.GetStateAsync(token);
+        PublishEngineSnapshot(snapshot);
+        var current = activeId == appliedSourceId ? appliedData : null;
+        var action = SyncDecider.Decide(current, active?.Data, snapshot);
+
+        if (action is EngineAction.Wait)
+        {
+            // The pending cursor is deliberately not applied yet. Controls may still
+            // change during the grace period, but ReplayGain belongs to the old track.
+            if (active is not null && current is not null)
+                await ApplyActiveVolume(active, current, token);
+            return;
         }
 
-        var snapshot = await engine.GetStateAsync(asyncCts.Token);
-        var action = SyncDecider.Decide(active?.Current, active?.Desired, snapshot);
-        if (action is EngineAction.Wait) return;
+        SetPlaybackTarget(activeId, active);
+        if (active is not null)
+            await ApplyActiveVolume(active, active.Data, token);
+        await Apply(action, token);
+        appliedSourceId = activeId;
+        appliedData = active?.Data;
+    }
 
-        await UnsafeApply(action);
-        if (action is EngineAction.Load) await UnsafeApplyActiveVolume();
-        active?.Current = active.Desired;
+    private void SetPlaybackTarget(ulong? activeId, PairState? active)
+    {
+        if (activeId is not { } sourceId || active is null)
+        {
+            playbackTarget = null;
+            Volatile.Write(ref playback,
+                new ListenerPlaybackView(ListenerPlaybackStatus.Idle, null, null));
+            return;
+        }
+
+        var target = new PlaybackTarget(sourceId, active.Data.CursorEpoch, active.Data.FilePath);
+        if (target == playbackTarget) return;
+        playbackTarget = target;
+        Volatile.Write(ref playback,
+            new ListenerPlaybackView(ListenerPlaybackStatus.Loading, target.Path, null));
+    }
+
+    private void MarkPlayback(ListenerPlaybackStatus status)
+    {
+        var current = Volatile.Read(ref playback);
+        Volatile.Write(ref playback, current with { Status = status, Position = null });
+    }
+
+    private void PublishEngineSnapshot(EngineSnapshot snapshot)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref playback);
+            ListenerPlaybackView next;
+            if (current.TargetPath is null)
+            {
+                next = new ListenerPlaybackView(ListenerPlaybackStatus.Idle, null, null);
+            }
+            else if (snapshot.Path != current.TargetPath)
+            {
+                next = current.Status is ListenerPlaybackStatus.Ended or ListenerPlaybackStatus.Failed
+                    ? current
+                    : current with { Status = ListenerPlaybackStatus.Loading, Position = null };
+            }
+            else
+            {
+                next = snapshot.State switch
+                {
+                    PlaybackState.Playing => current with
+                    {
+                        Status = ListenerPlaybackStatus.Playing,
+                        Position = snapshot.Position,
+                    },
+                    PlaybackState.Paused => current with
+                    {
+                        Status = ListenerPlaybackStatus.Paused,
+                        Position = snapshot.Position,
+                    },
+                    _ => current with { Status = ListenerPlaybackStatus.Loading, Position = snapshot.Position },
+                };
+            }
+
+            if (ReferenceEquals(
+                    Interlocked.CompareExchange(ref playback, next, current),
+                    current))
+                return;
+        }
     }
 
     /// <summary>
     /// Contains the "which source should actually be playing" logic.
     /// </summary>
-    private ulong? UnsafeResolveActive()
+    private ulong? ResolveActive()
     {
-        if (pinnedName is not null || broadcasting) return UnsafePeekActive();
-        if (!AutoPlay)
+        if (pinnedName is not null || broadcasting) return PeekActive();
+        if (!autoPlay)
         {
             // "Off" means silence: a lingering autoplay pick must not keep playing.
-            currentActiveId = null;
+            autoplaySourceId = null;
             return null;
         }
         // If the current pick still exists, keep it
-        if (UnsafePeekActive() is { } current) return current;
-        currentActiveId = UnsafePickNextAutoplay();
-        return currentActiveId;
+        if (PeekActive() is { } current) return current;
+        autoplaySourceId = PickNextAutoplay();
+        return autoplaySourceId;
     }
 
-    private ulong? UnsafePeekActive()
+    private ulong? PeekActive()
     {
         if (pinnedName is { } name)
         {
@@ -405,8 +545,8 @@ public class ListeningManager : IAsyncDisposable
                 if (p.DisplayName == name) return id;
             return null;
         }
-        if (broadcasting || !AutoPlay) return null;
-        return currentActiveId is { } current && pairs.ContainsKey(current) ? current : null;
+        if (broadcasting || !autoPlay) return null;
+        return autoplaySourceId is { } current && pairs.ContainsKey(current) ? current : null;
     }
 
     /// <summary>
@@ -421,7 +561,7 @@ public class ListeningManager : IAsyncDisposable
     ///
     /// Anyway. This is just to force a stable autoplay pick.
     /// </summary>
-    private ulong? UnsafePickNextAutoplay()
+    private ulong? PickNextAutoplay()
     {
         ulong? best = null;
         foreach (var id in pairs.Keys)
@@ -432,39 +572,39 @@ public class ListeningManager : IAsyncDisposable
     private static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);
 
     private float lastVolumeSet = -1f;
-    private async Task UnsafeApplyActiveVolume()
+    private async Task ApplyActiveVolume(PairState pair, PairData track, CancellationToken token)
     {
-        if (UnsafeResolveActive() is not { } id) return;
-        var p = pairs[id];
-        var rawRg = (p.Desired ?? p.Current)?.Meta?.ReplayGainDb ?? 0.0;
+        var rawRg = track.Meta?.ReplayGainDb ?? 0.0;
         // Stop a peer from sending ridiculous gain values.
         // (Note, though: we clamp our total gain stage to 1.0 anyway.)
         var rgDb = double.IsFinite(rawRg) ? Math.Clamp(rawRg, -20.0, 20.0) : 0.0;
-        var effective = masterMuted || p.Muted ? 0f : masterVolume * p.Volume * DbToLinear(rgDb);
+        var effective = masterMuted || pair.Muted
+            ? 0f
+            : masterVolume * pair.Volume * DbToLinear(rgDb);
         
         if (float.IsFinite(effective) && effective == lastVolumeSet) return; // make method idempotent
-        await engine.SetVolumeAsync(effective, asyncCts.Token);
+        await engine.SetVolumeAsync(effective, token);
         lastVolumeSet = effective;
     }
 
-    private async Task UnsafeApply(EngineAction action)
+    private async Task Apply(EngineAction action, CancellationToken token)
     {
         switch (action)
         {
             case EngineAction.Load l:
-                await engine.LoadFileAsync(l.Path, l.Position, l.Playing, asyncCts.Token);
+                await engine.LoadFileAsync(l.Path, l.Position, l.Playing, token);
                 break;
             case EngineAction.Seek s:
-                await engine.SeekAsync(s.Position, asyncCts.Token);
+                await engine.SeekAsync(s.Position, token);
                 break;
             case EngineAction.Pause:
-                await engine.PauseAsync(asyncCts.Token);
+                await engine.PauseAsync(token);
                 break;
             case EngineAction.Resume:
-                await engine.ResumeAsync(asyncCts.Token);
+                await engine.ResumeAsync(token);
                 break;
             case EngineAction.Stop:
-                await engine.StopAsync(asyncCts.Token);
+                await engine.StopAsync(token);
                 break;
         }
     }

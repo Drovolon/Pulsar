@@ -13,9 +13,9 @@ namespace Pulsar.Tests;
 
 /// <summary>
 /// End-to-end scenarios for the beefweb Watcher: observations go in via a scripted feed;
-/// out come Current snapshots, OnChanged wakeups, status, and chat warnings. Next-track
+/// out come Current snapshots, SnapshotChanged wakeups, status, and chat warnings. Next-track
 /// prefetch and player commands run through a real Beefweb.Client against the in-process
-/// server. Only syncable, actually-playing sources produce snapshots, and OnChanged
+/// server. Only syncable, actually-playing sources produce snapshots, and SnapshotChanged
 /// fires only for real cursor events.
 /// </summary>
 public class BeefwebWatcherTests : IAsyncLifetime
@@ -40,13 +40,13 @@ public class BeefwebWatcherTests : IAsyncLifetime
     {
         // The watcher takes ownership of the client (disposes it); the server outlives it.
         watcher = new Watcher(feed, server.CreateClient(), isWine: false, giveUpDelay);
-        watcher.OnChanged += () => Interlocked.Increment(ref changes);
+        watcher.SnapshotChanged += _ => Interlocked.Increment(ref changes);
         return watcher;
     }
 
     private int Changes => Volatile.Read(ref changes);
 
-    // OnChanged fires only after next-track resolution, later than Current flips non-null;
+    // SnapshotChanged fires only after next-track resolution, later than Current flips non-null;
     // waiting on the wakeup is the only race-free way to assert on counts or NextFilePath.
     private Task AwaitWake(int atLeast, string because)
         => TestWait.Assert(() => Changes >= atLeast, because);

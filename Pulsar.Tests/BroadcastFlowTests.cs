@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -21,14 +22,19 @@ public class BroadcastFlowTests : IAsyncLifetime
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-bf-test-");
     private readonly ControllablePrepareService service = new();
     private readonly List<(string, string[], PulsarCursor)?> events = [];
+    private readonly List<bool> broadcastingEvents = [];
     private SyncPrep? prep;
     private BroadcastManager? manager;
+    private Task? outputPump;
+    private volatile Task? outputStall;
+    private Action<(string, string[], PulsarCursor)?>? outputProbe;
 
     public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()
     {
         if (manager is not null) await manager.DisposeAsync();
+        if (outputPump is not null) await outputPump;
         if (prep is not null) await prep.DisposeAsync();
         dir.Delete(recursive: true);
     }
@@ -37,7 +43,23 @@ public class BroadcastFlowTests : IAsyncLifetime
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
         manager = new BroadcastManager(new FakeRemoteEngine(), null!, prep, () => new Configuration());
-        manager.OnPlayerDataChanged += e => { lock (events) events.Add(e); };
+        outputPump = Task.Run(async () =>
+        {
+            await foreach (var output in manager.Outputs.ReadAllAsync())
+            {
+                if (outputStall is { } stall) await stall;
+                switch (output)
+                {
+                    case BroadcastOutput.PlayerDataChanged(var data):
+                        outputProbe?.Invoke(data);
+                        lock (events) events.Add(data);
+                        break;
+                    case BroadcastOutput.BroadcastingChanged(var value):
+                        lock (broadcastingEvents) broadcastingEvents.Add(value);
+                        break;
+                }
+            }
+        });
         return manager;
     }
 
@@ -155,34 +177,35 @@ public class BroadcastFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_wedged_subscriber_cannot_stall_the_broadcast_pipeline()
+    public async Task Broadcast_progress_does_not_depend_on_output_consumption()
     {
         var mgr = Create();
-        var track = CreateTrack("a.flac");
-        Assert.IsType<PrepResult.Successful>(await prep!.PrepareActive(track));
+        var initial = CreateTrack("a.flac");
+        Assert.IsType<PrepResult.Successful>(await prep!.PrepareActive(initial));
 
-        var wedge = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        mgr.OnPlayerDataChanged += _ => wedge.Task.Wait();
+        var resumeOutputs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        outputStall = resumeOutputs.Task;
 
-        var source = new FakeMusicSource { Current = Snap(track) };
+        var source = new FakeMusicSource { Current = Snap(initial) };
+        var prepareStarted = false;
         try
         {
-            // The pipeline must keep moving while delivery is parked in the wedged
-            // subscriber. (Task.Run: a synchronous wedge would deadlock the test itself.)
-            await TestWait.Within(Task.Run(() => mgr.SetSource(source)),
-                "SetSource with a wedged subscriber");
+            await mgr.SetSource(source);
 
-            source.Current = Snap(track, playing: false);
-            source.RaiseChanged(); // must return without blocking on the wedge
+            var next = CreateTrack("b.flac");
+            source.Current = Snap(next);
+            source.RaiseChanged();
+
+            prepareStarted = await service.WaitForPrepare(next, TimeSpan.FromMilliseconds(300));
         }
         finally
         {
-            wedge.TrySetResult(); // always unwedge, or teardown hangs with the test
+            outputStall = null;
+            resumeOutputs.TrySetResult();
         }
 
-        await TestWait.Assert(
-            () => Events.Any(e => e is { } m && !m.Item3.IsPlaying),
-            "the queued cursor event is delivered once the subscriber recovers");
+        Assert.True(prepareStarted,
+            "preparing the active track is operational work, independent of output consumption");
     }
 
     [Fact]
@@ -196,7 +219,7 @@ public class BroadcastFlowTests : IAsyncLifetime
 
         // Check existence AT delivery time: the re-prep recreates the path moments later.
         var ghostsAnnounced = 0;
-        mgr.OnPlayerDataChanged += e =>
+        outputProbe = e =>
         {
             if (e is { } m && !File.Exists(m.Item1)) Interlocked.Increment(ref ghostsAnnounced);
         };
@@ -234,8 +257,6 @@ public class BroadcastFlowTests : IAsyncLifetime
     public async Task A_late_event_from_the_old_source_cannot_stop_the_broadcast_mid_switch()
     {
         var mgr = Create();
-        var broadcastingEdges = new List<bool>();
-        mgr.OnBroadcastingChanged += b => { lock (broadcastingEdges) broadcastingEdges.Add(b); };
 
         var teardown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sourceA = new FakeMusicSource { Current = Snap(CreateTrack("a.flac")), DisposeGate = teardown };
@@ -257,7 +278,7 @@ public class BroadcastFlowTests : IAsyncLifetime
             await TestWait.Assert(() => mgr.CurrentSnapshot is null && !switching.IsCompleted,
                 "the switch is parked in the old source's teardown");
 
-            lateEvent(); // the in-flight delivery lands mid-teardown
+            lateEvent(sourceA.Current); // the in-flight delivery lands mid-teardown
         }
         finally
         {
@@ -268,7 +289,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         await TestWait.Assert(
             () => Events[^1] is { } e && e.Item3.Meta!.OriginalFileName == "b.flac",
             "the new source's manifest goes out");
-        lock (broadcastingEdges) Assert.Equal([true], broadcastingEdges); // one rise at start, never a drop
+        lock (broadcastingEvents) Assert.Equal([true], broadcastingEvents); // one rise at start, never a drop
         Assert.All(Events.Skip(seen), e => Assert.NotNull(e)); // and no stop on the wire
     }
 

@@ -147,7 +147,7 @@ public class BroadcastSourceTests : IAsyncLifetime
         var toB = broadcast.SetSource(b); // parks: a's teardown is gated
         await Task.Delay(50);
         Assert.False(toB.IsCompleted, "switch to b waits on a's teardown");
-        var toC = broadcast.SetSource(c); // queues behind it on switchLock
+        var toC = broadcast.SetSource(c); // queues behind it in the manager mailbox
 
         a.DisposeGate.TrySetResult();
         await TestWait.Within(toB, "switch to b");

@@ -4,20 +4,6 @@ using NAudio.Wave;
 
 namespace Pulsar.Broadcast.Beefweb;
 
-/// <summary>
-/// One sample from beefweb. RawPath is %path% verbatim, which could be a URL.
-/// AsOf is wall-clock UtcNow; MonoStamp is a monotonic timestamp (Stopwatch.GetTimestamp()).
-/// </summary>
-public readonly record struct Observation(
-    string? RawPath,
-    PlaybackState State,
-    TimeSpan Position,
-    TimeSpan Duration,
-    string Title,
-    string Artist,
-    DateTimeOffset AsOf,
-    long MonoStamp);
-
 public enum CursorEvent
 {
     TrackChange,

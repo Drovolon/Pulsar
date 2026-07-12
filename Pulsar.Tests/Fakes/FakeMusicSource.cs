@@ -12,15 +12,15 @@ public sealed class FakeMusicSource : IMusicSource
     /// <summary>When set, DisposeAsync parks on it - models a slow source teardown.</summary>
     public TaskCompletionSource? DisposeGate { get; set; }
 
-    public event Action? OnChanged;
-    public void RaiseChanged() => OnChanged?.Invoke();
+    public event Action<SourceSnapshot?>? SnapshotChanged;
+    public void RaiseChanged() => SnapshotChanged?.Invoke(Current);
 
     /// <summary>
     /// The subscriber list as a real event pump captures it just before invoking.
     /// Lets tests deliver an event that was already "in flight" when the manager
     /// unsubscribed - the mid-switch race a plain RaiseChanged can't reproduce.
     /// </summary>
-    public Action? CapturedHandlers => OnChanged;
+    public Action<SourceSnapshot?>? CapturedHandlers => SnapshotChanged;
 
     public async ValueTask DisposeAsync()
     {

@@ -68,9 +68,9 @@ public class JukeboxTests : IAsyncLifetime
     {
         var jb = await Create("a.mp3");
         var events = 0;
-        jb.OnChanged += () => Interlocked.Increment(ref events);
+        jb.SnapshotChanged += _ => Interlocked.Increment(ref events);
         jb.Player.Play();
-        await TestWait.Assert(() => events > 0, "OnChanged forwards");
+        await TestWait.Assert(() => events > 0, "snapshot change forwards");
     }
 
     [Fact]

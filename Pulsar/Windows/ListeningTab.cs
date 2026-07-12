@@ -134,10 +134,19 @@ internal sealed class ListeningTab(Plugin plugin, UiTheme theme)
     {
         if (!p.Active)
             return "(in range)";
-        if (listening.ActivePosition is { } pos && pos.Total > TimeSpan.Zero)
+        var playback = listening.Playback;
+        if (playback.Position is { } pos && pos.Total > TimeSpan.Zero
+            && playback.Status is ListenerPlaybackStatus.Playing or ListenerPlaybackStatus.Paused)
             return $"{UiUtil.FormatTime(pos.Current)} / {UiUtil.FormatTime(pos.Total)}"
-                + (listening.ActiveNowPlaying ? "" : " (paused)");
-        return "(ended)";
+                + (playback.Status == ListenerPlaybackStatus.Paused ? " (paused)" : "");
+        return playback.Status switch
+        {
+            ListenerPlaybackStatus.Loading => "(loading…)",
+            ListenerPlaybackStatus.Paused => "(paused)",
+            ListenerPlaybackStatus.Ended => "(ended)",
+            ListenerPlaybackStatus.Failed => "(failed)",
+            _ => "(not playing)",
+        };
     }
 
     /// <summary>

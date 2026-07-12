@@ -172,6 +172,26 @@ public class ListeningManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Switching_back_to_a_previous_source_restores_that_source()
+    {
+        var lm = Create();
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+        lm.AddOrUpdatePair(2, "Bob", Playing(BobTrack));
+
+        lm.SetActive(1);
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "Alice starts");
+
+        lm.SetActive(2);
+        await TestWait.Assert(() => engine.Snapshot.Path == BobTrack, "pinning Bob switches to Bob");
+
+        // Alice has not sent another cursor: changing the selected source alone must
+        // still restore her track in the single shared playback engine.
+        lm.SetActive(1);
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack,
+            "pinning Alice again switches back to Alice");
+    }
+
+    [Fact]
     public async Task Unpinning_falls_back_to_the_ambient_setting()
     {
         var lm = Create(autoPlay: false);
@@ -262,6 +282,34 @@ public class ListeningManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Next_track_remains_pending_while_the_current_outro_finishes()
+    {
+        var lm = Create();
+        var flyleafGain = TestData.DbToLinear(-12);
+        var onokenGain = TestData.DbToLinear(-1);
+
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack, epoch: 1, rgDb: -12));
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "Flyleaf starts");
+        await engine.SeekAsync(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(55), default);
+
+        // The DJ has advanced, but the listener deliberately gives the old track its
+        // final five seconds. The pending cursor must not become the applied identity yet.
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, epoch: 2, rgDb: -1));
+        await Task.Delay(200);
+
+        Assert.Equal(AliceTrack, engine.Snapshot.Path);
+        Assert.Equal(AliceTrack, lm.Playback.TargetPath);
+        Assert.Contains(lm.View, p => p is { Active: true, FilePath: AliceTrack });
+        Assert.Equal(flyleafGain, engine.LastVolume, 3);
+
+        engine.FinishTrack();
+
+        await TestWait.Assert(() => engine.Snapshot.Path == BobTrack, "Onoken starts after Flyleaf ends");
+        await TestWait.Assert(() => lm.Playback.TargetPath == BobTrack, "the applied identity advances");
+        Assert.Equal(onokenGain, engine.LastVolume, 3);
+    }
+
+    [Fact]
     public async Task Mute_silences_and_unmute_restores()
     {
         var lm = Create();
@@ -295,6 +343,33 @@ public class ListeningManagerTests : IAsyncLifetime
     // ---- update loop (UI position surface) --------------------------------------
 
     [Fact]
+    public async Task Accepted_load_is_loading_until_the_engine_confirms_playback()
+    {
+        engine.DeferLoads = true;
+        var lm = CreateFast();
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+
+        await TestWait.Assert(
+            () => lm.View.Any(p => p.Active)
+                  && lm.Playback is { Status: ListenerPlaybackStatus.Loading, TargetPath: AliceTrack },
+            "the selected source is shown as loading while the host opens it");
+
+        engine.CompleteDeferredLoad();
+        await TestWait.Assert(
+            () => lm.Playback is
+            {
+                Status: ListenerPlaybackStatus.Playing,
+                TargetPath: AliceTrack,
+                Position.Total.TotalMinutes: 3,
+            },
+            "the engine event confirms playing immediately");
+
+        engine.FinishTrack();
+        await TestWait.Assert(() => lm.Playback.Status == ListenerPlaybackStatus.Ended,
+            "a natural end is distinct from loading");
+    }
+
+    [Fact]
     public async Task The_update_loop_surfaces_position_and_playing_state()
     {
         var lm = CreateFast();
@@ -321,6 +396,28 @@ public class ListeningManagerTests : IAsyncLifetime
         engine.TrackDuration = TimeSpan.FromMinutes(5);
         await TestWait.Assert(() => lm.ActivePosition is { Total.TotalMinutes: 5 },
             "poll loop resumed after the connection loss");
+    }
+
+    [Fact]
+    public async Task Reconnect_interrupts_the_update_loops_connection_loss_backoff()
+    {
+        engine.Intercept = op => op == "GetState"
+            ? new StreamJsonRpc.ConnectionLostException("host down") : null;
+        var lm = CreateFast(lostBackoff: TimeSpan.FromSeconds(30));
+        await Task.Delay(150); // startup poll enters its long production-style backoff
+
+        engine.Intercept = null;
+        lm.OnEngineReconnected();
+        await Task.Delay(100); // reconnect precedes the first player-data arrival
+
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+        await TestWait.Assert(() => lm.ActiveNowPlaying, "the first track loads");
+        engine.TrackDuration = TimeSpan.FromMinutes(5); // only the poll can observe this
+
+        await TestWait.Assert(
+            () => lm.ActivePosition is { Total.TotalMinutes: 5 },
+            "reconnect wakes the poll immediately",
+            timeout: TimeSpan.FromSeconds(1));
     }
 
     [Fact]

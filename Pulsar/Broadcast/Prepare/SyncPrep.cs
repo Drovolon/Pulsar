@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Pulsar.Common.Api;
 using StreamJsonRpc;
@@ -33,20 +34,26 @@ public abstract record PrepResult
 /// </summary>
 public class SyncPrep : IAsyncDisposable
 {
+    private enum PrepPriority { Prefetch, Active }
+
     private sealed record Pending(string FilePath, TaskCompletionSource<PrepResult> Tcs);
+
+    private sealed class RunningJob(Pending pending, PrepPriority priority)
+    {
+        internal string FilePath { get; } = pending.FilePath;
+        internal PrepPriority Priority { get; set; } = priority;
+        internal CancellationTokenSource Cts { get; } = new();
+        internal List<TaskCompletionSource<PrepResult>> Waiters { get; } = [pending.Tcs];
+    }
     
     private readonly Lock @lock = new();
     
     private readonly Task loop;
     private readonly CancellationTokenSource loopCts = new();
-    private CancellationTokenSource? runningCts;
-
-    private bool runningIsActive;
 
     // Currently running transcode. New prep request for the same path gets given that
     // task, instead of canceling and spawning a new one.
-    private string? runningPath;
-    private List<TaskCompletionSource<PrepResult>> runningWaiters = [];
+    private RunningJob? running;
 
     // Last successful prepped file. Skipped during cache deletion.
     private string? lastActiveArtifact;
@@ -56,16 +63,21 @@ public class SyncPrep : IAsyncDisposable
 
     private bool disposed; // guarded by @lock: enqueueing after dispose would hang the caller
     
-    private readonly SemaphoreSlim signal = new(0);
+    // A wake-up is only a hint to inspect the two slots, so one buffered signal is enough.
+    // Job completion re-signals if another slot remains populated.
+    private readonly Channel<bool> wake = Channel.CreateBounded<bool>(
+        new BoundedChannelOptions(1) { SingleReader = true, FullMode = BoundedChannelFullMode.DropWrite });
     
     /// <summary>
-    /// Holds original file path -> results. Only caches success/fail, not preempted.
+    /// Holds original file path -> the latest observable result for BroadcastManager.TryGet.
+    /// A successful result with a live artifact also serves later requests immediately;
+    /// failures remain observable but do not prevent a retry. Preemptions are never recorded.
     /// Note, this isn't persisted anywhere, so everything will get re-transcoded
     /// on next plugin load. IMO, it's not appropriate to keep a huge cache on disk
     /// for this plugin - I considered setting it to like 1G, persisting these results...
     /// but that's probably not enough for a big music library anyway (it's like ~150 songs).
     /// </summary>
-    private readonly ConcurrentDictionary<string, PrepResult> results = new();
+    private readonly ConcurrentDictionary<string, PrepResult> observedResults = new();
     
     private readonly CacheManager cacheManager;
     private readonly IPrepareService prepareService;
@@ -77,82 +89,91 @@ public class SyncPrep : IAsyncDisposable
         loop = Task.Run(WorkerLoop);
     }
 
-    public Task<PrepResult> PrepareActive(string filePath)
-    {
-        return Prep(filePath, true);
-    }
+    public Task<PrepResult> PrepareActive(string filePath) => Prep(filePath, PrepPriority.Active);
 
-    public Task<PrepResult> PreparePrefetch(string filePath)
-    {
-        return Prep(filePath, false);
-    }
+    public Task<PrepResult> PreparePrefetch(string filePath) => Prep(filePath, PrepPriority.Prefetch);
 
-    public bool TryGet(string key, out PrepResult? result)
-    {
-        return results.TryGetValue(key, out result);
-    }
+    public bool TryGet(string key, out PrepResult? result) => observedResults.TryGetValue(key, out result);
 
-    private Task<PrepResult> Prep(string filePath, bool isActive)
+    private Task<PrepResult> Prep(string filePath, PrepPriority priority)
     {
         lock (@lock)
         {
-            if (results.TryGetValue(filePath, out var known)
-                && known is PrepResult.Successful success
-                && File.Exists(success.PreparedFilePath))
+            if (disposed)
+                return Task.FromResult<PrepResult>(new PrepResult.Preempted());
+
+            if (TryGetPrepared(filePath, out var success))
             {
-                if (isActive)
-                {
-                    if (activeSlot is { } queued && queued.FilePath != filePath)
-                    {
-                        queued.Tcs.TrySetResult(new PrepResult.Preempted());
-                        activeSlot = null;
-                    }
-                    if (runningIsActive && runningPath != filePath)
-                        runningCts?.Cancel();
-                    lastActiveArtifact = success.PreparedFilePath;
-                }
+                ApplySupersession(filePath, priority);
+                if (priority == PrepPriority.Active) lastActiveArtifact = success.PreparedFilePath;
                 CacheManager.Touch(success.PreparedFilePath);
                 return Task.FromResult<PrepResult>(success);
             }
 
-            var tcs = new TaskCompletionSource<PrepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-            if (disposed)
+            var tcs = NewCompletion();
+            if (running is { } current
+                && current.FilePath == filePath
+                && !current.Cts.IsCancellationRequested)
             {
-                tcs.TrySetResult(new PrepResult.Preempted());
+                current.Waiters.Add(tcs);
+                if (priority == PrepPriority.Active) current.Priority = PrepPriority.Active;
                 return tcs.Task;
             }
 
-            if (runningPath == filePath && runningCts is { IsCancellationRequested: false })
-            {
-                runningWaiters.Add(tcs);
-                if (isActive) runningIsActive = true;
-                return tcs.Task;
-            }
-
-            if (isActive)
-            {
-                activeSlot?.Tcs.TrySetResult(new PrepResult.Preempted());
-                if (prefetchSlot?.FilePath == filePath)
-                {
-                    prefetchSlot.Tcs.TrySetResult(new PrepResult.Preempted());
-                    prefetchSlot = null;
-                }
-                activeSlot = new Pending(filePath, tcs);
-                runningCts?.Cancel();
-            }
-            else
-            {
-                prefetchSlot?.Tcs.TrySetResult(new PrepResult.Preempted());
-                prefetchSlot = new Pending(filePath, tcs);
-                if (!runningIsActive)
-                    runningCts?.Cancel();
-            }
-
-            signal.Release();
+            ApplySupersession(filePath, priority);
+            Queue(new Pending(filePath, tcs), priority);
+            SignalWorker();
             return tcs.Task;
         }
     }
+
+    private static TaskCompletionSource<PrepResult> NewCompletion()
+        => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private bool TryGetPrepared(string filePath, out PrepResult.Successful success)
+    {
+        if (observedResults.TryGetValue(filePath, out var known)
+            && known is PrepResult.Successful prepared
+            && File.Exists(prepared.PreparedFilePath))
+        {
+            success = prepared;
+            return true;
+        }
+        success = null!;
+        return false;
+    }
+
+    // Assumes @lock held. The latest request of a priority supersedes stale work of
+    // that priority; active work may also preempt a different running prefetch.
+    private void ApplySupersession(string filePath, PrepPriority priority)
+    {
+        if (priority == PrepPriority.Active)
+        {
+            Preempt(ref activeSlot);
+            if (prefetchSlot?.FilePath == filePath) Preempt(ref prefetchSlot);
+            if (running is { } job && job.FilePath != filePath) job.Cts.Cancel();
+        }
+        else
+        {
+            Preempt(ref prefetchSlot);
+            if (running is { Priority: PrepPriority.Prefetch } job && job.FilePath != filePath)
+                job.Cts.Cancel();
+        }
+    }
+
+    private static void Preempt(ref Pending? pending)
+    {
+        pending?.Tcs.TrySetResult(new PrepResult.Preempted());
+        pending = null;
+    }
+
+    private void Queue(Pending pending, PrepPriority priority)
+    {
+        if (priority == PrepPriority.Active) activeSlot = pending;
+        else prefetchSlot = pending;
+    }
+
+    private void SignalWorker() => wake.Writer.TryWrite(true);
     
     private async Task WorkerLoop()
     {
@@ -160,33 +181,29 @@ public class SyncPrep : IAsyncDisposable
         {
             try
             {
-                await signal.WaitAsync(loopCts.Token);
+                await wake.Reader.ReadAsync(loopCts.Token);
             }
             catch (OperationCanceledException) when (loopCts.IsCancellationRequested)
             {
                 break;
             }
 
-            Pending job;
+            RunningJob job;
             lock (@lock)
             {
                 if (activeSlot is { } a)
                 {
-                    job = a;
+                    job = new RunningJob(a, PrepPriority.Active);
                     activeSlot = null;
-                    runningIsActive = true;
                 }
                 else if (prefetchSlot is { } p)
                 {
-                    job = p;
+                    job = new RunningJob(p, PrepPriority.Prefetch);
                     prefetchSlot = null;
-                    runningIsActive = false;
                 }
                 else continue;
 
-                runningCts = new CancellationTokenSource();
-                runningPath = job.FilePath;
-                runningWaiters = [job.Tcs];
+                running = job;
             }
 
             PrepResult result;
@@ -194,10 +211,10 @@ public class SyncPrep : IAsyncDisposable
             {
                 var outPath = cacheManager.CachePathFor(job.FilePath);
                 var processed =
-                    await prepareService.PrepareFileAsync(job.FilePath, outPath, runningCts.Token);
+                    await prepareService.PrepareFileAsync(job.FilePath, outPath, job.Cts.Token);
                 result = new PrepResult.Successful(processed.SyncPath, processed.GainDb);
             }
-            catch (OperationCanceledException) when (runningCts.IsCancellationRequested)
+            catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
             {
                 result = new PrepResult.Preempted();
             }
@@ -212,19 +229,18 @@ public class SyncPrep : IAsyncDisposable
                 switch (result)
                 {
                     case PrepResult.Successful ok:
-                        if (runningIsActive) lastActiveArtifact = ok.PreparedFilePath;
+                        if (job.Priority == PrepPriority.Active) lastActiveArtifact = ok.PreparedFilePath;
                         cacheManager.TryEvictLru(ok.PreparedFilePath, lastActiveArtifact);
-                        results[job.FilePath] = result;
+                        observedResults[job.FilePath] = result;
                         break;
                     case PrepResult.Failed { Ex: not ConnectionLostException }:
-                        results[job.FilePath] = result;
+                        observedResults[job.FilePath] = result;
                         break;
                 }
-                runningCts.Dispose();
-                runningCts = null;
-                runningPath = null;
-                waiters = runningWaiters;
-                runningWaiters = [];
+                job.Cts.Dispose();
+                running = null;
+                waiters = job.Waiters;
+                if (activeSlot is not null || prefetchSlot is not null) SignalWorker();
             }
             foreach (var waiter in waiters) waiter.TrySetResult(result);
         }
@@ -236,11 +252,9 @@ public class SyncPrep : IAsyncDisposable
         lock (@lock)
         {
             disposed = true;
-            runningCts?.Cancel();
-            activeSlot?.Tcs.TrySetResult(new PrepResult.Preempted());
-            activeSlot = null;
-            prefetchSlot?.Tcs.TrySetResult(new PrepResult.Preempted());
-            prefetchSlot = null;
+            running?.Cts.Cancel();
+            Preempt(ref activeSlot);
+            Preempt(ref prefetchSlot);
         }
         loopCts.Cancel();
         await loop;

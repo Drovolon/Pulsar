@@ -15,5 +15,5 @@ public sealed record SourceSnapshot(
 public interface IMusicSource : IAsyncDisposable
 {
     SourceSnapshot? Current { get; }
-    event Action? OnChanged;
+    event Action<SourceSnapshot?>? SnapshotChanged;
 }

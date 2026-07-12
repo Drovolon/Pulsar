@@ -77,7 +77,7 @@ public sealed class Watcher : IMusicSource
         x => Plugin.Log.Verbose($"beefweb command failed: {x.Exception?.Message}"),
         TaskContinuationOptions.OnlyOnFaulted);
 
-    public event Action? OnChanged;
+    public event Action<SourceSnapshot?>? SnapshotChanged;
 
     public SourceSnapshot? Current { get { lock (@lock) return BuildSnapshot(); } }
 
@@ -268,7 +268,7 @@ public sealed class Watcher : IMusicSource
         if (trackChanged) await ResolveNextAsync();
         
         if (warnUnsyncable is { } n) NotifyUnsyncable(n, isWine);
-        if (triggerEvent) OnChanged?.Invoke();
+        if (triggerEvent) SnapshotChanged?.Invoke(Current);
     }
 
     private void OnConnectedChanged(bool connected)
@@ -293,7 +293,7 @@ public sealed class Watcher : IMusicSource
             fire = !gaveUp && currentObs is { State: not PulsarState.Stopped };
             gaveUp = true;
         }
-        if (fire) OnChanged?.Invoke();
+        if (fire) SnapshotChanged?.Invoke(null);
     }
 
     private static string Label(Observation o)

@@ -17,6 +17,7 @@ namespace Pulsar.Tests.Fakes;
 public sealed class FakeRemoteEngine : IRemoteEngine
 {
     public sealed record Call(string Op, object? Arg = null);
+    private sealed record DeferredLoad(string Path, TimeSpan Position, bool Playing);
 
     private readonly List<Call> calls = [];
     private readonly Lock @lock = new();
@@ -24,6 +25,10 @@ public sealed class FakeRemoteEngine : IRemoteEngine
     private PlaybackState state = PlaybackState.Stopped;
     private string? path;
     private TimeSpan position;
+    private DeferredLoad? deferredLoad;
+
+    /// <summary>Accept Load like AudioServer does, but wait to commit it until CompleteDeferredLoad.</summary>
+    public bool DeferLoads { get; set; }
 
     /// <summary>Reported total track length while something is loaded.</summary>
     public TimeSpan TrackDuration { get; set; } = TimeSpan.FromMinutes(3);
@@ -77,6 +82,28 @@ public sealed class FakeRemoteEngine : IRemoteEngine
     public Task LoadAsync(string loadPath, TimeSpan pos, bool startPlaying, CancellationToken ct)
     {
         Enter("Load", (loadPath, pos, startPlaying));
+        if (DeferLoads)
+        {
+            lock (@lock) deferredLoad = new DeferredLoad(loadPath, pos, startPlaying);
+            return Task.CompletedTask;
+        }
+        CommitLoad(loadPath, pos, startPlaying);
+        return Task.CompletedTask;
+    }
+
+    public void CompleteDeferredLoad()
+    {
+        DeferredLoad? pending;
+        lock (@lock)
+        {
+            pending = deferredLoad;
+            deferredLoad = null;
+        }
+        if (pending is not null) CommitLoad(pending.Path, pending.Position, pending.Playing);
+    }
+
+    private void CommitLoad(string loadPath, TimeSpan pos, bool startPlaying)
+    {
         lock (@lock)
         {
             path = loadPath;
@@ -84,7 +111,6 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             state = startPlaying ? PlaybackState.Playing : PlaybackState.Paused;
         }
         OnChanged?.Invoke(this, Snapshot);
-        return Task.CompletedTask;
     }
 
     public Task LoadBytesAsync(string displayPath, byte[] audioData, TimeSpan pos, bool startPlaying, CancellationToken ct)

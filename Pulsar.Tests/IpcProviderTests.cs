@@ -25,6 +25,8 @@ public class IpcProviderTests : IAsyncLifetime
     private readonly BroadcastManager broadcast;
     private readonly ListeningManager listening;
     private readonly IpcProvider ipc;
+    private readonly DebugLoopbackController debugLoopback;
+    private readonly ApplicationCoordinator coordinator;
 
     public IpcProviderTests()
     {
@@ -33,14 +35,16 @@ public class IpcProviderTests : IAsyncLifetime
         listening = new ListeningManager(listenEngine);
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
+        debugLoopback = new DebugLoopbackController(ipc);
+        coordinator = new ApplicationCoordinator(broadcast, listening, ipc, debugLoopback);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()
     {
+        await coordinator.DisposeAsync();
         ipc.Dispose();
-        await broadcast.DisposeAsync();
         await listening.DisposeAsync();
         await prep.DisposeAsync();
         dir.Delete(recursive: true);

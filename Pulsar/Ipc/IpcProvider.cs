@@ -26,6 +26,7 @@ public sealed record PulsarCursor
 /// </summary>
 internal sealed class IpcProvider : IDisposable
 {
+    private const ulong DebugLoopbackIdent = ulong.MaxValue;
     private const int MajorVersion = 0;
     private const int MinorVersion = 1;
 
@@ -97,8 +98,6 @@ internal sealed class IpcProvider : IDisposable
 
         setPlayerData.RegisterAction(OnSetPlayerData);
         clearPlayerData.RegisterAction(OnClearPlayerData);
-
-        broadcast.OnPlayerDataChanged += OnBroadcastChanged;
 
         Enabled = true;
     }
@@ -196,7 +195,7 @@ internal sealed class IpcProvider : IDisposable
         }
     }
 
-    private void OnBroadcastChanged((string, string[], PulsarCursor)? data)
+    internal void PublishPlayerData((string, string[], PulsarCursor)? data)
     {
         _ = Plugin.Framework.RunOnFrameworkThread(() =>
         {
@@ -216,13 +215,31 @@ internal sealed class IpcProvider : IDisposable
         });
     }
 
+    /// <summary>
+    /// Routes local broadcast data through the same JSON and inbound mapping path used by
+    /// an external sync plugin, without depending on Dalamud's call-gate registry.
+    /// </summary>
+    internal void ApplyDebugLoopback((string, string[], PulsarCursor)? data)
+    {
+        if (data is null)
+        {
+            OnClearPlayerData(DebugLoopbackIdent);
+            return;
+        }
+
+        var (currentFile, prefetch, cursor) = data.Value;
+        OnSetPlayerData(
+            DebugLoopbackIdent,
+            currentFile,
+            prefetch,
+            JsonSerializer.Serialize(cursor, JsonOpts));
+    }
+
     public void Dispose()
     {
         if (!Enabled) return;
 
         disposing.SendMessage();
-
-        broadcast.OnPlayerDataChanged -= OnBroadcastChanged;
 
         isEnabled.UnregisterFunc();
         apiVersion.UnregisterFunc();
