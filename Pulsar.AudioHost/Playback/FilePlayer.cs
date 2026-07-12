@@ -34,8 +34,19 @@ public sealed class FilePlayer
     private readonly Channel<PlaybackCommand> mailbox =
         Channel.CreateUnbounded<PlaybackCommand>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Task loop;
+    private readonly Func<IWavePlayer> deviceFactory;
 
-    public FilePlayer() => loop = Task.Run(ProcessAsync);
+    public FilePlayer() : this(DefaultDevice) { }
+
+    // used for tests, to avoid playing real audio while running tests
+    // (though it would be amusing to hear fake tones and such... once.)
+    public FilePlayer(Func<IWavePlayer> deviceFactory)
+    {
+        this.deviceFactory = deviceFactory;
+        loop = Task.Run(ProcessAsync);
+    }
+
+    private static IWavePlayer DefaultDevice() => new WasapiPlayerBuilder().WithMmcssThreadPriority().Build();
 
     public void Load(string path, TimeSpan position, bool playing) => mailbox.Writer.TryWrite(new LoadCommand(path, position, playing));
     public void LoadBytes(string displayPath, byte[] audioData, TimeSpan position, bool playing) => mailbox.Writer.TryWrite(new LoadBytesCommand(displayPath, audioData, position, playing));
@@ -83,15 +94,17 @@ public sealed class FilePlayer
         position = new PlaybackPosition(reader.CurrentTime, reader.TotalTime);
     }
 
-    private async Task Unload(IWavePlayer? device, WaveStream? reader, TaskCompletionSource? trackEnded)
+    private async Task Unload(IWavePlayer? device, WaveStream? reader, TaskCompletionSource? trackEnded, bool started)
     {
-        Log.Debug("Unload enter (device={device})", device is null ? "null" : "present");
+        Log.Debug("Unload enter (device={device}, started={started})", device is null ? "null" : "present", started);
         if (device is null) return;
         try
         {
             device.Stop();
             Log.Debug("Unload: Stop() returned, awaiting trackEnded");
-            if (trackEnded is not null) await trackEnded.Task;
+            // A never-started device has no play thread: Stop() is a no-op and
+            // PlaybackStopped will never fire, so awaiting it would wedge the loop.
+            if (trackEnded is not null && started) await trackEnded.Task;
             Log.Debug("Unload: trackEnded done, disposing");
         }
         catch (Exception e)
@@ -113,6 +126,7 @@ public sealed class FilePlayer
         WaveStream? reader = null;
         VolumeSampleProvider? volumeProvider = null;
         TaskCompletionSource? trackEnded = null;
+        var deviceStarted = false; // whether Play() ever ran on the current device
         var volume = 1.0f;
 
         var next = mailbox.Reader.ReadAsync().AsTask();
@@ -128,8 +142,7 @@ public sealed class FilePlayer
                 {
                     var reason = trackEnded.Task.IsFaulted ? EndReason.Failed : EndReason.Finished;
                     Log.Debug("Playback ended ({reason})", reason);
-                    await Unload(device, reader, trackEnded);
-                    device = null; reader = null; trackEnded = null;
+                    await UnloadAndReset();
                     state = PlaybackState.Stopped;
                     OnPlaybackEnded?.Invoke(this, reason);
                     continue;
@@ -149,8 +162,7 @@ public sealed class FilePlayer
                     {
                         case LoadCommand or LoadBytesCommand:
                         {
-                            await Unload(device, reader, trackEnded);
-                            device = null; reader = null; trackEnded = null; volumeProvider = null;
+                            await UnloadAndReset();
 
                             var (path, startAt, playing) = cmd switch
                             {
@@ -177,6 +189,7 @@ public sealed class FilePlayer
                                 if (playing)
                                 {
                                     device.Play();
+                                    deviceStarted = true;
                                     state = PlaybackState.Playing;
                                 }
                                 else
@@ -190,7 +203,7 @@ public sealed class FilePlayer
                                 ReportError(e, "Load failed");
                                 device?.Dispose(); device = null;
                                 reader?.Dispose(); reader = null;
-                                trackEnded = null; volumeProvider = null;
+                                trackEnded = null; volumeProvider = null; deviceStarted = false;
                                 Path = null; position = null;
                                 state = PlaybackState.Stopped;
                                 OnPlaybackEnded?.Invoke(this, EndReason.Failed);
@@ -203,6 +216,7 @@ public sealed class FilePlayer
                             if (state == PlaybackState.Paused)
                             {
                                 device?.Play();
+                                deviceStarted = true;
                                 state = PlaybackState.Playing;
                                 RaiseChanged();
                             }
@@ -218,8 +232,7 @@ public sealed class FilePlayer
                             break;
 
                         case StopCommand:
-                            await Unload(device, reader, trackEnded);
-                            device = null; reader = null; trackEnded = null; volumeProvider = null;
+                            await UnloadAndReset();
                             state = PlaybackState.Stopped;
                             RaiseChanged();
                             break;
@@ -251,13 +264,21 @@ public sealed class FilePlayer
         }
         finally
         {
-            await Unload(device, reader, trackEnded);
+            await UnloadAndReset();
+        }
+
+        return;
+
+        async Task UnloadAndReset()
+        {
+            await Unload(device, reader, trackEnded, deviceStarted);
+            device = null; reader = null; trackEnded = null; volumeProvider = null; deviceStarted = false;
         }
     }
 
-    private static TaskCompletionSource BuildDevice(out IWavePlayer? device)
+    private TaskCompletionSource BuildDevice(out IWavePlayer? device)
     {
-        device = new WasapiPlayerBuilder().WithMmcssThreadPriority().Build();
+        device = deviceFactory();
         var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         device.PlaybackStopped += (_, e) =>
         {

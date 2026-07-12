@@ -23,7 +23,15 @@ public static class RpcServer
                 NamedPipeServerStream.MaxAllowedServerInstances,
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
-            await stream.WaitForConnectionAsync(token);
+            try
+            {
+                await stream.WaitForConnectionAsync(token);
+            }
+            catch
+            {
+                await stream.DisposeAsync();
+                throw;
+            }
             _ = RespondToRpcRequestAsync<T>(stream, ++clientId);
         }
     }
@@ -41,13 +49,42 @@ public static class RpcServer
     private static async Task RespondToRpcRequestAsync<T>(Stream stream, int clientId) where T : new()
     {
         Log.Information("Client {id} connected", clientId);
+        T? target = default;
+        try
+        {
+            var jsonRpc = BuildSharedJsonRpc(stream);
+            try
+            {
+                target = new T();
+                jsonRpc.AddLocalRpcTarget(target);
+                jsonRpc.StartListening();
 
-        var jsonRpc = BuildSharedJsonRpc(stream);
-        jsonRpc.AddLocalRpcTarget(new T());
-        jsonRpc.StartListening();
-        
-        Log.Information("JSON-RPC listener attached to client {id}. Awaiting requests...", clientId);
-        await jsonRpc.Completion;
-        Log.Information("Client {id} disconnected", clientId);
+                Log.Information("JSON-RPC listener attached to client {id}. Awaiting requests...", clientId);
+                await jsonRpc.Completion;
+                Log.Information("Client {id} disconnected", clientId);
+            }
+            finally
+            {
+                jsonRpc.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Client {id} connection ended with error", clientId);
+        }
+        finally
+        {
+            switch (target)
+            {
+                case IAsyncDisposable ad:
+                    await ad.DisposeAsync();
+                    break;
+                case IDisposable d:
+                    d.Dispose();
+                    break;
+            }
+
+            await stream.DisposeAsync();
+        }
     }
 }

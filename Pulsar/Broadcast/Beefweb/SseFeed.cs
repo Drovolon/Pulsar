@@ -10,9 +10,11 @@ namespace Pulsar.Broadcast.Beefweb;
 /// <summary>
 /// Subscribes to GET /api/query/updates (SSE) via the client's ReadUpdates() stream. Default transport.
 /// </summary>
-public sealed class SseFeed(PlayerClient client) : IFeed
+// backoff is for tests
+public sealed class SseFeed(PlayerClient client, TimeSpan? backoff = null) : IFeed
 {
-    private static readonly TimeSpan Backoff = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DefaultBackoff = TimeSpan.FromSeconds(2);
+    private readonly TimeSpan backoff = backoff ?? DefaultBackoff;
 
     private volatile bool connected;
 
@@ -55,7 +57,7 @@ public sealed class SseFeed(PlayerClient client) : IFeed
 
             SetConnected(false);
             if (ct.IsCancellationRequested) yield break;
-            try { await Task.Delay(Backoff, ct); }
+            try { await Task.Delay(backoff, ct); }
             catch (OperationCanceledException) { yield break; }
         }
     }

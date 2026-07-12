@@ -12,7 +12,12 @@ internal readonly record struct FaderResult(bool Changed, bool Committed, bool M
 
 internal static class UiUtil
 {
-    internal static string FormatTime(TimeSpan t) => $"{(int)t.TotalMinutes}:{t.Seconds:D2}";
+    internal static string FormatTime(TimeSpan t)
+    {
+        var sign = t < TimeSpan.Zero ? "-" : "";
+        if (t < TimeSpan.Zero) t = t.Negate();
+        return $"{sign}{(int)t.TotalMinutes}:{t.Seconds:D2}";
+    }
 
     internal static void IconColored(FontAwesomeIcon icon, Vector4 color)
     {

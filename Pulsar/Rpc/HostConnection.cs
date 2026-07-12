@@ -15,11 +15,14 @@ namespace Pulsar.Rpc;
 /// The host subprocesses handle the game dying; DisposeAsync handles the plugin unloading gracefully;
 /// this class handles the rest.
 /// </summary>
-public sealed class HostConnection<T>(HostSpec spec, Action<T> wireProxy) : IAsyncDisposable
+public sealed class HostConnection<T> : IAsyncDisposable
     where T : class
 {
-    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
+    private readonly HostSpec spec;
+    private readonly Action<T> wireProxy;
+    private readonly TimeSpan connectTimeout;
+    private readonly TimeSpan backoffUnit;
+    private readonly TimeSpan maxBackoff;
 
     private readonly CancellationTokenSource cts = new();
     private Task? supervisor;
@@ -27,7 +30,32 @@ public sealed class HostConnection<T>(HostSpec spec, Action<T> wireProxy) : IAsy
     private Process? process;
     private volatile T? proxy;
 
-    public string HostName { get; } = spec.PipeName;
+    public HostConnection(HostSpec spec, Action<T> wireProxy)
+        : this(spec, wireProxy,
+               connectTimeout: TimeSpan.FromSeconds(10),
+               backoffUnit: TimeSpan.FromSeconds(1),
+               maxBackoff: TimeSpan.FromSeconds(30)) { }
+
+    // For unit tests
+    internal HostConnection(HostSpec spec, Action<T> wireProxy,
+        TimeSpan connectTimeout, TimeSpan backoffUnit, TimeSpan maxBackoff)
+    {
+        this.spec = spec;
+        this.wireProxy = wireProxy;
+        this.connectTimeout = connectTimeout;
+        this.backoffUnit = backoffUnit;
+        this.maxBackoff = maxBackoff;
+        HostName = spec.PipeName;
+    }
+
+    /// <summary>Exponential backoff: unit * 2^(attempt-1), with a ceiling.</summary>
+    internal static TimeSpan Backoff(int attempt, TimeSpan unit, TimeSpan ceiling)
+    {
+        var factor = Math.Min(Math.Pow(2, attempt - 1), ceiling / unit);
+        return unit * factor;
+    }
+
+    public string HostName { get; }
 
     /// <summary>The live proxy, or null while disconnected.</summary>
     public T? Proxy => proxy;
@@ -56,7 +84,7 @@ public sealed class HostConnection<T>(HostSpec spec, Action<T> wireProxy) : IAsy
                 EnsureProcess();
 
                 pipe = new NamedPipeClientStream(".", spec.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                await pipe.ConnectAsync((int)ConnectTimeout.TotalMilliseconds, ct);
+                await pipe.ConnectAsync((int)connectTimeout.TotalMilliseconds, ct);
 
                 rpc = RpcServer.BuildSharedJsonRpc(pipe);
                 var fresh = rpc.Attach<T>();
@@ -95,7 +123,7 @@ public sealed class HostConnection<T>(HostSpec spec, Action<T> wireProxy) : IAsy
             }
 
             attempt++;
-            var delay = TimeSpan.FromSeconds(Math.Min(Math.Pow(2, attempt - 1), MaxBackoff.TotalSeconds));
+            var delay = Backoff(attempt, backoffUnit, maxBackoff);
             try { await Task.Delay(delay, ct); }
             catch (OperationCanceledException) { break; }
         }
@@ -173,14 +201,14 @@ public sealed class HostConnection<T>(HostSpec spec, Action<T> wireProxy) : IAsy
 
         // Forward stdout/stderr to Dalamud logs
         // (Actual logs use Serilog to disk)
-        _ = DrainAsync(fresh.StandardOutput, HostName);
-        _ = DrainAsync(fresh.StandardError, HostName);
+        _ = DrainToPluginLogAsync(fresh.StandardOutput, HostName);
+        _ = DrainToPluginLogAsync(fresh.StandardError, HostName);
 
         Plugin.Log.Information("Started {name} (pid {pid})", HostName, fresh.Id);
         process = fresh;
     }
 
-    private static async Task DrainAsync(StreamReader reader, string name)
+    private static async Task DrainToPluginLogAsync(StreamReader reader, string name)
     {
         try
         {

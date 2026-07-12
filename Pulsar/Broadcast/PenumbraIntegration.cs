@@ -16,7 +16,7 @@ public sealed record ModEntry(string DirectoryName, string Name);
 /// but a little more user-friendly, since it doesn't require them to go hunt down
 /// the mod directory on disk.
 /// </summary>
-public sealed class PenumbraIntegration : IDisposable
+public sealed class PenumbraIntegration : IModResolver, IDisposable
 {
     private const int ExpectedBreaking = 5;
 
@@ -89,14 +89,28 @@ public sealed class PenumbraIntegration : IDisposable
                 Plugin.Log.Warning("Penumbra mod directory is null or empty");
                 return null;
             }
-            var full = Path.Combine(root, Path.GetFileName(modDirectoryName));
-            return Directory.Exists(full) ? full : null;
+            return ResolveUnder(root, modDirectoryName);
         }
         catch (Exception e)
         {
             Plugin.Log.Warning(e, "Penumbra GetModDirectory failed");
             return null;
         }
+    }
+
+    /// <summary>Resolves a mod's directory name to an existing directory under root.</summary>
+    internal static string? ResolveUnder(string root, string modDirectoryName)
+    {
+        // GetFileName strips separators but passes "." and ".." through untouched -
+        // Combine(root, "..") is the mod root's PARENT, and Directory.Exists says yes.
+        var leaf = Path.GetFileName(modDirectoryName);
+        if (leaf is "" or "." or "..")
+        {
+            Plugin.Log.Warning($"Refusing suspicious mod directory name: '{modDirectoryName}'");
+            return null;
+        }
+        var full = Path.Combine(root, leaf);
+        return Directory.Exists(full) ? full : null;
     }
 
     public void Dispose()

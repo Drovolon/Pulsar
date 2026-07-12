@@ -36,28 +36,31 @@ public sealed class HostArgs
         string? logTag = null;
         string? mixerName = null;
 
-        for (var i = 0; i + 1 < args.Length; i++)
+        for (var i = 0; i < args.Length; i++)
         {
             switch (args[i])
             {
                 case "--log-dir":
-                    logDirectory = args[++i];
+                    logDirectory = Next() ?? logDirectory;
                     break;
                 case "--parent":
-                    if (int.TryParse(args[i + 1], out var pid))
+                    if (Next() is { } pidStr && int.TryParse(pidStr, out var pid))
                         parentProcessId = pid;
-                    i++;
                     break;
                 case "--pipe":
-                    pipeName = args[++i];
+                    pipeName = Next() ?? pipeName;
                     break;
                 case "--log-tag":
-                    logTag = args[++i];
+                    logTag = Next() ?? logTag;
                     break;
                 case "--mixer-name":
-                    mixerName = args[++i];
+                    mixerName = Next() ?? mixerName;
                     break;
             }
+
+            continue;
+
+            string? Next() => i + 1 < args.Length ? args[++i] : null;
         }
 
         return new HostArgs

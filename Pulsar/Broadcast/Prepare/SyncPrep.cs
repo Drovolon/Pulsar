@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Pulsar.Common.Api;
@@ -40,9 +42,19 @@ public class SyncPrep : IAsyncDisposable
     private CancellationTokenSource? runningCts;
 
     private bool runningIsActive;
-    
+
+    // Currently running transcode. New prep request for the same path gets given that
+    // task, instead of canceling and spawning a new one.
+    private string? runningPath;
+    private List<TaskCompletionSource<PrepResult>> runningWaiters = [];
+
+    // Last successful prepped file. Skipped during cache deletion.
+    private string? lastActiveArtifact;
+
     private Pending? activeSlot;
     private Pending? prefetchSlot;
+
+    private bool disposed; // guarded by @lock: enqueueing after dispose would hang the caller
     
     private readonly SemaphoreSlim signal = new(0);
     
@@ -82,28 +94,52 @@ public class SyncPrep : IAsyncDisposable
 
     private Task<PrepResult> Prep(string filePath, bool isActive)
     {
-        var tcs = new TaskCompletionSource<PrepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (@lock)
         {
+            if (results.TryGetValue(filePath, out var known)
+                && known is PrepResult.Successful success
+                && File.Exists(success.PreparedFilePath))
+            {
+                if (isActive)
+                {
+                    if (activeSlot is { } queued && queued.FilePath != filePath)
+                    {
+                        queued.Tcs.TrySetResult(new PrepResult.Preempted());
+                        activeSlot = null;
+                    }
+                    if (runningIsActive && runningPath != filePath)
+                        runningCts?.Cancel();
+                    lastActiveArtifact = success.PreparedFilePath;
+                }
+                CacheManager.Touch(success.PreparedFilePath);
+                return Task.FromResult<PrepResult>(success);
+            }
+
+            var tcs = new TaskCompletionSource<PrepResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            if (disposed)
+            {
+                tcs.TrySetResult(new PrepResult.Preempted());
+                return tcs.Task;
+            }
+
+            if (runningPath == filePath && runningCts is { IsCancellationRequested: false })
+            {
+                runningWaiters.Add(tcs);
+                if (isActive) runningIsActive = true;
+                return tcs.Task;
+            }
+
             if (isActive)
             {
                 activeSlot?.Tcs.TrySetResult(new PrepResult.Preempted());
                 if (prefetchSlot?.FilePath == filePath)
                 {
-                    // promote prefetch to active if it matches
-                    activeSlot = prefetchSlot;
+                    prefetchSlot.Tcs.TrySetResult(new PrepResult.Preempted());
                     prefetchSlot = null;
-                    // if active was previously running: cancel it, we want
-                    if (runningIsActive)
-                        runningCts?.Cancel();
                 }
-                else
-                {
-                    activeSlot = new Pending(filePath, tcs);
-                    runningCts?.Cancel();
-                    if (!runningIsActive)
-                        runningCts?.Cancel();
-                }
+                activeSlot = new Pending(filePath, tcs);
+                runningCts?.Cancel();
             }
             else
             {
@@ -112,10 +148,10 @@ public class SyncPrep : IAsyncDisposable
                 if (!runningIsActive)
                     runningCts?.Cancel();
             }
-        }
 
-        signal.Release();
-        return tcs.Task;
+            signal.Release();
+            return tcs.Task;
+        }
     }
     
     private async Task WorkerLoop()
@@ -149,6 +185,8 @@ public class SyncPrep : IAsyncDisposable
                 else continue;
 
                 runningCts = new CancellationTokenSource();
+                runningPath = job.FilePath;
+                runningWaiters = [job.Tcs];
             }
 
             PrepResult result;
@@ -158,8 +196,6 @@ public class SyncPrep : IAsyncDisposable
                 var processed =
                     await prepareService.PrepareFileAsync(job.FilePath, outPath, runningCts.Token);
                 result = new PrepResult.Successful(processed.SyncPath, processed.GainDb);
-                cacheManager.TryEvictLru(processed.SyncPath);
-                results.TryAdd(job.FilePath, result);
             }
             catch (OperationCanceledException) when (runningCts.IsCancellationRequested)
             {
@@ -168,23 +204,44 @@ public class SyncPrep : IAsyncDisposable
             catch (Exception ex)
             {
                 result = new PrepResult.Failed(ex);
-                if (ex is not ConnectionLostException) // don't cache failure if the transcode host is dead
-                    results.TryAdd(job.FilePath, result);
             }
 
+            List<TaskCompletionSource<PrepResult>> waiters;
             lock (@lock)
             {
+                switch (result)
+                {
+                    case PrepResult.Successful ok:
+                        if (runningIsActive) lastActiveArtifact = ok.PreparedFilePath;
+                        cacheManager.TryEvictLru(ok.PreparedFilePath, lastActiveArtifact);
+                        results[job.FilePath] = result;
+                        break;
+                    case PrepResult.Failed { Ex: not ConnectionLostException }:
+                        results[job.FilePath] = result;
+                        break;
+                }
                 runningCts.Dispose();
                 runningCts = null;
+                runningPath = null;
+                waiters = runningWaiters;
+                runningWaiters = [];
             }
-            job.Tcs.TrySetResult(result);
+            foreach (var waiter in waiters) waiter.TrySetResult(result);
         }
     }
 
     public async ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);
-        runningCts?.Cancel();
+        lock (@lock)
+        {
+            disposed = true;
+            runningCts?.Cancel();
+            activeSlot?.Tcs.TrySetResult(new PrepResult.Preempted());
+            activeSlot = null;
+            prefetchSlot?.Tcs.TrySetResult(new PrepResult.Preempted());
+            prefetchSlot = null;
+        }
         loopCts.Cancel();
         await loop;
     }

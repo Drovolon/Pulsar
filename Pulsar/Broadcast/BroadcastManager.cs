@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Pulsar.Broadcast.Prepare;
 using Pulsar.Common.Api;
@@ -23,7 +24,7 @@ public enum BroadcastMode { Folder, Mod, Beefweb }
 /// </summary>
 public sealed class BroadcastManager : IAsyncDisposable
 {
-    private readonly PenumbraIntegration penumbra;
+    private readonly IModResolver penumbra;
     private readonly SyncPrep prep;
     private readonly IRemoteEngine player;
     private readonly Func<Configuration> config;
@@ -31,21 +32,57 @@ public sealed class BroadcastManager : IAsyncDisposable
     private IMusicSource? active;
     private int cursorEpoch;
 
-    private (string, string[], PulsarCursor)? lastEmitted;   // last announced manifest; doubles as the hold value
+    // Serializes source switches: SetSource is a multi-await sequence (teardown, then
+    // swap+announce) and two interleaved switches would clobber each other's swap.
+    private readonly SemaphoreSlim switchLock = new(1, 1);
+    private bool disposed; // guarded by switchLock: a SetSource queued behind dispose must not install
+
+    // The active source's OnChanged subscription, bound to that source's identity so a
+    // late event from a torn-down source can be told apart from the live one.
+    private Action? activeSourceHandler;
+
+    private (string, string[], PulsarCursor)? holdValue;     // last computed manifest; the transcode-gap hold
+    private (string, string[], PulsarCursor)? lastAnnounced; // last payload delivered; the dedup comparand
+
+    // The ordered dispatcher: every outward-facing action (subscriber callbacks, timer
+    // arming, prep kicks) is enqueued - under @lock where ordering matters - and executed
+    // by ONE pump task. Compute order is enqueue order is delivery order, so no seq
+    // fences are needed, and subscribers never run under any of our locks: a wedged
+    // subscriber stalls only the queue, never a source event or a switch.
+    private readonly Channel<Action> deliveries = Channel.CreateUnbounded<Action>(
+        new UnboundedChannelOptions { SingleReader = true });
+    private readonly Task deliveryPump;
+
     private readonly Timer prefetchTimer;
     private bool prefetchFinalPending;                       // which of the two near-end checkpoints is next
 
-    public BroadcastManager(IRemoteEngine player, PenumbraIntegration penumbra, SyncPrep prep, Func<Configuration> config)
+    public BroadcastManager(IRemoteEngine player, IModResolver penumbra, SyncPrep prep, Func<Configuration> config)
     {
         this.penumbra = penumbra;
         this.prep = prep;
         this.config = config;
         this.player = player;
         prefetchTimer = new Timer(_ => OnPrefetchTick(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        deliveryPump = Task.Run(DeliveryPump);
+    }
+
+    private async Task DeliveryPump()
+    {
+        await foreach (var deliver in deliveries.Reader.ReadAllAsync())
+        {
+            try { deliver(); }
+            catch (Exception e) { Plugin.Log.Error(e, "broadcast delivery failed"); }
+        }
     }
 
     /// <summary>Fires when something changes. null means stopped. Includes (currentFile, prefetchFiles, cursor).</summary>
     public event Action<(string, string[], PulsarCursor)?>? OnPlayerDataChanged;
+
+    /// <summary>
+    /// Fires when broadcasting toggles.
+    /// </summary>
+    public event Action<bool>? OnBroadcastingChanged;
+    private bool lastBroadcasting;
 
     /// <summary>The active source IF they are using the folder or mod player (not beefweb).</summary>
     public Jukebox? ActiveJukebox => active as Jukebox;
@@ -102,16 +139,46 @@ public sealed class BroadcastManager : IAsyncDisposable
     /// <summary>Swap the active source, disposing the previous one. null stops broadcasting.</summary>
     public async Task SetSource(IMusicSource? source)
     {
-        IMusicSource? old;
-        lock (@lock)
+        await switchLock.WaitAsync();
+        try
         {
-            old = active;
-            old?.OnChanged -= OnSourceChanged;
-            active = source;
-            source?.OnChanged += OnSourceChanged;
+            if (disposed)
+            {
+                if (source is not null) await source.DisposeAsync();
+                return;
+            }
+
+            IMusicSource? old;
+            lock (@lock)
+            {
+                old = active;
+                if (old is not null && activeSourceHandler is not null) old.OnChanged -= activeSourceHandler;
+                activeSourceHandler = null;
+                active = null;
+            }
+            if (old is not null) await old.DisposeAsync();
+
+            SourceSnapshot? snap;
+            lock (@lock)
+            {
+                active = source;
+                if (source is not null)
+                {
+                    var src = source;
+                    activeSourceHandler = () => OnSourceChanged(src);
+                    source.OnChanged += activeSourceHandler;
+                }
+                cursorEpoch++;
+                holdValue = null;
+                snap = source?.Current;
+            }
+
+            HandleSnapshot(snap);
         }
-        if (old is not null) await old.DisposeAsync();
-        Emit(); // a source switch ends (or starts) a broadcast
+        finally
+        {
+            switchLock.Release();
+        }
     }
 
     public (string, string[], PulsarCursor)? CurrentPlayerData()
@@ -127,30 +194,43 @@ public sealed class BroadcastManager : IAsyncDisposable
         {
             switch (result)
             {
-                case PrepResult.Successful s:
+                case PrepResult.Successful s when File.Exists(s.PreparedFilePath):
                     return Map(snap, new PreparedTrack(s.PreparedFilePath, s.GainDb), cursorEpoch);
+                case PrepResult.Successful:
+                    break;
                 case PrepResult.Failed:
                     return null;
             }
         }
-        
-        return lastEmitted;
+
+        return holdValue;
     }
 
     /// <summary>
     /// Invoked by a source to report a change... Not when the active source changes.
     /// TODO: make the name better.
     /// </summary>
-    private void OnSourceChanged()
+    private void OnSourceChanged(IMusicSource source)
     {
         SourceSnapshot? snap;
-        lock (@lock) { cursorEpoch++; snap = active?.Current; }
+        lock (@lock)
+        {
+            if (!ReferenceEquals(active, source)) return;
+            cursorEpoch++;
+            snap = source.Current;
+        }
+        HandleSnapshot(snap);
+    }
+
+    /// <summary>Announce + prep + prefetch for a snapshot, shared by source events and source switches.</summary>
+    private void HandleSnapshot(SourceSnapshot? snap)
+    {
+        AnnounceBroadcasting();
+        deliveries.Writer.TryWrite(ArmPrefetchTimer);
+        Emit();
         if (snap is not null)
         {
-            // It is likely Emit() below will run before Prepare finishes, if it needs to do actual work.
-            // Which means the Emit() below will run, then PrepareThenReemit will do another Emit().
-            // That's okay. The whole plugin is more or less designed to handle duplicate events just fine.
-            _ = PrepareThenReemit(snap.FilePath);
+            QueuePrepKick(snap.FilePath);
             if (snap.NextFilePath is { } next)
             {
                 Plugin.Log.Debug($"start-prefetch next: {Path.GetFileName(next)}");
@@ -158,15 +238,25 @@ public sealed class BroadcastManager : IAsyncDisposable
             }
             else Plugin.Log.Debug("start-prefetch: no track available to prefetch");
         }
-        ArmPrefetchTimer(snap);
-        Emit();
     }
 
-    private async Task PrepareThenReemit(string originalPath)
+    private void QueuePrepKick(string originalPath)
+    {
+        deliveries.Writer.TryWrite(() =>
+        {
+            lock (@lock)
+            {
+                if (active?.Current?.FilePath != originalPath) return;
+            }
+            _ = ReemitWhenPrepped(prep.PrepareActive(originalPath), originalPath);
+        });
+    }
+
+    private async Task ReemitWhenPrepped(Task<PrepResult> prepTask, string originalPath)
     {
         try
         {
-            await prep.PrepareActive(originalPath);
+            await prepTask;
         }
         catch (Exception e)
         {
@@ -181,17 +271,27 @@ public sealed class BroadcastManager : IAsyncDisposable
         Emit();
     }
 
-    private void Emit()
+    private void AnnounceBroadcasting()
     {
-        (string, string[], PulsarCursor)? data;
-        bool changed;
         lock (@lock)
         {
-            data = UnsafeCompute();
-            changed = !EqualsIgnoringPrefetch(data, lastEmitted);
-            lastEmitted = data;
+            var value = active?.Current is not null;
+            if (lastBroadcasting == value) return;
+            lastBroadcasting = value;
+            deliveries.Writer.TryWrite(() => OnBroadcastingChanged?.Invoke(value));
         }
-        if (changed) OnPlayerDataChanged?.Invoke(data);
+    }
+
+    private void Emit()
+    {
+        lock (@lock)
+        {
+            var data = UnsafeCompute();
+            holdValue = data;
+            if (EqualsIgnoringPrefetch(data, lastAnnounced)) return;
+            lastAnnounced = data;
+            deliveries.Writer.TryWrite(() => OnPlayerDataChanged?.Invoke(data));
+        }
     }
 
     /// <summary>
@@ -220,8 +320,11 @@ public sealed class BroadcastManager : IAsyncDisposable
         }
     );
 
-    private void ArmPrefetchTimer(SourceSnapshot? snap)
+    private void ArmPrefetchTimer()
     {
+        SourceSnapshot? snap;
+        lock (@lock) { snap = active?.Current; }
+
         prefetchFinalPending = false;
         if (snap is null || !snap.IsPlaying) { Plugin.Log.Debug("prefetch timer: disarmed (stopped/paused)"); DisarmTimer(); return; }
 
@@ -288,13 +391,33 @@ public sealed class BroadcastManager : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await prefetchTimer.DisposeAsync();
-        IMusicSource? a;
-        lock (@lock)
+        await switchLock.WaitAsync();
+        try
         {
-            a = active;
-            a?.OnChanged -= OnSourceChanged;
-            active = null;
+            disposed = true;
+            IMusicSource? a;
+            lock (@lock)
+            {
+                a = active;
+                if (a is not null && activeSourceHandler is not null) a.OnChanged -= activeSourceHandler;
+                activeSourceHandler = null;
+                active = null;
+            }
+            if (a is not null) await a.DisposeAsync();
         }
-        if (a is not null) await a.DisposeAsync();
+        finally
+        {
+            switchLock.Release();
+        }
+
+        deliveries.Writer.TryComplete();
+        try
+        {
+            await deliveryPump.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException)
+        {
+            Plugin.Log.Warning("broadcast delivery pump did not drain in time");
+        }
     }
 }

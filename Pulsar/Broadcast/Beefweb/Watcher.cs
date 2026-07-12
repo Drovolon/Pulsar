@@ -26,11 +26,12 @@ public sealed record UnsyncableSource(string Track, UnsyncableReason Reason);
 /// </summary>
 public sealed class Watcher : IMusicSource
 {
-    private static readonly TimeSpan GiveUpDelay = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DefaultGiveUpDelay = TimeSpan.FromSeconds(10);
 
     private readonly IFeed feed;
     private readonly PlayerClient client;
     private readonly bool isWine;
+    private readonly TimeSpan giveUpDelay;
     private readonly Discriminator discriminator = new();
     private readonly Lock @lock = new();
     private readonly CancellationTokenSource cts = new();
@@ -46,11 +47,13 @@ public sealed class Watcher : IMusicSource
     // Best-effort "what plays next", resolved off-thread on each track change (slight staleness OK).
     private volatile string? nextLocalPath;
 
-    public Watcher(IFeed feed, PlayerClient client, bool isWine)
+    // giveUpDelay is for tests
+    public Watcher(IFeed feed, PlayerClient client, bool isWine, TimeSpan? giveUpDelay = null)
     {
         this.feed = feed;
         this.client = client;
         this.isWine = isWine;
+        this.giveUpDelay = giveUpDelay ?? DefaultGiveUpDelay;
         giveUpTimer = new Timer(_ => OnGiveUp(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         feed.OnConnectedChanged += OnConnectedChanged;
         pump = Task.Run(PumpAsync);
@@ -277,7 +280,7 @@ public sealed class Watcher : IMusicSource
         }
         else
         {
-            giveUpTimer.Change(GiveUpDelay, Timeout.InfiniteTimeSpan);
+            giveUpTimer.Change(giveUpDelay, Timeout.InfiniteTimeSpan);
         }
     }
 

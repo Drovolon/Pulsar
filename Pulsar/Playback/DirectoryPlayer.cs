@@ -87,9 +87,9 @@ public sealed class DirectoryPlayer : IAsyncDisposable
 
     // TODO: move somewhere that makes more sense
     private static readonly string[] Extensions = [
-        "*.aac", "*.aiff", "*.flac", ".m4a",
+        "*.aac", "*.aiff", "*.flac", "*.m4a",
         "*.mp3", "*.ogg", "*.opus", "*.wav",
-        "*.wma", "*.wv", "*.m4a",
+        "*.wma", "*.wv",
         "*.scd" // hmmm...
     ];
 
@@ -99,10 +99,28 @@ public sealed class DirectoryPlayer : IAsyncDisposable
     private readonly IRemoteEngine player;
     private readonly EngineQueueManager eqm;
 
+    private readonly TimeSpan pollPlaying;
+    private readonly TimeSpan pollIdle;
+    private readonly TimeSpan errorBackoff;
+    private readonly TimeSpan disposeTimeout;
+
     public DirectoryPlayer(IRemoteEngine player, string directory)
+        : this(player, directory,
+               pollPlaying: TimeSpan.FromMilliseconds(250),
+               pollIdle: TimeSpan.FromMilliseconds(500),
+               errorBackoff: TimeSpan.FromSeconds(1),
+               disposeTimeout: TimeSpan.FromSeconds(2)) { }
+
+    // for unit tests only
+    internal DirectoryPlayer(IRemoteEngine player, string directory,
+        TimeSpan pollPlaying, TimeSpan pollIdle, TimeSpan errorBackoff, TimeSpan disposeTimeout)
     {
         this.player = player;
         Directory = directory;
+        this.pollPlaying = pollPlaying;
+        this.pollIdle = pollIdle;
+        this.errorBackoff = errorBackoff;
+        this.disposeTimeout = disposeTimeout;
         eqm = new EngineQueueManager(player, asyncCts.Token);
     }
 
@@ -121,7 +139,10 @@ public sealed class DirectoryPlayer : IAsyncDisposable
         player.OnPlaybackEnded += OnEngineEnded;
         player.OnChanged += OnEngineChanged;
 
-        updateLoop = Task.Run(() => UpdateStateLoop(asyncCts.Token), asyncCts.Token);
+        // Deliberately NOT passing the token to Task.Run: a cancel-before-start would
+        // put the task in Canceled and make DisposeAsync's await throw. The loop always
+        // starts and exits promptly via its own token checks.
+        updateLoop = Task.Run(() => UpdateStateLoop(asyncCts.Token));
     }
 
     // This is purely for Position. Updating state here can lead to some tricky race conditions.
@@ -145,11 +166,11 @@ public sealed class DirectoryPlayer : IAsyncDisposable
             {
                 Plugin.Log.Error(ex, "DirectoryPlayer: UpdateStateLoop failed");
                 // back off
-                try { await Task.Delay(1000, ct); }
+                try { await Task.Delay(errorBackoff, ct); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             }
 
-            try { await Task.Delay(State == PlaybackState.Playing ? 250 : 500, ct); }
+            try { await Task.Delay(State == PlaybackState.Playing ? pollPlaying : pollIdle, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
         }
     }
@@ -194,8 +215,38 @@ public sealed class DirectoryPlayer : IAsyncDisposable
         player.OnPlaybackEnded -= OnEngineEnded;
         player.OnChanged -= OnEngineChanged;
         asyncCts.Cancel();
-        await eqm.DisposeAsync();
-        if (updateLoop is not null) await updateLoop;
+
+        try
+        {
+            await eqm.DisposeAsync().AsTask().WaitAsync(disposeTimeout);
+        }
+        catch (TimeoutException)
+        {
+            Plugin.Log.Debug("DirectoryPlayer: EQM drain timed out on dispose");
+        }
+        
+        if (updateLoop is not null)
+        {
+            try
+            {
+                await updateLoop.WaitAsync(disposeTimeout);
+            }
+            catch (TimeoutException)
+            {
+                Plugin.Log.Debug("DirectoryPlayer: update loop join timed out on dispose");
+            }
+        }
+
+        // Disposing the player must issue a stop, because nothing else is guaranteed to try.
+        try
+        {
+            using var timeout = new CancellationTokenSource(disposeTimeout);
+            await player.StopAsync(timeout.Token).WaitAsync(timeout.Token);
+        }
+        catch (Exception e)
+        {
+            Plugin.Log.Debug($"DirectoryPlayer: stop-on-dispose failed: {e.Message}");
+        }
     }
 
     /// <summary>

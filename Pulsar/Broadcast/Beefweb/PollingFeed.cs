@@ -48,9 +48,11 @@ internal static class ActiveItemFields
 /// Polls GET /api/player. Implemented out of caution because I'm not sure how
 /// reliable SSE will be. (Particularly on Linux.)
 /// </summary>
-public sealed class PollingFeed(PlayerClient client) : IFeed
+// pollInterval is for tests
+public sealed class PollingFeed(PlayerClient client, TimeSpan? pollInterval = null) : IFeed
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan DefaultPollInterval = TimeSpan.FromSeconds(1);
+    private readonly TimeSpan pollInterval = pollInterval ?? DefaultPollInterval;
 
     private volatile bool connected;
 
@@ -77,7 +79,7 @@ public sealed class PollingFeed(PlayerClient client) : IFeed
 
             if (o is { } val) yield return val;
 
-            try { await Task.Delay(PollInterval, ct); }
+            try { await Task.Delay(pollInterval, ct); }
             catch (OperationCanceledException) { yield break; }
         }
     }

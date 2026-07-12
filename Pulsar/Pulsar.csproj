@@ -13,6 +13,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Pulsar.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Beefweb.Client" Version="0.4.0" />
     <PackageReference Include="NAudio" Version="3.0.0-preview.16" />
     <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16" />

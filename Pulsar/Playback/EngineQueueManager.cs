@@ -17,7 +17,7 @@ internal class EngineQueueManager : IAsyncDisposable
     internal EngineQueueManager(IRemoteEngine engine, CancellationToken ct)
     {
         player = engine;
-        commandLoop = Task.Run(() => CommandLoop(ct), ct);
+        commandLoop = Task.Run(() => CommandLoop(ct));
     }
     
     public async ValueTask DisposeAsync()

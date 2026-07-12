@@ -1,19 +1,28 @@
 using System;
 using System.IO;
+using Lumina;
 using Lumina.Data.Files;
 using Lumina.Data.Parsing.Scd;
 
 namespace Pulsar.Playback;
 
 /// <summary>
-/// Takes a .scd file path and returns (hopefully) raw playable audio bytes.
-/// Needs to be executed plugin-side, since it uses Lumina. Audio host is sent raw Vorbis bytes.
+/// As implemented, we rely on Dalamud's instance of Lumina to parse .scd and extract
+/// the raw Vorbis data. So, we need to do .scd parsing/loading in the plugin, not in
+/// the audio or transcode host, for now, unfortunately.
+///
+/// Lumina appears to require instantiating game data to function as a library, so
+/// it's not super easy to ship our own either, even if the .scd code *itself* doesn't
+/// *really* need game data. At best, we could copy/paste their .scd code - but... meh.
 /// </summary>
 internal static class ScdReader
 {
-    public static byte[] ExtractAudio(string path)
+    public static byte[] ExtractAudio(string path) => ExtractAudio(path, Plugin.DataManager.GameData);
+
+    // Used for unit tests, to avoid writing a fake IDataManager from Dalamud
+    internal static byte[] ExtractAudio(string path, GameData gameData)
     {
-        var scd = Plugin.DataManager.GameData.GetFileFromDisk<ScdFile>(path);
+        var scd = gameData.GetFileFromDisk<ScdFile>(path);
         var audio = scd.GetAudio(0);
 
         if (audio.AudioBasicDesc.Format != AudioFormat.OggVorbis)

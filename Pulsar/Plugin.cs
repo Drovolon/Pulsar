@@ -23,9 +23,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
-    [PluginService] internal static IPluginLog Log { get; private set; } = null!;
-    [PluginService] internal static IFramework Framework { get; private set; } = null!;
-    [PluginService] internal static IChatGui Chat { get; private set; } = null!;
+    // These three have internal setters (not private): Pulsar.Tests installs fakes for them.
+    [PluginService] internal static IPluginLog Log { get; set; } = null!;
+    [PluginService] internal static IFramework Framework { get; set; } = null!;
+    [PluginService] internal static IChatGui Chat { get; set; } = null!;
 
     private const string CommandName = "/pulsar";
 
@@ -63,11 +64,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
     }
 
-    // We're "broadcasting" exactly when the broadcast layer is emitting a stream to peers, which is
-    // exactly when OnPlayerDataChanged carries a non-null payload. Deriving the listener's gate from
-    // that single signal means it can't drift from what peers actually receive.
-    private void OnBroadcastDataChanged((string, string[], PulsarCursor)? data)
-        => Listening?.SetBroadcasting(data is not null);
+    private void OnBroadcastingChanged(bool broadcasting)
+        => Listening?.SetBroadcasting(broadcasting);
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
@@ -98,7 +96,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
             Prepare);
         Broadcast = new BroadcastManager(BroadcastEngine, Penumbra, SyncPrep, () => Configuration);
 
-        Broadcast.OnPlayerDataChanged += OnBroadcastDataChanged;
+        Broadcast.OnBroadcastingChanged += OnBroadcastingChanged;
 
         ListenEngine.OnReconnected += Listening.OnEngineReconnected;
         BroadcastEngine.OnReconnected += Broadcast.OnEngineReconnected;
@@ -168,7 +166,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
         try
         {
             Ipc?.Dispose();
-            Broadcast?.OnPlayerDataChanged -= OnBroadcastDataChanged;
+            Broadcast?.OnBroadcastingChanged -= OnBroadcastingChanged;
             await Framework.RunOnFrameworkThread(FrameworkDispose);
             if (Broadcast is not null) await Broadcast.DisposeAsync();
             if (SyncPrep is not null) await SyncPrep.DisposeAsync();

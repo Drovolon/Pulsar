@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,19 +67,29 @@ public class ListeningManager : IAsyncDisposable
     private readonly IRemoteEngine engine;
     private readonly SemaphoreSlim stateLock = new(1, 1);
 
+    // To avoid exposing callers to `stateLock`, all calls are funneled through this queue,
+    // which is drained by the reconcile loop. This preserves operation order, prevents races,
+    // and stops callers from accidentally deadlocking themselves. (Even if it was hard to do so.)
+    private readonly ConcurrentQueue<Action> mutations = new();
+
+    private void EnqueueMutation(Action mutate)
+    {
+        mutations.Enqueue(mutate);
+        ScheduleReevaluate();
+    }
+
     private float masterVolume;
     private bool masterMuted;
 
     // True when broadcasting. While broadcasting, we never tune into a nearby broadcaster.
-    private bool broadcasting;
+    private volatile bool broadcasting;
 
     // Pinned character name. This is the user selecting "I want to listen to John Finalfantasy".
     // Note, pins aren't saved in config, so they won't survive a plugin reload etc.
-    private string? pinnedName;
+    private volatile string? pinnedName;
 
-    // Whether to automatically play a new source, if none is currently playing. Saved in config.
-
-    // Which pair is currently playing, if any.
+    // Which pair is currently playing, if any. Only meaningful while AutoPlay is on
+    // and the pair still exists; UnsafeResolveActive re-derives it otherwise.
     private ulong? currentActiveId;
 
     // Per-source volumes, a map of character name -> volume. Persisted in config by the UI code.
@@ -95,8 +106,12 @@ public class ListeningManager : IAsyncDisposable
     /// <summary>Whether the active source is currently producing sound. Lock-free.</summary>
     public bool ActiveNowPlaying { get; private set; }
 
-    /// <summary>Whether or not to play newly discovered sources, if no one is currently playing.</summary>
-    public bool AutoPlay { get; private set; }
+    /// <summary>
+    /// Whether to play nearby broadcasters automatically. Off means silence, and stops
+    /// autoplay. A pin overrides all this.
+    /// </summary>
+    public bool AutoPlay => autoPlay;
+    private volatile bool autoPlay;
 
     /// <summary>Whether anyone is pinned.</summary>
     public bool HasPin => pinnedName is not null;
@@ -108,17 +123,33 @@ public class ListeningManager : IAsyncDisposable
     
     private readonly CancellationTokenSource asyncCts  = new();
 
+    private readonly TimeSpan updatePoll;
+    private readonly TimeSpan errorBackoff;
+    private readonly TimeSpan lostBackoff;
+
     public ListeningManager(IRemoteEngine engine, float masterVolume = 1f,
                             IReadOnlyDictionary<string, float>? savedPairVolumes = null, bool autoPlay = true)
+        : this(engine, masterVolume, savedPairVolumes, autoPlay,
+               updatePoll: TimeSpan.FromMilliseconds(250),
+               errorBackoff: TimeSpan.FromSeconds(1),
+               lostBackoff: TimeSpan.FromSeconds(10)) { }
+
+    // for unit tests only
+    internal ListeningManager(IRemoteEngine engine, float masterVolume,
+                              IReadOnlyDictionary<string, float>? savedPairVolumes, bool autoPlay,
+                              TimeSpan updatePoll, TimeSpan errorBackoff, TimeSpan lostBackoff)
     {
+        this.updatePoll = updatePoll;
+        this.errorBackoff = errorBackoff;
+        this.lostBackoff = lostBackoff;
         this.engine = engine;
         this.masterVolume = masterVolume;
         preferredVolumes = savedPairVolumes is null ? [] : new Dictionary<string, float>(savedPairVolumes);
-        AutoPlay = autoPlay;
+        this.autoPlay = autoPlay;
         this.engine.OnPlaybackEnded += OnPlaybackEnded;
-        
-        reevaluateLoop = Task.Run(() => ReevaluateRunLoop(asyncCts.Token), asyncCts.Token);
-        updateLoop = Task.Run(() => UpdateLoop(asyncCts.Token), asyncCts.Token);
+
+        reevaluateLoop = Task.Run(() => ReevaluateRunLoop(asyncCts.Token));
+        updateLoop = Task.Run(() => UpdateLoop(asyncCts.Token));
     }
 
     public async ValueTask DisposeAsync()
@@ -140,170 +171,69 @@ public class ListeningManager : IAsyncDisposable
         ScheduleReevaluate();
     }
 
-    public void AddOrUpdatePair(ulong ident, string? displayName, PairData data)
+    public void AddOrUpdatePair(ulong ident, string? displayName, PairData data) => EnqueueMutation(() =>
     {
-        stateLock.Wait();
-        try
+        if (pairs.TryGetValue(ident, out var pair))
         {
-            if (pairs.TryGetValue(ident, out var pair))
-            {
-                pair.Desired = data;
-                pair.FailCount = 0;
-                if (displayName is not null) pair.DisplayName = displayName;
-            }
-            else
-            {
-                pairs[ident] = new PairState(data)
-                {
-                    DisplayName = displayName,
-                    Volume = displayName != null ? preferredVolumes.GetValueOrDefault(displayName, 1f) : 1f,
-                };
-            }
-
-            ScheduleReevaluate();
-        } 
-        finally
-        {
-            stateLock.Release();
+            pair.Desired = data;
+            pair.FailCount = 0;
+            if (displayName is not null) pair.DisplayName = displayName;
         }
-    }
+        else
+        {
+            pairs[ident] = new PairState(data)
+            {
+                DisplayName = displayName,
+                Volume = displayName != null ? preferredVolumes.GetValueOrDefault(displayName, 1f) : 1f,
+            };
+        }
+    });
 
-    public void ClearPair(ulong ident)
+    public void ClearPair(ulong ident) => EnqueueMutation(() =>
     {
-        stateLock.Wait();
-        try
-        {
-            // Note: if this was the active source, reconcile will stop the playback engine for us.
-            if (pairs.Remove(ident)) ScheduleReevaluate();
-        }
-        finally
-        {
-            stateLock.Release();
-        }
-    }
+        // Note: if this was the active source, reconcile will stop the playback engine for us.
+        pairs.Remove(ident);
+    });
 
     /// <summary>Pin a specific source. Ignored if the address can't be resolved to a character name.</summary>
-    public void SetActive(ulong ident)
+    public void SetActive(ulong ident) => EnqueueMutation(() =>
     {
-        stateLock.Wait();
-        try
-        {
-            if (!pairs.TryGetValue(ident, out var p)) return;
-            // Name is required to persist volumes to config.
-            if (p.DisplayName is not { } name) return;
-            pinnedName = name;
-            ScheduleReevaluate();
-        }
-        finally 
-        {
-            stateLock.Release();
-        }
-    }
+        if (!pairs.TryGetValue(ident, out var p)) return;
+        // Name is required to persist volumes to config.
+        if (p.DisplayName is not { } name) return;
+        pinnedName = name;
+    });
 
     /// <summary>Unpin makes us fall back to either autoplay or off (depending on what's configured).</summary>
-    public void Unpin()
-    {
-        stateLock.Wait();
-        try
-        {
-            pinnedName = null;
-            ScheduleReevaluate();
-        }
-        finally 
-        {
-            stateLock.Release();
-        }
-    }
+    public void Unpin() => EnqueueMutation(() => pinnedName = null);
 
-    public void SetAutoPlay(bool value)
-    {
-        stateLock.Wait();
-        try
-        {
-            if (AutoPlay == value) return;
-            AutoPlay = value;
-            ScheduleReevaluate();
-        } 
-        finally
-        {
-            stateLock.Release();
-        }
-    }
+    public void SetAutoPlay(bool value) => EnqueueMutation(() => autoPlay = value);
 
     public void SetBroadcasting(bool value)
     {
-        stateLock.Wait();
-        try
-        {
-            if (broadcasting == value) return;
-            broadcasting = value;
-            ScheduleReevaluate();
-            // Note: Reevaluate will stop playback automatically while broadcasting.
-        } 
-        finally
-        {
-            stateLock.Release();
-        }
+        if (broadcasting == value) return;
+        broadcasting = value;
+        ScheduleReevaluate();
+        // Note: Reevaluate will stop playback automatically while broadcasting.
     }
 
-    public void SetMasterVolume(float volume)
-    {
-        stateLock.Wait();
-        try
-        {
-            masterVolume = Math.Clamp(volume, 0f, 1f);
-            ScheduleReevaluate();
-        }
-        finally
-        {
-            stateLock.Release();
-        }
-    }
+    public void SetMasterVolume(float volume) => EnqueueMutation(() =>
+        masterVolume = Math.Clamp(volume, 0f, 1f));
 
-    public void SetMasterMuted(bool muted)
-    {
-        stateLock.Wait();
-        try
-        {
-            masterMuted = muted;
-            ScheduleReevaluate();
-        } 
-        finally
-        {
-            stateLock.Release();
-        }
-    }
+    public void SetMasterMuted(bool muted) => EnqueueMutation(() => masterMuted = muted);
 
-    public void SetPairVolume(ulong ident, float volume)
+    public void SetPairVolume(ulong ident, float volume) => EnqueueMutation(() =>
     {
-        stateLock.Wait();
-        try
-        {
-            if (!pairs.TryGetValue(ident, out var p)) return;
-            p.Volume = Math.Clamp(volume, 0f, 1f);
-            if (p.DisplayName is { } name) preferredVolumes[name] = p.Volume;
-            ScheduleReevaluate();
-        }
-        finally 
-        {
-            stateLock.Release();
-        }
-    }
+        if (!pairs.TryGetValue(ident, out var p)) return;
+        p.Volume = Math.Clamp(volume, 0f, 1f);
+        if (p.DisplayName is { } name) preferredVolumes[name] = p.Volume;
+    });
 
-    public void SetPairMuted(ulong ident, bool muted)
+    public void SetPairMuted(ulong ident, bool muted) => EnqueueMutation(() =>
     {
-        stateLock.Wait();
-        try
-        {
-            if (!pairs.TryGetValue(ident, out var p)) return;
-            p.Muted = muted;
-            ScheduleReevaluate();
-        }
-        finally 
-        {
-            stateLock.Release();
-        }
-    }
+        if (!pairs.TryGetValue(ident, out var p)) return;
+        p.Muted = muted;
+    });
 
     /// <summary>
     /// This publishes a "view" used for the ListeningTab of the UI.
@@ -343,7 +273,7 @@ public class ListeningManager : IAsyncDisposable
                 var state = await engine.GetStateAsync(token);
                 ActivePosition = state.Position;
                 ActiveNowPlaying = state.State == PlaybackState.Playing;
-                await Task.Delay(250, token);
+                await Task.Delay(updatePoll, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -357,45 +287,35 @@ public class ListeningManager : IAsyncDisposable
             {
                 Plugin.Log.Warning("Connection to audio host lost");
                 // back off
-                try { await Task.Delay(10_000, token); }
+                try { await Task.Delay(lostBackoff, token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             }
             catch (Exception ex)
             {
                 Plugin.Log.Error(ex, "Error in ListeningManager UpdateLoop");
                 // back off
-                try { await Task.Delay(1000, token); }
+                try { await Task.Delay(errorBackoff, token); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             }
         }
     }
 
-    private void OnPlaybackEnded(object? _, EndReason reason)
+    private void OnPlaybackEnded(object? _, EndReason reason) => EnqueueMutation(() =>
     {
-        stateLock.Wait();
-        try
-        {
-            if (UnsafeResolveActive() is not { } id) return;
-            var active = pairs[id];
+        if (UnsafePeekActive() is not { } id) return;
+        var active = pairs[id];
 
-            if (reason == EndReason.Failed)
-            {
-                active.FailCount++;
-                if (active.FailCount <= MaxLoadRetries)
-                    active.Current = null;
-            }
-            else
-            {
-                active.FailCount = 0;
-            }
-
-            ScheduleReevaluate();
-        }
-        finally 
+        if (reason == EndReason.Failed)
         {
-            stateLock.Release();
+            active.FailCount++;
+            if (active.FailCount <= MaxLoadRetries)
+                active.Current = null;
         }
-    }
+        else
+        {
+            active.FailCount = 0;
+        }
+    });
 
     private void ScheduleReevaluate()
     {
@@ -413,6 +333,7 @@ public class ListeningManager : IAsyncDisposable
                 await stateLock.WaitAsync(token);
                 try
                 {
+                    while (mutations.TryDequeue(out var mutate)) mutate();
                     await UnsafeReconcileActive();
                     UnsafePublishView();
                 }
@@ -463,21 +384,29 @@ public class ListeningManager : IAsyncDisposable
     /// </summary>
     private ulong? UnsafeResolveActive()
     {
+        if (pinnedName is not null || broadcasting) return UnsafePeekActive();
+        if (!AutoPlay)
+        {
+            // "Off" means silence: a lingering autoplay pick must not keep playing.
+            currentActiveId = null;
+            return null;
+        }
+        // If the current pick still exists, keep it
+        if (UnsafePeekActive() is { } current) return current;
+        currentActiveId = UnsafePickNextAutoplay();
+        return currentActiveId;
+    }
+
+    private ulong? UnsafePeekActive()
+    {
         if (pinnedName is { } name)
         {
             foreach (var (id, p) in pairs)
                 if (p.DisplayName == name) return id;
             return null;
         }
-        if (broadcasting) return null;
-        if (currentActiveId is not null) return currentActiveId;
-        if (AutoPlay)
-        {
-            currentActiveId = UnsafePickNextAutoplay();
-            return currentActiveId;
-        }
-
-        return null;
+        if (broadcasting || !AutoPlay) return null;
+        return currentActiveId is { } current && pairs.ContainsKey(current) ? current : null;
     }
 
     /// <summary>

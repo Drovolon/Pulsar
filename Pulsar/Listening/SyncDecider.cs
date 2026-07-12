@@ -46,12 +46,12 @@ internal static class SyncDecider
     /// Outro, because we will let a song finish playing if remainingTimeLeft lte MaxLag
     /// when the next song comes in.
     /// </summary>
-    private static readonly TimeSpan MaxLag = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan MaxLag = TimeSpan.FromSeconds(15); // internal for tests
     /// <summary>
     /// How far to target behind the DJ. This adds a little extra cushion onto MaxLag
     /// to allow the DJ to sync their song while we finish it up.
     /// </summary>
-    private static readonly TimeSpan TargetLag = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan TargetLag = TimeSpan.FromSeconds(5); // internal for tests
 
     internal static EngineAction Decide(
         PairData? current,

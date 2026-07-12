@@ -33,4 +33,8 @@
     <ItemGroup>
       <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj" />
     </ItemGroup>
+
+    <ItemGroup>
+      <InternalsVisibleTo Include="Pulsar.Tests" />
+    </ItemGroup>
 </Project>

@@ -7,29 +7,38 @@ using Pulsar.Playback;
 namespace Pulsar.Broadcast.Prepare;
 
 /// <summary>
-/// The prep dispatch seam, mirroring RemoteEngineLoad: regular files go to the transcode
-/// host by path, but .scd can only be parsed plugin-side (Lumina), so those ship as
-/// extracted Vorbis bytes.
+/// Dispatch, same as RemoteEngineLoad: if .scd, parse plugin-side (using Dalamud's instance of Lumina)
+/// and ship the raw bytes over the pipe to the transcode host. See RemoteEngineLoad / ScdReader.
 /// </summary>
 internal static class RemotePrepare
 {
-    public static Task<PreparedTrack> PrepareFileAsync(this IPrepareService prep, string path,
-                                                       string transcodeOutPath, CancellationToken ct)
+    extension(IPrepareService prep)
     {
-        if (ScdReader.IsScd(path))
-        {
-            try
-            {
-                return prep.PrepareBytesAsync(path, ScdReader.ExtractAudio(path), transcodeOutPath, ct);
-            }
-            catch (Exception ex)
-            {
-                // Fall through to the path prep: the host can't decode it either, but its
-                // failure keeps all prep errors flowing through the one PrepResult.Failed path.
-                Plugin.Log.Warning(ex, "SCD extraction failed for {path}; handing the path to the host anyway", path);
-            }
-        }
+        public Task<PreparedTrack> PrepareFileAsync(
+            string path,
+            string transcodeOutPath, CancellationToken ct)
+            =>
+                prep.PrepareFileAsync(path, transcodeOutPath, ScdReader.ExtractAudio, ct);
 
-        return prep.PrepareAsync(path, transcodeOutPath, ct);
+        internal Task<PreparedTrack> PrepareFileAsync(
+            string path,
+            string transcodeOutPath, Func<string, byte[]> extractAudio, CancellationToken ct)
+        {
+            if (ScdReader.IsScd(path))
+            {
+                try
+                {
+                    return prep.PrepareBytesAsync(path, extractAudio(path), transcodeOutPath, ct);
+                }
+                catch (Exception ex)
+                {
+                    // Fall through to the path prep: the host can't decode it either, but its
+                    // failure keeps all prep errors flowing through the one PrepResult.Failed path.
+                    Plugin.Log.Warning(ex, "SCD extraction failed for {path}; handing the path to the host anyway", path);
+                }
+            }
+
+            return prep.PrepareAsync(path, transcodeOutPath, ct);
+        }
     }
 }

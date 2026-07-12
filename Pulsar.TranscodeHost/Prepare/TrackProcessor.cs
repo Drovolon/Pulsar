@@ -119,7 +119,7 @@ public static class TrackProcessor
     // Additionally, because it's a per-channel formula, the target bitrate is per-channel as well,
     // taking the guidance of 160 Kbps, etc., as stereo numbers. 160 Kbps total for a 7.1 file would be
     // a tiny, tiny bitrate - unlistenable.
-    private static double OpusQualityForBitrate(int targetBpsPerChannel)
+    internal static double OpusQualityForBitrate(int targetBpsPerChannel)
     {
         return Math.Clamp((targetBpsPerChannel - 6000) / 250_000.0, 0.0, 1.0);
     }

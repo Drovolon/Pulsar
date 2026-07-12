@@ -24,7 +24,7 @@ public sealed record PulsarCursor
 /// ListeningManager. Broadcast-side functions (GetPlayerData, OnPlayerDataChanged) interact
 /// with BroadcastManager.
 /// </summary>
-internal sealed class IpcProvider(IDalamudPluginInterface pi, ListeningManager listening, BroadcastManager broadcast) : IDisposable
+internal sealed class IpcProvider : IDisposable
 {
     private const int MajorVersion = 0;
     private const int MinorVersion = 1;
@@ -32,24 +32,59 @@ internal sealed class IpcProvider(IDalamudPluginInterface pi, ListeningManager l
     private static readonly JsonSerializerOptions JsonOpts =
         new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
+    // swapped out for fakes during unit tests
+    internal sealed record Gates(
+        ICallGateProvider<object?> Ready,
+        ICallGateProvider<object?> Disposing,
+        ICallGateProvider<string, string[], string, object?> PlayerDataChanged,
+        ICallGateProvider<bool> IsEnabled,
+        ICallGateProvider<(int, int)> ApiVersion,
+        ICallGateProvider<(string, string[], string)?> GetPlayerData,
+        ICallGateProvider<ulong, string, string[], string, object?> SetPlayerData,
+        ICallGateProvider<ulong, object?> ClearPlayerData)
+    {
+        public static Gates From(IDalamudPluginInterface pi) => new(
+            pi.GetIpcProvider<object?>("Pulsar.OnReady"),
+            pi.GetIpcProvider<object?>("Pulsar.OnDisposing"),
+            pi.GetIpcProvider<string, string[], string, object?>("Pulsar.OnPlayerDataChanged"),
+            pi.GetIpcProvider<bool>("Pulsar.IsEnabled"),
+            pi.GetIpcProvider<(int, int)>("Pulsar.ApiVersion"),
+            pi.GetIpcProvider<(string, string[], string)?>("Pulsar.GetPlayerData"),
+            pi.GetIpcProvider<ulong, string, string[], string, object?>("Pulsar.SetPlayerData"),
+            pi.GetIpcProvider<ulong, object?>("Pulsar.ClearPlayerData"));
+    }
+
     public bool Enabled { get; private set; }
 
-    private readonly ICallGateProvider<object?> ready = pi.GetIpcProvider<object?>("Pulsar.OnReady");
-    private readonly ICallGateProvider<object?> disposing = pi.GetIpcProvider<object?>("Pulsar.OnDisposing");
+    private readonly ListeningManager listening;
+    private readonly BroadcastManager broadcast;
 
-    private readonly ICallGateProvider<string, string[], string, object?> playerDataChanged =
-        pi.GetIpcProvider<string, string[], string, object?>("Pulsar.OnPlayerDataChanged");
+    private readonly ICallGateProvider<object?> ready;
+    private readonly ICallGateProvider<object?> disposing;
+    private readonly ICallGateProvider<string, string[], string, object?> playerDataChanged;
+    private readonly ICallGateProvider<bool> isEnabled;
+    private readonly ICallGateProvider<(int, int)> apiVersion;
+    private readonly ICallGateProvider<(string, string[], string)?> getPlayerData;
+    private readonly ICallGateProvider<ulong, string, string[], string, object?> setPlayerData;
+    private readonly ICallGateProvider<ulong, object?> clearPlayerData;
 
-    private readonly ICallGateProvider<bool> isEnabled = pi.GetIpcProvider<bool>("Pulsar.IsEnabled");
-    private readonly ICallGateProvider<(int, int)> apiVersion = pi.GetIpcProvider<(int, int)>("Pulsar.ApiVersion");
+    public IpcProvider(IDalamudPluginInterface pi, ListeningManager listening, BroadcastManager broadcast)
+        : this(Gates.From(pi), listening, broadcast) { }
 
-    private readonly ICallGateProvider<(string, string[], string)?> getPlayerData =
-        pi.GetIpcProvider<(string, string[], string)?>("Pulsar.GetPlayerData");
-
-    private readonly ICallGateProvider<ulong, string, string[], string, object?> setPlayerData =
-        pi.GetIpcProvider<ulong, string, string[], string, object?>("Pulsar.SetPlayerData");
-    private readonly ICallGateProvider<ulong, object?> clearPlayerData =
-        pi.GetIpcProvider<ulong, object?>("Pulsar.ClearPlayerData");
+    // for unit tests only
+    internal IpcProvider(Gates gates, ListeningManager listening, BroadcastManager broadcast)
+    {
+        this.listening = listening;
+        this.broadcast = broadcast;
+        ready = gates.Ready;
+        disposing = gates.Disposing;
+        playerDataChanged = gates.PlayerDataChanged;
+        isEnabled = gates.IsEnabled;
+        apiVersion = gates.ApiVersion;
+        getPlayerData = gates.GetPlayerData;
+        setPlayerData = gates.SetPlayerData;
+        clearPlayerData = gates.ClearPlayerData;
+    }
 
     public void Prepare()
     {
