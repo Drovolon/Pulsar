@@ -82,6 +82,31 @@ public class FilePlayerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_trigger_happy_transport_burst_converges_on_the_last_load()
+    {
+        var first = CreateWav(name: "first.wav");
+        var second = CreateWav(name: "second.wav");
+        var devices = new List<FakeWavePlayer>();
+        var player = new FilePlayer(() => { var d = new FakeWavePlayer(); devices.Add(d); return d; });
+
+        player.Load(first, TimeSpan.Zero, playing: true);
+        player.Pause();
+        player.Resume();
+        player.Pause();
+        player.Seek(TimeSpan.FromMilliseconds(500));
+        player.Stop();
+        player.Load(second, TimeSpan.Zero, playing: true);
+
+        await TestWait.Assert(
+            () => player is { State: PlaybackState.Playing, Path: var path } && path == second,
+            "the final track is playing");
+        Assert.Equal(2, devices.Count);
+        Assert.Equal(PlaybackState.Stopped, devices[0].PlaybackState);
+        Assert.Equal(PlaybackState.Playing, devices[1].PlaybackState);
+        await player.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Natural_end_fires_playback_ended_but_not_changed()
     {
         // "Stop" vs "track ended" is load-bearing: DirectoryPlayer auto-advances on

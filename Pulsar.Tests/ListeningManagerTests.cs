@@ -340,6 +340,33 @@ public class ListeningManagerTests : IAsyncLifetime
         Assert.Equal(0.3f, engine.LastVolume, 3);
     }
 
+    [Fact]
+    public async Task Repeated_engine_crashes_reload_and_reapply_volume_every_time()
+    {
+        var lm = Create(masterVolume: 0.3f);
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "initial track loads");
+        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.3f) < 0.001f, "initial volume lands");
+
+        for (var cycle = 1; cycle <= 3; cycle++)
+        {
+            var loads = LoadCount;
+            var volumeSends = engine.Ops.Count(o => o == "SetVolume");
+
+            engine.FailTrack();
+            lm.OnEngineReconnected();
+
+            await TestWait.Assert(
+                () => LoadCount > loads
+                      && engine.Snapshot is { Path: AliceTrack, State: NAudio.Wave.PlaybackState.Playing },
+                $"track reload #{cycle}");
+            await TestWait.Assert(
+                () => engine.Ops.Count(o => o == "SetVolume") > volumeSends,
+                $"volume resend #{cycle}");
+            Assert.Equal(0.3f, engine.LastVolume, 3);
+        }
+    }
+
     // ---- update loop (UI position surface) --------------------------------------
 
     [Fact]

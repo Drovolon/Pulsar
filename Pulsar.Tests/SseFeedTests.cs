@@ -99,6 +99,31 @@ public class SseFeedTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Repeated_stream_drops_reconnect_and_catch_up_every_time()
+    {
+        server.SetPlaying("/music/a.flac");
+        Start();
+        await TestWait.Assert(() => probe.Seen.Length >= 1, "initial SSE frame");
+
+        string[] paths = ["/music/b.flac", "/music/c.flac", "/music/d.flac"];
+        for (var cycle = 0; cycle < paths.Length; cycle++)
+        {
+            server.DropSseStreams(cycle % 2 == 0 ? null : new HttpRequestException("connection reset"));
+            await TestWait.Assert(() => !feed.Connected, $"drop #{cycle + 1} reported");
+
+            server.SetPlaying(paths[cycle]);
+            await TestWait.Assert(
+                () => feed.Connected && probe.Seen is [.., { RawPath: var path }] && path == paths[cycle],
+                $"reconnect #{cycle + 1} catches up");
+            Assert.Equal(cycle + 2, server.SseSessionsOpened);
+        }
+
+        Assert.Equal(
+            [true, false, true, false, true, false, true],
+            probe.Connectivity);
+    }
+
+    [Fact]
     public async Task Cancellation_ends_the_stream_without_reconnecting()
     {
         server.SetPlaying("/music/a.flac");

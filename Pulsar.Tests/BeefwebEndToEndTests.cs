@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Pulsar.Broadcast.Beefweb;
@@ -59,5 +60,62 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         server.PushUpdate();
         await TestWait.Assert(() => watcher.Current is null, "stop clears the snapshot");
         Assert.True(watcher.Status.Connected, "stopped but still connected");
+    }
+
+    [Fact]
+    public async Task A_trigger_happy_dj_session_preserves_every_meaningful_transition()
+    {
+        var trackA = TestData.CreateTrack(dir, "a.flac");
+        var trackB = TestData.CreateTrack(dir, "b.flac");
+        server.SetStopped();
+        var client = server.CreateClient();
+        watcher = new Watcher(new SseFeed(client), client, isWine: false);
+        await TestWait.Assert(() => watcher.Status.Connected, "the initial stopped frame arrives");
+
+        var seen = new List<(string? Path, bool? Playing)>();
+        watcher.SnapshotChanged += snapshot =>
+        {
+            lock (seen) seen.Add((snapshot?.FilePath, snapshot?.IsPlaying));
+        };
+
+        // No waits between pushes: all of these frames coexist in the SSE/Watcher pipeline.
+        server.SetPlaying(trackA);
+        server.PushUpdate();
+        server.SetPaused();
+        server.PushUpdate();
+        server.SetPlaying(trackA);
+        server.PushUpdate();
+        server.SetPaused();
+        server.PushUpdate();
+        server.SetPlaying(trackB, positionSeconds: 0);
+        server.PushUpdate();
+        server.SetPlaying(trackA, positionSeconds: 0);
+        server.PushUpdate();
+        server.SetStopped();
+        server.PushUpdate();
+        server.SetPlaying(trackA, positionSeconds: 0);
+        server.PushUpdate();
+
+        await TestWait.Assert(() =>
+        {
+            lock (seen) return seen.Count >= 8;
+        }, "all eight cursor transitions flow through");
+
+        (string? Path, bool? Playing)[] actual;
+        lock (seen) actual = [.. seen];
+        Assert.Equal(
+            [
+                (trackA, true),
+                (trackA, false),
+                (trackA, true),
+                (trackA, false),
+                (trackB, true),
+                (trackA, true),
+                (null, null),
+                (trackA, true),
+            ],
+            actual);
+        Assert.Equal(trackA, watcher.Current?.FilePath);
+        Assert.True(watcher.Current?.IsPlaying);
     }
 }

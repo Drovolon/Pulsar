@@ -259,6 +259,35 @@ public class DirectoryPlayerTests : IDisposable
         await player.DisposeAsync();
     }
 
+    [Fact]
+    public async Task Next_then_immediate_previous_returns_to_the_original_track_while_load_is_in_flight()
+    {
+        CreateTracks("01.mp3", "02.mp3");
+        var player = await CreatePlayer();
+        player.Play();
+        await WaitForLoads(1);
+
+        // Make the old position deliberately "late": without clearing it when Next is
+        // selected, Prev would interpret this as a request to replay 02 instead of go
+        // back to 01.
+        player.Seek(TimeSpan.FromSeconds(10));
+        await TestWait.Assert(() => player.Position?.Current == TimeSpan.FromSeconds(10), "seek lands");
+
+        var releaseLoads = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.Stall = op => op == "Load" ? releaseLoads.Task : null;
+        player.Next();
+        await WaitForLoads(2);
+
+        player.Prev();
+        releaseLoads.TrySetResult();
+
+        await WaitForLoads(3);
+        await TestWait.Assert(() => engine.Snapshot.Path == player.Tracks[0], "previous returns to 01");
+        Assert.Equal(["01.mp3", "02.mp3", "01.mp3"], LoadedFiles);
+        Assert.Equal(0, player.Index);
+        await player.DisposeAsync();
+    }
+
     // ---- scanning ------------------------------------------------------------------
 
     [Fact]

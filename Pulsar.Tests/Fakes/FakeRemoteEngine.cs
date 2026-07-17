@@ -79,16 +79,16 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         if (Intercept?.Invoke(op) is { } ex) throw ex;
     }
 
-    public Task LoadAsync(string loadPath, TimeSpan pos, bool startPlaying, CancellationToken ct)
+    public async Task LoadAsync(string loadPath, TimeSpan pos, bool startPlaying, CancellationToken ct)
     {
         Enter("Load", (loadPath, pos, startPlaying));
+        if (Stall?.Invoke("Load") is { } hang) await hang;
         if (DeferLoads)
         {
             lock (@lock) deferredLoad = new DeferredLoad(loadPath, pos, startPlaying);
-            return Task.CompletedTask;
+            return;
         }
         CommitLoad(loadPath, pos, startPlaying);
-        return Task.CompletedTask;
     }
 
     public void CompleteDeferredLoad()

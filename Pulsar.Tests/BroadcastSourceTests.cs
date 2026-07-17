@@ -128,6 +128,53 @@ public class BroadcastSourceTests : IAsyncLifetime
         Assert.DoesNotContain(next, service.PrepareCalls); // unknown duration: no tick may fire
     }
 
+    [Fact]
+    public async Task Pausing_cancels_an_armed_timer_and_resuming_arms_a_fresh_one()
+    {
+        config = new Configuration { PrefetchLeadMs = 700, PrefetchFinalMs = 100 };
+        var current = Track("current.flac");
+        var staleNext = Track("stale-next.flac");
+        var liveNext = Track("live-next.flac");
+        var source = new FakeMusicSource { Current = TimedSnap(current, durationMs: 1000) };
+        await broadcast.SetSource(source);
+
+        // This observation cancels the playing timer. The next path is installed only
+        // after the event, so the paused observation itself cannot prefetch it.
+        source.Current = TimedSnap(current, durationMs: 1000, playing: false);
+        source.RaiseChanged();
+        source.Current = TimedSnap(current, durationMs: 1000, next: staleNext, playing: false);
+        await Task.Delay(400); // past the original ~300ms lead checkpoint
+        Assert.DoesNotContain(staleNext, service.PrepareCalls);
+
+        source.Current = TimedSnap(current, durationMs: 1000, playing: true);
+        source.RaiseChanged();
+        source.Current = TimedSnap(current, durationMs: 1000, next: liveNext, playing: true);
+
+        Assert.True(await service.WaitForPrepare(liveNext), "resume arms a fresh checkpoint");
+        Assert.DoesNotContain(staleNext, service.PrepareCalls);
+    }
+
+    [Fact]
+    public async Task Switching_sources_cancels_the_old_sources_armed_timer()
+    {
+        config = new Configuration { PrefetchLeadMs = 700, PrefetchFinalMs = 100 };
+        var oldCurrent = Track("old-current.flac");
+        var oldNext = Track("old-next.flac");
+        var newCurrent = Track("new-current.flac");
+        var newNext = Track("new-next.flac");
+
+        var oldSource = new FakeMusicSource { Current = TimedSnap(oldCurrent, durationMs: 1000) };
+        await broadcast.SetSource(oldSource);
+
+        var newSource = new FakeMusicSource { Current = TimedSnap(newCurrent, durationMs: 1000) };
+        await broadcast.SetSource(newSource); // ClearAsync fences off the old timer
+        oldSource.Current = TimedSnap(oldCurrent, durationMs: 1000, next: oldNext);
+        newSource.Current = TimedSnap(newCurrent, durationMs: 1000, next: newNext);
+
+        Assert.True(await service.WaitForPrepare(newNext), "the new source owns the checkpoint");
+        Assert.DoesNotContain(oldNext, service.PrepareCalls);
+    }
+
     // ---- overlapping switches ---------------------------------------------------
 
     [Fact]

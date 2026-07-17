@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Beefweb.Client;
 using Dalamud.Game.Text.SeStringHandling;
@@ -26,6 +27,8 @@ public sealed record UnsyncableSource(string Track, UnsyncableReason Reason);
 /// </summary>
 public sealed class Watcher : IMusicSource
 {
+    private enum PlayerCommand { TogglePlay, Stop, Next, Previous }
+
     private static readonly TimeSpan DefaultGiveUpDelay = TimeSpan.FromSeconds(10);
 
     private readonly IFeed feed;
@@ -37,6 +40,9 @@ public sealed class Watcher : IMusicSource
     private readonly CancellationTokenSource cts = new();
     private readonly Timer giveUpTimer;
     private readonly Task pump;
+    private readonly Channel<PlayerCommand> commands = Channel.CreateUnbounded<PlayerCommand>(
+        new UnboundedChannelOptions { SingleReader = true });
+    private readonly Task commandPump;
 
     private Observation? currentObs;
     private SyncVerdict currentVerdict;
@@ -57,6 +63,7 @@ public sealed class Watcher : IMusicSource
         giveUpTimer = new Timer(_ => OnGiveUp(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         feed.OnConnectedChanged += OnConnectedChanged;
         pump = Task.Run(PumpAsync);
+        commandPump = Task.Run(CommandLoopAsync);
     }
 
     public static Watcher Create(int port, string? user, string? pass, bool useSse)
@@ -68,14 +75,34 @@ public sealed class Watcher : IMusicSource
         return new Watcher(feed, client, Dalamud.Utility.Util.IsWine());
     }
 
-    public void TogglePlay()   => Fire(client.PlayOrPause());
-    public void StopPlayback() => Fire(client.Stop());
-    public void Next()         => Fire(client.PlayNext());
-    public void Previous()     => Fire(client.PlayPrevious());
+    public void TogglePlay()   => commands.Writer.TryWrite(PlayerCommand.TogglePlay);
+    public void StopPlayback() => commands.Writer.TryWrite(PlayerCommand.Stop);
+    public void Next()         => commands.Writer.TryWrite(PlayerCommand.Next);
+    public void Previous()     => commands.Writer.TryWrite(PlayerCommand.Previous);
 
-    private static void Fire(ValueTask t) => _ = t.AsTask().ContinueWith(
-        x => Plugin.Log.Verbose($"beefweb command failed: {x.Exception?.Message}"),
-        TaskContinuationOptions.OnlyOnFaulted);
+    private async Task CommandLoopAsync()
+    {
+        try
+        {
+            await foreach (var command in commands.Reader.ReadAllAsync(cts.Token))
+            {
+                try
+                {
+                    await (command switch
+                    {
+                        PlayerCommand.TogglePlay => client.PlayOrPause(cts.Token),
+                        PlayerCommand.Stop => client.Stop(cts.Token),
+                        PlayerCommand.Next => client.PlayNext(cts.Token),
+                        PlayerCommand.Previous => client.PlayPrevious(cts.Token),
+                        _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+                    });
+                }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { break; }
+                catch (Exception e) { Plugin.Log.Verbose($"beefweb command failed: {e.Message}"); }
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+    }
 
     public event Action<SourceSnapshot?>? SnapshotChanged;
 
@@ -332,9 +359,11 @@ public sealed class Watcher : IMusicSource
     public async ValueTask DisposeAsync()
     {
         feed.OnConnectedChanged -= OnConnectedChanged;
+        commands.Writer.TryComplete();
         cts.Cancel();
         await giveUpTimer.DisposeAsync();
         try { await pump; } catch { /* cancellation */ }
+        await commandPump;
         await feed.DisposeAsync();
         client.Dispose();
         cts.Dispose();

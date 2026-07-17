@@ -127,6 +127,33 @@ public class HostConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Repeated_host_deaths_each_respawn_a_fresh_working_process()
+    {
+        var connected = 0;
+        var disconnects = 0;
+        var conn = Create(Spec());
+        conn.OnConnected += () => Interlocked.Increment(ref connected);
+        conn.OnDisconnected += () => Interlocked.Increment(ref disconnects);
+        conn.Start();
+
+        var seenPids = new HashSet<int> { await WaitConnected(conn) };
+        for (var cycle = 1; cycle <= 3; cycle++)
+        {
+            await TestWait.Within(conn.Proxy!.ExitAsync(CancellationToken.None), $"exit request #{cycle}");
+            await TestWait.Assert(() => disconnects == cycle, $"death #{cycle} observed exactly once");
+
+            var nextPid = await WaitConnected(conn);
+            Assert.True(seenPids.Add(nextPid), $"cycle #{cycle} spawned a fresh PID");
+            Assert.Equal($"cycle-{cycle}", await TestWait.Within(
+                conn.Proxy!.EchoAsync($"cycle-{cycle}", CancellationToken.None),
+                $"echo after reconnect #{cycle}"));
+        }
+
+        await TestWait.Assert(() => connected == 4, "all four connection events fired");
+        Assert.Equal(3, disconnects);
+    }
+
+    [Fact]
     public async Task A_missing_executable_stays_disconnected_and_disposes_cleanly()
     {
         var conn = connection = new HostConnection<IStubHost>(

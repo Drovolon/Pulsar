@@ -397,7 +397,10 @@ public sealed class DirectoryPlayer : IAsyncDisposable
         {
             playing = true;
             consecutiveFailures = 0;
-            if (Position?.Current.TotalSeconds <= 5)
+            // A just-enqueued track change has no position yet. Treat it as being at
+            // the start so a quick Next -> Prev returns to the track the user came from
+            // instead of consulting the previous track's stale position.
+            if (Position is null || Position.Current.TotalSeconds <= 5)
             {
                 Index--;
                 if (Index < 0) Index++;
@@ -409,6 +412,7 @@ public sealed class DirectoryPlayer : IAsyncDisposable
     private void UnsafePlay()
     {
         if (playlist is null or { Length: 0 }) return;
+        Position = null;
         eqm.Load(playlist[Index], TimeSpan.Zero, true);
     }
 

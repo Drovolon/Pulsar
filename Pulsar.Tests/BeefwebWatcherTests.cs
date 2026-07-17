@@ -291,6 +291,34 @@ public class BeefwebWatcherTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Repeated_brief_disconnects_cancel_their_deadlines_and_a_later_long_outage_still_gives_up()
+    {
+        var giveUp = TimeSpan.FromMilliseconds(300);
+        var w = Create(giveUpDelay: giveUp);
+        var track = CreateTrack("song.flac");
+        feed.Push(Obs(track));
+        await AwaitWake(1, "initial track change");
+        var seen = Changes;
+
+        for (var cycle = 1; cycle <= 2; cycle++)
+        {
+            feed.SetConnected(false);
+            await Task.Delay(30);
+            feed.SetConnected(true);
+            await Task.Delay(giveUp + TimeSpan.FromMilliseconds(100));
+
+            Assert.NotNull(w.Current);
+            Assert.True(w.Status.Connected);
+            Assert.Equal(seen, Changes);
+        }
+
+        feed.SetConnected(false);
+        await TestWait.Assert(() => w.Current is null, "the later sustained outage gives up");
+        Assert.False(w.Status.Connected);
+        Assert.True(Changes > seen);
+    }
+
+    [Fact]
     public async Task Player_commands_hit_the_right_endpoints()
     {
         var w = Create();
@@ -301,10 +329,39 @@ public class BeefwebWatcherTests : IAsyncLifetime
         w.StopPlayback();
 
         await TestWait.Assert(() => server.Posts.Length == 4, "all four commands sent");
-        // Fire-and-forget commands may interleave; the set is what matters.
         Assert.Equal(
-            ["/api/player/next", "/api/player/play-pause", "/api/player/previous", "/api/player/stop"],
-            server.Posts.OrderBy(p => p));
+            ["/api/player/play-pause", "/api/player/next", "/api/player/previous", "/api/player/stop"],
+            server.Posts);
+    }
+
+    [Fact]
+    public async Task Trigger_happy_commands_wait_their_turn_and_reach_beefweb_in_click_order()
+    {
+        var w = Create();
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.StallPost = route => route == "/api/player/play-pause" ? releaseFirst.Task : null;
+
+        w.TogglePlay();
+        await TestWait.Assert(() => server.Posts.Length == 1, "the first command reaches beefweb");
+        w.Next();
+        w.Previous();
+        w.TogglePlay();
+        w.StopPlayback();
+
+        await Task.Delay(150);
+        Assert.Equal(["/api/player/play-pause"], server.Posts); // the stalled response fences later sends
+
+        releaseFirst.TrySetResult();
+        await TestWait.Assert(() => server.Posts.Length == 5, "the queued commands drain");
+        Assert.Equal(
+            [
+                "/api/player/play-pause",
+                "/api/player/next",
+                "/api/player/previous",
+                "/api/player/play-pause",
+                "/api/player/stop",
+            ],
+            server.Posts);
     }
 
     [Fact]
@@ -314,6 +371,7 @@ public class BeefwebWatcherTests : IAsyncLifetime
         server.Down = true;
 
         w.Next(); // must not throw, must not kill the pump
+        await TestWait.Assert(() => server.RequestsReceived >= 1, "the failing command was attempted");
 
         server.Down = false;
         var track = CreateTrack("song.flac");

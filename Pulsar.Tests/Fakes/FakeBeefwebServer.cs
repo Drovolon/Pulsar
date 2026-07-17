@@ -38,15 +38,22 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
     private readonly List<string> playQueue = [];
 
     private int sessionsOpened;
+    private int requestsReceived;
 
     /// <summary>When true, every request fails like a dead/unreachable server.</summary>
     public volatile bool Down;
+
+    /// <summary>Optional response gate for a POST route, used to prove callers serialize commands.</summary>
+    public Func<string, Task?>? StallPost { get; set; }
 
     /// <summary>POST paths received, in arrival order (e.g. "/api/player/stop").</summary>
     public string[] Posts { get { lock (@lock) return [.. posts]; } }
 
     /// <summary>Total SSE subscriptions ever opened; grows by one per (re)connect.</summary>
     public int SseSessionsOpened => Volatile.Read(ref sessionsOpened);
+
+    /// <summary>Total HTTP requests attempted, including requests rejected while Down.</summary>
+    public int RequestsReceived => Volatile.Read(ref requestsReceived);
 
     /// <summary>A real PlayerClient wired to this server.</summary>
     public PlayerClient CreateClient()
@@ -136,18 +143,20 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
         foreach (var s in targets) s.Complete(error);
     }
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
+        Interlocked.Increment(ref requestsReceived);
         if (Down) throw new HttpRequestException("fake beefweb is down");
 
         var route = request.RequestUri!.AbsolutePath;
         if (request.Method == HttpMethod.Post)
         {
             lock (@lock) posts.Add(route);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
+            if (StallPost?.Invoke(route) is { } hang) await hang.WaitAsync(ct);
+            return new HttpResponseMessage(HttpStatusCode.NoContent);
         }
 
-        return Task.FromResult(route switch
+        return route switch
         {
             "/api/player" => Json(new { player = PlayerJson() }),
             "/api/playqueue" => Json(new { playQueue = QueueJson() }),
@@ -155,7 +164,7 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
             _ when route.StartsWith("/api/playlists/") && route.Contains("/items/")
                 => Json(new { playlistItems = PlaylistItemsJson(route) }),
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
-        });
+        };
     }
 
     private object PlayerJson()

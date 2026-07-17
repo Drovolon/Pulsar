@@ -105,6 +105,31 @@ public class PollingFeedTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Repeated_polling_outages_recover_to_the_latest_state_every_time()
+    {
+        server.SetPlaying("/music/a.flac");
+        Start();
+        await TestWait.Assert(() => probe.Seen.Length >= 1, "feed is up");
+
+        string[] paths = ["/music/b.flac", "/music/c.flac", "/music/d.flac"];
+        for (var cycle = 0; cycle < paths.Length; cycle++)
+        {
+            server.Down = true;
+            await TestWait.Assert(() => !feed.Connected, $"outage #{cycle + 1} reported");
+
+            server.SetPlaying(paths[cycle]);
+            server.Down = false;
+            await TestWait.Assert(
+                () => feed.Connected && probe.Seen is [.., { RawPath: var path }] && path == paths[cycle],
+                $"recovery #{cycle + 1} catches up");
+        }
+
+        Assert.Equal(
+            [true, false, true, false, true, false, true],
+            probe.Connectivity);
+    }
+
+    [Fact]
     public async Task Cancellation_ends_the_stream()
     {
         server.SetPlaying("/music/a.flac");

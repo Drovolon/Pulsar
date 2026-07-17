@@ -88,6 +88,37 @@ public class EngineQueueManagerTests
     }
 
     [Fact]
+    public async Task A_trigger_happy_transport_burst_is_dispatched_in_order_and_converges()
+    {
+        var engine = new FakeRemoteEngine();
+        using var cts = new CancellationTokenSource();
+        var eqm = new EngineQueueManager(engine, cts.Token);
+        var releaseLoad = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.Stall = op => op == "Load" ? releaseLoad.Task : null;
+
+        eqm.Load(@"C:\music\a.mp3", TimeSpan.Zero, startPlaying: true);
+        await TestWait.Assert(() => engine.Ops.Count != 0, "the first load parks in the engine");
+
+        eqm.Pause();
+        eqm.Resume();
+        eqm.Pause();
+        eqm.Seek(TimeSpan.FromSeconds(12));
+        eqm.Stop();
+        eqm.Load(@"C:\music\b.mp3", TimeSpan.Zero, startPlaying: true);
+        releaseLoad.TrySetResult();
+
+        await TestWait.Assert(
+            () => engine.Snapshot is { State: NAudio.Wave.PlaybackState.Playing, Path: @"C:\music\b.mp3" },
+            "the final load wins");
+        Assert.Equal(
+            ["Load", "Pause", "Resume", "Pause", "Seek", "Stop", "Load"],
+            engine.Ops.Take(7));
+
+        cts.Cancel();
+        await eqm.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Reapply_volume_only_resends_a_real_value()
     {
         var engine = new FakeRemoteEngine();

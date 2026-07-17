@@ -110,6 +110,39 @@ public class BroadcastFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_superseded_track_prepare_cannot_publish_after_the_dj_moves_again()
+    {
+        var mgr = Create();
+        var first = CreateTrack("a.flac");
+        var source = await StartBroadcasting(mgr, first);
+        var seen = Events.Length;
+
+        var skipped = CreateTrack("b.flac");
+        var skippedGate = service.GateFor(skipped);
+        source.Current = Snap(skipped);
+        source.RaiseChanged();
+        Assert.True(await service.WaitForPrepare(skipped), "the skipped track starts preparing");
+
+        // The DJ changes their mind before B is ready. A is cache-served, so it can
+        // be announced immediately while B's canceled completion is still in flight.
+        source.Current = Snap(first);
+        source.RaiseChanged();
+        await TestWait.Assert(
+            () => Events.Length > seen
+                  && Events[^1] is { } e
+                  && e.Item3.Meta!.OriginalFileName == "a.flac",
+            "the return to A is published");
+
+        skippedGate.Open();
+        await Task.Delay(200); // let any stale PrepCompleted message reach the mailbox
+
+        Assert.All(
+            Events.Skip(seen),
+            e => Assert.NotEqual("b.flac", e?.Item3.Meta?.OriginalFileName));
+        Assert.Equal("a.flac", Events[^1]!.Value.Item3.Meta!.OriginalFileName);
+    }
+
+    [Fact]
     public async Task Prep_failure_announces_a_stop()
     {
         var mgr = Create();

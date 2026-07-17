@@ -167,6 +167,35 @@ public class LoopbackFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Skipping_to_a_slow_track_then_back_never_leaks_the_skipped_track_to_the_listener()
+    {
+        var first = CreateTrack("first.flac");
+        var source = await StartLoopbackSession(first);
+        await TestWait.Assert(() => listenEngine.Snapshot.State == PlaybackState.Playing, "first track playing");
+        var firstSynced = LatestSyncedFile;
+
+        var skipped = CreateTrack("skipped.flac");
+        var skippedGate = service.GateFor(skipped);
+        source.Current = Snap(skipped);
+        source.RaiseChanged();
+        Assert.True(await service.WaitForPrepare(skipped), "skipped track starts preparing");
+        Assert.Equal(firstSynced, listenEngine.Snapshot.Path);
+
+        source.Current = Snap(first);
+        source.RaiseChanged();
+        await TestWait.Assert(
+            () => LatestManifestName == "first.flac"
+                  && listenEngine.Snapshot.Path == firstSynced
+                  && listenEngine.Snapshot.State == PlaybackState.Playing,
+            "returning to the prepared first track converges");
+
+        skippedGate.Open();
+        await Task.Delay(200); // a late completion must not disturb the converged state
+        Assert.Equal("first.flac", LatestManifestName);
+        Assert.Equal(firstSynced, listenEngine.Snapshot.Path);
+    }
+
+    [Fact]
     public async Task Switching_sources_stops_the_loopback_then_the_new_source_plays()
     {
         // The real-world case: switching from the mod player to beefweb.
