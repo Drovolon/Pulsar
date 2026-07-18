@@ -20,7 +20,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     private sealed record Cleared(TaskCompletionSource Completion) : Message;
 
     private readonly SyncPrep prep;
-    private readonly Func<Configuration> config;
+    private readonly Configuration config;
     private readonly SerializedMailbox<Message> mailbox;
 
     private IMusicSource? source;
@@ -30,7 +30,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     private Task? delayTask;
     private readonly List<Task> retiredDelayTasks = [];
 
-    internal PrefetchScheduler(SyncPrep prep, Func<Configuration> config)
+    internal PrefetchScheduler(SyncPrep prep, Configuration config)
     {
         this.prep = prep;
         this.config = config;
@@ -102,7 +102,6 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
             return;
         }
 
-        var cfg = config();
         var durationMs = snapshot.Meta.DurationMs;
         if (durationMs <= 0)
         {
@@ -111,7 +110,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         }
 
         var remainingMs = durationMs - (long)snapshot.Position.TotalMilliseconds;
-        var untilLead = remainingMs - cfg.PrefetchLeadMs;
+        var untilLead = remainingMs - config.PrefetchLeadMs;
         if (untilLead > 0)
         {
             Plugin.Log.Debug($"prefetch timer: lead tick in {untilLead / 1000}s "
@@ -122,9 +121,9 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         {
             finalPending = true;
             Plugin.Log.Debug($"prefetch timer: final tick in "
-                             + $"{Math.Max(0, remainingMs - cfg.PrefetchFinalMs) / 1000}s "
-                             + $"(remaining {remainingMs / 1000}s, inside {cfg.PrefetchLeadMs / 1000}s lead)");
-            ScheduleFinal(remainingMs, cfg);
+                             + $"{Math.Max(0, remainingMs - config.PrefetchFinalMs) / 1000}s "
+                             + $"(remaining {remainingMs / 1000}s, inside {config.PrefetchLeadMs / 1000}s lead)");
+            ScheduleFinal(remainingMs, config);
         }
     }
 
@@ -139,7 +138,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         {
             finalPending = true;
             var remainingMs = live.Meta.DurationMs - (long)live.Position.TotalMilliseconds;
-            ScheduleFinal(remainingMs, config());
+            ScheduleFinal(remainingMs, config);
         }
     }
 

@@ -31,8 +31,9 @@ public class IpcProviderTests : IAsyncLifetime
     public IpcProviderTests()
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, () => new Configuration());
-        listening = new ListeningManager(listenEngine);
+        var config = TestData.QuietConfiguration();
+        broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, config);
+        listening = new ListeningManager(listenEngine, config);
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
         debugLoopback = new DebugLoopbackController(ipc);

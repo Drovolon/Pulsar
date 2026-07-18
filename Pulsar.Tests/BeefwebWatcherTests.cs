@@ -18,6 +18,7 @@ namespace Pulsar.Tests;
 /// server. Only syncable, actually-playing sources produce snapshots, and SnapshotChanged
 /// fires only for real cursor events.
 /// </summary>
+[Collection(ChatNotificationCollection.Name)]
 public class BeefwebWatcherTests : IAsyncLifetime
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-watcher-test-");
@@ -36,10 +37,11 @@ public class BeefwebWatcherTests : IAsyncLifetime
         dir.Delete(recursive: true);
     }
 
-    private Watcher Create(TimeSpan? giveUpDelay = null)
+    private Watcher Create(TimeSpan? giveUpDelay = null, Configuration? config = null)
     {
         // The watcher takes ownership of the client (disposes it); the server outlives it.
-        watcher = new Watcher(feed, server.CreateClient(), isWine: false, giveUpDelay);
+        watcher = new Watcher(feed, server.CreateClient(), isWine: false,
+            config ?? new Configuration(), giveUpDelay);
         watcher.OnSnapshotChanged += _ => Interlocked.Increment(ref changes);
         return watcher;
     }
@@ -157,6 +159,25 @@ public class BeefwebWatcherTests : IAsyncLifetime
         // ...but a fresh transition into unsyncable territory warns again.
         feed.Push(Obs("https://radio.example/other", title: "JazzFM"));
         await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 2, "second warning");
+    }
+
+    [Fact]
+    public async Task Unsyncable_warning_observes_live_configuration()
+    {
+        var config = new Configuration { NotifyUnsyncableBroadcast = false };
+        var w = Create(config: config);
+        feed.Push(Obs("https://radio.example/stream", title: "ChillFM"));
+        await TestWait.Assert(() => w.Status.Unsyncable is not null, "unsyncable status");
+        Assert.Empty(TestBootstrap.Chat.Messages);
+
+        var track = CreateTrack("song.flac");
+        feed.Push(Obs(track));
+        await TestWait.Assert(() => w.Current is not null, "syncable transition resets the warning edge");
+
+        config.NotifyUnsyncableBroadcast = true;
+        feed.Push(Obs("https://radio.example/other", title: "JazzFM"));
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
+            "enabled setting is observed without rebuilding the watcher");
     }
 
     [Fact]

@@ -42,7 +42,7 @@ public class BroadcastFlowTests : IAsyncLifetime
     private BroadcastManager Create()
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        manager = new BroadcastManager(new FakeRemoteEngine(), null!, prep, () => new Configuration());
+        manager = new BroadcastManager(new FakeRemoteEngine(), null!, prep, new Configuration());
         outputPump = Task.Run(async () =>
         {
             await foreach (var output in manager.Outputs.ReadAllAsync())

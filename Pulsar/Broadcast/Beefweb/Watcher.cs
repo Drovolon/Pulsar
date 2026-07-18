@@ -4,7 +4,6 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Beefweb.Client;
-using Dalamud.Game.Text.SeStringHandling;
 using Pulsar.Concurrency;
 using Pulsar.Listening;
 using PulsarState = NAudio.Wave.PlaybackState;
@@ -43,6 +42,7 @@ public sealed class Watcher : IMusicSource
     private readonly IFeed feed;
     private readonly PlayerClient client;
     private readonly bool isWine;
+    private readonly Configuration config;
     private readonly TimeSpan giveUpDelay;
     private readonly Discriminator discriminator = new();
     private readonly CancellationTokenSource cts = new();
@@ -62,11 +62,13 @@ public sealed class Watcher : IMusicSource
     private volatile PublishedState published = new(null, new BeefwebStatus(false, null));
 
     // giveUpDelay is for tests
-    public Watcher(IFeed feed, PlayerClient client, bool isWine, TimeSpan? giveUpDelay = null)
+    public Watcher(IFeed feed, PlayerClient client, bool isWine, Configuration config,
+                   TimeSpan? giveUpDelay = null)
     {
         this.feed = feed;
         this.client = client;
         this.isWine = isWine;
+        this.config = config;
         this.giveUpDelay = giveUpDelay ?? DefaultGiveUpDelay;
         connected = feed.Connected;
         everConnected = connected;
@@ -82,13 +84,13 @@ public sealed class Watcher : IMusicSource
         pump = PumpAsync();
     }
 
-    public static Watcher Create(int port, string? user, string? pass, bool useSse)
+    public static Watcher Create(int port, string? user, string? pass, bool useSse, Configuration config)
     {
         var baseUri = new Uri($"http://localhost:{port}");
         var creds = string.IsNullOrEmpty(user) ? null : new ApiCredentials(user, pass ?? "");
         var client = new PlayerClient(baseUri, creds);
         IFeed feed = useSse ? new SseFeed(client) : new PollingFeed(client);
-        return new Watcher(feed, client, Dalamud.Utility.Util.IsWine());
+        return new Watcher(feed, client, Dalamud.Utility.Util.IsWine(), config);
     }
 
     public void TogglePlay()   => commands.TryPost(PlayerCommand.TogglePlay);
@@ -312,7 +314,8 @@ public sealed class Watcher : IMusicSource
         if (trackChanged) await ResolveNextAsync();
 
         PublishState();
-        if (warnUnsyncable is { } n) NotifyUnsyncable(n, isWine);
+        if (warnUnsyncable is { } n && config.NotifyUnsyncableBroadcast)
+            NotifyUnsyncable(n, isWine);
         if (triggerEvent) OnSnapshotChanged?.Invoke(published.Current);
     }
 
@@ -378,14 +381,9 @@ public sealed class Watcher : IMusicSource
                 "had file existence check failed on Linux - recommend enabling 'Hack: Force locale to C.utf8' in XIVLauncher settings if this file contains non-Latin characters";
         }
         
-        _ = Plugin.Framework.RunOnFrameworkThread(() =>
-        {
-            var se = new SeStringBuilder()
-                .AddText("[Pulsar] ")
-                .AddUiForeground("Can't broadcast: ", 31).AddUiForegroundOff()
-                .AddText($"'{u.Track}' {reason}. We can't sync this. Your listeners won't hear it.");
-            Plugin.Chat.Print(se.BuiltString);
-        });
+        ChatNotifier.Warning(
+            "Can't broadcast: ",
+            $"'{u.Track}' {reason}. We can't sync this. Your listeners won't hear it.");
     }
 
     public async ValueTask DisposeAsync()

@@ -26,8 +26,8 @@ Paraphrasing my understanding of ai-declaration.md:
 
 - **Design** (**hint**): I used an LLM like a rubber duck: basically described the full vision in detail, received feedback (some good, some bad) and iterated on that until I was happy with the shape of the design. The final output was a gigantic Markdown file that I would sometimes reference during implementation - though the further I got into implementing things, the less useful it was, since I made different choices along the way.
 - **Implementation** (somewhere **between hint and assist**)
-    * *Most* of Pulsar was written by hand, in JetBrains Rider, on an airplane with spotty-to-nonexistent WiFi... and then a remote cabin with spotty internet. Which is to say, a large portion of the code was written without internet at all - much less an LLM!
-    * However, I delegated *some* tightly scoped, approved-design tasks to an LLM. They're not quite boilerplate but they were close. Things like NaturalPathComparer or HostArgs.
-- **Testing** (**copilot**): **Unit tests (Pulsar.Tests) are entirely LLM generated**, with heavy guidance and review. No way I'd ever write tests this comprehensive for a hobby project.
-- **Documentation** (**hint**): All 100% hand written, but passed to an LLM for proofreading and review. LLM made no edits; any suggestion I reviewed and applied (or not).
+    * *Most* of Pulsar was written by hand while I was traveling, often with spotty or no internet. Though, I did reference the giant Markdown design doc.
+    * I delegated *some* tightly scoped, approved-design tasks to an LLM. They're not quite boilerplate but they were close. Things like NaturalPathComparer or HostArgs.
+- **Testing** (**copilot**): **Unit tests (Pulsar.Tests) are entirely LLM generated**, albeit with guidance. No way I'd ever write tests this comprehensive for a hobby project.
+- **Documentation** (**hint**): All 100% handwritten, but passed to an LLM for proofreading and review. LLM made no edits; any suggestion I reviewed and applied (or not).
 - **Review** (**assist**): For code review, again, passed to an LLM for proofreading and feedback. **If** the feedback was easy to implement and mechanical, I would sometimes permit the LLM to make those changes itself. Which I would then follow up with my own review.

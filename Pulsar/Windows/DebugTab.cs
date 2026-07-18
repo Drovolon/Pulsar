@@ -10,7 +10,7 @@ namespace Pulsar.Windows;
 
 internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManager)
 {
-    private bool monitoring;
+    private bool monitoring = plugin.Configuration.DebugLoopbackEnabled;
 
     private int dbgIdent = 1;
     private string dbgPath = "";
@@ -25,6 +25,9 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
         DrawMonitor();
         ImGui.Separator();
         ImGui.Spacing();
+        DrawNotificationTester();
+        ImGui.Separator();
+        ImGui.Spacing();
         DrawIpcTester();
     }
 
@@ -35,7 +38,25 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
     private void DrawMonitor()
     {
         if (ImGui.Checkbox("Loopback broadcast locally", ref monitoring))
+        {
             plugin.SetDebugLoopback(monitoring);
+            plugin.Configuration.DebugLoopbackEnabled = monitoring;
+            plugin.Configuration.Save();
+        }
+    }
+
+    private static void DrawNotificationTester()
+    {
+        ImGui.TextDisabled("Notification tester");
+        ImGui.Separator();
+
+        if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.InfoCircle, "Information"))
+            ChatNotifier.Information("Test information: ", "This is a test information notification.");
+        ImGui.SameLine();
+        if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.ExclamationTriangle, "Warning"))
+            ChatNotifier.Warning("Test warning: ", "This is a test warning notification.");
+
+        ImGui.Spacing();
     }
 
     private void DrawIpcTester()

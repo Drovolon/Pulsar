@@ -38,7 +38,7 @@ public class MainWindow : Window, IDisposable
 
         listeningTab = new ListeningTab(plugin, theme);
         broadcastTab = new BroadcastTab(plugin, fileDialogManager, theme);
-        configTab = new ConfigTab(plugin);
+        configTab = new ConfigTab(plugin, theme);
         debugTab = new DebugTab(plugin, fileDialogManager);
     }
 

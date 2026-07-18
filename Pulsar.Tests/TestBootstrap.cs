@@ -99,6 +99,17 @@ public static class TestWait
 /// <summary>Builders shared across suites so "a playing track" means one thing everywhere.</summary>
 public static class TestData
 {
+    /// <summary>A plugin configuration that will not write to the process-global fake chat.</summary>
+    public static Configuration QuietConfiguration() => new()
+    {
+        NotifyNearbyBroadcaster = false,
+        NotifyNearbyBroadcasterAutoPlayOff = false,
+        NotifyNearbyBroadcasterWhileBroadcasting = false,
+        NotifyMutedPlayback = false,
+        NotifyListeningTrackChanged = false,
+        NotifyUnsyncableBroadcast = false,
+    };
+
     /// <summary>Writes a small fake audio file and returns its path.</summary>
     public static string CreateTrack(System.IO.DirectoryInfo dir, string name, int bytes = 16)
     {

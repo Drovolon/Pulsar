@@ -25,12 +25,12 @@ public class BroadcastSourceTests : IAsyncLifetime
     private readonly SyncPrep prep;
     private readonly BroadcastManager broadcast;
 
-    private Configuration config = new();
+    private readonly Configuration config = new();
 
     public BroadcastSourceTests()
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        broadcast = new BroadcastManager(engine, resolver, prep, () => config);
+        broadcast = new BroadcastManager(engine, resolver, prep, config);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -61,7 +61,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     public async Task The_lead_checkpoint_prefetches_the_live_next_track()
     {
         // dur 1000ms, lead 700ms -> lead tick ~300ms after arming.
-        config = new Configuration { PrefetchLeadMs = 700, PrefetchFinalMs = 100 };
+        config.PrefetchLeadMs = 700;
+        config.PrefetchFinalMs = 100;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -82,7 +83,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     {
         // lead (5s) > duration (1s): arming lands INSIDE the lead window, so the
         // FINAL checkpoint is scheduled directly (~700ms: remaining 1000 - final 300).
-        config = new Configuration { PrefetchLeadMs = 5000, PrefetchFinalMs = 300 };
+        config.PrefetchLeadMs = 5000;
+        config.PrefetchFinalMs = 300;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -100,7 +102,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     {
         // If the pause guard regresses, these values arm the erroneous lead tick in
         // ~100ms (1000ms remaining - 900ms lead), comfortably inside the negative wait.
-        config = new Configuration { PrefetchLeadMs = 900, PrefetchFinalMs = 50 };
+        config.PrefetchLeadMs = 900;
+        config.PrefetchFinalMs = 50;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -115,7 +118,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     [Fact]
     public async Task Unknown_duration_disarms_the_prefetch_timer()
     {
-        config = new Configuration { PrefetchLeadMs = 100, PrefetchFinalMs = 50 };
+        config.PrefetchLeadMs = 100;
+        config.PrefetchFinalMs = 50;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -131,7 +135,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     [Fact]
     public async Task Pausing_cancels_an_armed_timer_and_resuming_arms_a_fresh_one()
     {
-        config = new Configuration { PrefetchLeadMs = 700, PrefetchFinalMs = 100 };
+        config.PrefetchLeadMs = 700;
+        config.PrefetchFinalMs = 100;
         var current = Track("current.flac");
         var staleNext = Track("stale-next.flac");
         var liveNext = Track("live-next.flac");
@@ -157,7 +162,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     [Fact]
     public async Task Switching_sources_cancels_the_old_sources_armed_timer()
     {
-        config = new Configuration { PrefetchLeadMs = 700, PrefetchFinalMs = 100 };
+        config.PrefetchLeadMs = 700;
+        config.PrefetchFinalMs = 100;
         var oldCurrent = Track("old-current.flac");
         var oldNext = Track("old-next.flac");
         var newCurrent = Track("new-current.flac");

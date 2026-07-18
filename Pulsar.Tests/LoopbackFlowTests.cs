@@ -35,8 +35,9 @@ public class LoopbackFlowTests : IAsyncLifetime
     public LoopbackFlowTests()
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, () => new Configuration());
-        listening = new ListeningManager(listenEngine);
+        var config = TestData.QuietConfiguration();
+        broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, config);
+        listening = new ListeningManager(listenEngine, config);
 
         // The loopback rides IpcProvider's real JSON and inbound mapping path:
         // broadcast → coordinator → serialize/deserialize+map → listening.

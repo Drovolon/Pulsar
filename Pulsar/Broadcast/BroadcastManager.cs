@@ -41,6 +41,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     private readonly SyncPrep prep;
     private readonly PrefetchScheduler prefetch;
     private readonly IRemoteEngine player;
+    private readonly Configuration config;
     private readonly Lazy<Task> disposeTask;
 
     private readonly SerializedMailbox<Message> mailbox;
@@ -64,10 +65,11 @@ public sealed class BroadcastManager : IAsyncDisposable
 
     private volatile PublishedState published = new(null, null, null);
 
-    public BroadcastManager(IRemoteEngine player, IModResolver penumbra, SyncPrep prep, Func<Configuration> config)
+    public BroadcastManager(IRemoteEngine player, IModResolver penumbra, SyncPrep prep, Configuration config)
     {
         this.penumbra = penumbra;
         this.prep = prep;
+        this.config = config;
         prefetch = new PrefetchScheduler(prep, config);
         this.player = player;
         mailbox = new SerializedMailbox<Message>(
@@ -96,7 +98,7 @@ public sealed class BroadcastManager : IAsyncDisposable
 
     /// <summary>Broadcast from a local foobar2000/DeaDBeeF via the beefweb API.</summary>
     public Task LoadBeefweb(int port, string? user, string? pass, bool useSse)
-        => SetSource(Beefweb.Watcher.Create(port, user, pass, useSse));
+        => SetSource(Beefweb.Watcher.Create(port, user, pass, useSse, config));
 
     /// <summary>
     /// Broadcast from a Penumbra mod, given its directory *name*.

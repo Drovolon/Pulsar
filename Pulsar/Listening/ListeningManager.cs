@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -70,6 +71,13 @@ public class ListeningManager : IAsyncDisposable
 {
     private const int MaxLoadRetries = 3;
 
+    private enum NearbyBroadcastContext
+    {
+        Normal,
+        AutoPlayOff,
+        CurrentlyBroadcasting,
+    }
+
     private abstract record Message;
     private sealed record PairUpdated(ulong Ident, string? DisplayName, PairData Data) : Message;
     private sealed record PairCleared(ulong Ident) : Message;
@@ -98,6 +106,7 @@ public class ListeningManager : IAsyncDisposable
 
     private readonly Dictionary<ulong, PairState> pairs = [];
     private readonly IRemoteEngine engine;
+    private readonly Configuration config;
     // This is the manager's synchronization boundary: callers and engine callbacks only post
     // messages; the single reader below is the sole owner of all non-published state.
     private readonly Channel<Message> mailbox = Channel.CreateUnbounded<Message>(
@@ -116,6 +125,10 @@ public class ListeningManager : IAsyncDisposable
     // The stable ambient selection. Pins temporarily override it without destroying it.
     private ulong? autoplaySourceId;
     private ulong? selectedSourceId;
+
+    // Populated during the actor loop, then after reconciliation, drained to push notifications
+    private readonly HashSet<ulong> newPairNotifications = [];
+    private readonly HashSet<ulong> playbackStartedNotifications = [];
 
     // Per-source volumes, a map of character name -> volume. Persisted in config by the UI code.
     // Then the UI code calls into this class to push down updates.
@@ -153,9 +166,9 @@ public class ListeningManager : IAsyncDisposable
     private readonly TimeSpan errorBackoff;
     private readonly TimeSpan lostBackoff;
 
-    public ListeningManager(IRemoteEngine engine, float masterVolume = 1f,
-                            IReadOnlyDictionary<string, float>? savedPairVolumes = null, bool autoPlay = true)
-        : this(engine, masterVolume, savedPairVolumes, autoPlay,
+    public ListeningManager(IRemoteEngine engine, Configuration config)
+        : this(engine, config.ListeningMasterVolume, config.ListeningPairVolumes,
+               config.ListeningAutoPlay, config,
                updatePoll: TimeSpan.FromMilliseconds(250),
                errorBackoff: TimeSpan.FromSeconds(1),
                lostBackoff: TimeSpan.FromSeconds(10)) { }
@@ -163,8 +176,10 @@ public class ListeningManager : IAsyncDisposable
     // for unit tests only
     internal ListeningManager(IRemoteEngine engine, float masterVolume,
                               IReadOnlyDictionary<string, float>? savedPairVolumes, bool autoPlay,
+                              Configuration config,
                               TimeSpan updatePoll, TimeSpan errorBackoff, TimeSpan lostBackoff)
     {
+        this.config = config;
         this.updatePoll = updatePoll;
         this.errorBackoff = errorBackoff;
         this.lostBackoff = lostBackoff;
@@ -345,12 +360,15 @@ public class ListeningManager : IAsyncDisposable
             case PairUpdated(var ident, var displayName, var data):
                 if (pairs.TryGetValue(ident, out var pair))
                 {
+                    if (!pair.Data.IsPlaying && data.IsPlaying && pair.Data.FilePath == data.FilePath)
+                        playbackStartedNotifications.Add(ident);
                     pair.Data = data;
                     pair.FailCount = 0;
                     if (displayName is not null) pair.DisplayName = displayName;
                 }
                 else
                 {
+                    newPairNotifications.Add(ident);
                     pairs[ident] = new PairState(data)
                     {
                         DisplayName = displayName,
@@ -363,6 +381,8 @@ public class ListeningManager : IAsyncDisposable
 
             case PairCleared(var ident):
                 pairs.Remove(ident);
+                newPairNotifications.Remove(ident);
+                playbackStartedNotifications.Remove(ident);
                 break;
 
             case ActiveSet(var ident):
@@ -465,7 +485,11 @@ public class ListeningManager : IAsyncDisposable
                             break;
                     }
                 }
-                if (reconcile) await ReconcileActive(token);
+                if (reconcile)
+                {
+                    await ReconcileActive(token);
+                    FlushPairNotifications();
+                }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -492,6 +516,8 @@ public class ListeningManager : IAsyncDisposable
 
     private async Task ReconcileActive(CancellationToken token)
     {
+        var previousAppliedSourceId = appliedSourceId;
+        var previousAppliedData = appliedData;
         var activeId = ResolveActive();
         selectedSourceId = activeId;
 
@@ -519,6 +545,106 @@ public class ListeningManager : IAsyncDisposable
         await Apply(action, token);
         appliedSourceId = activeId;
         appliedData = active?.Data;
+        MaybeNotifyTrackChanged(previousAppliedSourceId, previousAppliedData);
+    }
+
+    private void FlushPairNotifications()
+    {
+        foreach (var ident in newPairNotifications)
+        {
+            if (!pairs.TryGetValue(ident, out var pair)) continue;
+            NotifyNewPair(ident, pair);
+        }
+
+        foreach (var ident in playbackStartedNotifications)
+        {
+            if (newPairNotifications.Contains(ident) || ident != selectedSourceId
+                || !pairs.TryGetValue(ident, out var pair)
+                || SilenceReason(pair) is not { } reason)
+                continue;
+            if (config.NotifyMutedPlayback)
+                ChatNotifier.Information(
+                    "Muted Playback: ", $"{PairName(ident, pair)} started playing, but {reason}.");
+        }
+
+        newPairNotifications.Clear();
+        playbackStartedNotifications.Clear();
+    }
+
+    private void NotifyNewPair(ulong ident, PairState pair)
+    {
+        var name = PairName(ident, pair);
+
+        if (ident == selectedSourceId && pair.Data.IsPlaying && SilenceReason(pair) is { } reason)
+        {
+            if (config.NotifyMutedPlayback)
+                ChatNotifier.Information("Muted Playback: ", $"{name} started playing, but {reason}.");
+            return;
+        }
+
+        var track = TrackLabel(pair.Data);
+        var nearby = $"{name} is playing {track} nearby";
+        var (enabled, message) = ClassifyNearbyBroadcast(ident) switch
+        {
+            NearbyBroadcastContext.CurrentlyBroadcasting =>
+                (config.NotifyNearbyBroadcasterWhileBroadcasting,
+                 $"{nearby}, but you're currently broadcasting."),
+            NearbyBroadcastContext.AutoPlayOff =>
+                (config.NotifyNearbyBroadcasterAutoPlayOff,
+                 $"{nearby}, but Auto-play is Off."),
+            NearbyBroadcastContext.Normal =>
+                (config.NotifyNearbyBroadcaster, $"{name} is playing {track}."),
+            _ => throw new ArgumentOutOfRangeException(),
+        };
+
+        if (enabled) ChatNotifier.Information("Nearby Broadcast: ", message);
+    }
+
+    private NearbyBroadcastContext ClassifyNearbyBroadcast(ulong ident)
+    {
+        // Debug loopback and pins should use the normal notification path
+        if (ident == ulong.MaxValue || pinnedName is not null)
+            return NearbyBroadcastContext.Normal;
+        if (broadcasting) return NearbyBroadcastContext.CurrentlyBroadcasting;
+        if (!autoPlay) return NearbyBroadcastContext.AutoPlayOff;
+        return NearbyBroadcastContext.Normal;
+    }
+
+    private void MaybeNotifyTrackChanged(ulong? previousSourceId, PairData? previousData)
+    {
+        if (!config.NotifyListeningTrackChanged
+            || previousSourceId is not { } sourceId
+            || sourceId != appliedSourceId
+            || previousData is null
+            || appliedData is null
+            || previousData.FilePath == appliedData.FilePath
+            || !pairs.TryGetValue(sourceId, out var pair))
+            return;
+
+        ChatNotifier.Information(
+            "Now Playing: ", $"{PairName(sourceId, pair)} is now playing {TrackLabel(appliedData)}.");
+    }
+
+    private string? SilenceReason(PairState pair)
+    {
+        if (masterMuted) return "your master listening volume is muted";
+        if (pair.Muted) return "their listening volume is muted";
+        if (masterVolume <= 0f) return "your master listening volume is set to zero";
+        if (pair.Volume <= 0f) return "their listening volume is set to zero";
+        return null;
+    }
+
+    private static string PairName(ulong ident, PairState pair)
+        => pair.DisplayName ?? $"{ident:X}";
+
+    private static string TrackLabel(PairData data)
+    {
+        var artist = data.Meta?.Artist;
+        var title = data.Meta?.Title;
+        if (!string.IsNullOrEmpty(title))
+            return !string.IsNullOrEmpty(artist) ? $"{artist} - {title}" : title;
+        if (data.Meta?.OriginalFileName is { Length: > 0 } original) return original;
+        return Path.GetFileName(data.FilePath);
     }
 
     private void SetPlaybackTarget(ulong? activeId, PairState? active)

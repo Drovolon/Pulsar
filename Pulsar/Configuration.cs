@@ -12,6 +12,7 @@ public class Configuration : IPluginConfiguration
     public int Version { get; set; } = 0;
 
     public bool DebugMode { get; set; } = false;
+    public bool DebugLoopbackEnabled { get; set; } = false;
 
     // Broadcast (DJ) side: the local monitor/jukebox output volume.
     public float MonitorVolume { get; set; } = 1.0f;
@@ -22,6 +23,14 @@ public class Configuration : IPluginConfiguration
     public Dictionary<string, float> ListeningPairVolumes { get; set; } = [];
     // When nothing is explicitly pinned, auto-play whoever nearby is broadcasting.
     public bool ListeningAutoPlay { get; set; } = true;
+
+    // Note: nearby-broadcaster only sends one notification, even if multiple conditions are met
+    public bool NotifyNearbyBroadcaster { get; set; } = true;
+    public bool NotifyNearbyBroadcasterAutoPlayOff { get; set; } = true;
+    public bool NotifyNearbyBroadcasterWhileBroadcasting { get; set; } = false;
+    public bool NotifyMutedPlayback { get; set; } = true;
+    public bool NotifyListeningTrackChanged { get; set; } = false;
+    public bool NotifyUnsyncableBroadcast { get; set; } = true;
 
     // Broadcast (DJ) side: which source the broadcast tab plays from.
     public BroadcastMode BroadcastMode { get; set; } = BroadcastMode.Folder;

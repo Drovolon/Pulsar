@@ -64,17 +64,34 @@ public sealed class FakeFramework : IFramework
 public sealed class RecordingChatGui : IChatGui
 {
     private readonly List<string> messages = [];
+    private readonly List<SeString> richMessages = [];
 
     public string[] Messages { get { lock (messages) return [.. messages]; } }
-    public void Clear() { lock (messages) messages.Clear(); }
+    public SeString[] RichMessages { get { lock (messages) return [.. richMessages]; } }
+    public void Clear()
+    {
+        lock (messages)
+        {
+            messages.Clear();
+            richMessages.Clear();
+        }
+    }
 
     private void Record(string text) { lock (messages) messages.Add(text); }
+    private void Record(SeString message)
+    {
+        lock (messages)
+        {
+            messages.Add(message.TextValue);
+            richMessages.Add(message);
+        }
+    }
 
-    public void Print(XivChatEntry chat) => Record(chat.Message.TextValue);
+    public void Print(XivChatEntry chat) => Record(chat.Message);
     public void Print(string message, string? messageTag = null, ushort? tagColor = null) => Record(message);
-    public void Print(SeString message, string? messageTag = null, ushort? tagColor = null) => Record(message.TextValue);
+    public void Print(SeString message, string? messageTag = null, ushort? tagColor = null) => Record(message);
     public void PrintError(string message, string? messageTag = null, ushort? tagColor = null) => Record(message);
-    public void PrintError(SeString message, string? messageTag = null, ushort? tagColor = null) => Record(message.TextValue);
+    public void PrintError(SeString message, string? messageTag = null, ushort? tagColor = null) => Record(message);
     public void Print(ReadOnlySpan<byte> message, string? messageTag = null, ushort? tagColor = null)
         => Record(System.Text.Encoding.UTF8.GetString(message));
     public void PrintError(ReadOnlySpan<byte> message, string? messageTag = null, ushort? tagColor = null)

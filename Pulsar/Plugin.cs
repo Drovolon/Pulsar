@@ -89,17 +89,13 @@ public sealed class Plugin : IAsyncDalamudPlugin
         Prepare = new ReconnectingPrepareService(new HostSpec(
             Path.Combine(hostDir, "Pulsar.TranscodeHost.exe"), PipeNames.TranscodeHost, logDir, "transcode"));
 
-        Listening = new ListeningManager(
-            ListenEngine,
-            Configuration.ListeningMasterVolume,
-            Configuration.ListeningPairVolumes,
-            Configuration.ListeningAutoPlay);
+        Listening = new ListeningManager(ListenEngine, Configuration);
 
         Penumbra = new PenumbraIntegration(PluginInterface);
         SyncPrep = new SyncPrep(
             new CacheManager(Path.Combine(PluginInterface.ConfigDirectory.FullName, "synccache")),
             Prepare);
-        Broadcast = new BroadcastManager(BroadcastEngine, Penumbra, SyncPrep, () => Configuration);
+        Broadcast = new BroadcastManager(BroadcastEngine, Penumbra, SyncPrep, Configuration);
 
         ListenEngine.OnReconnected += Listening.OnEngineReconnected;
         BroadcastEngine.OnReconnected += Broadcast.OnEngineReconnected;
@@ -108,6 +104,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
         Ipc.Prepare();
         DebugLoopback = new DebugLoopbackController(Ipc);
         Coordinator = new ApplicationCoordinator(Broadcast, Listening, Ipc, DebugLoopback);
+        DebugLoopback.SetEnabled(Configuration.DebugLoopbackEnabled, CurrentBroadcastPlayerData);
 
         ListenEngine.Start();
         BroadcastEngine.Start();
