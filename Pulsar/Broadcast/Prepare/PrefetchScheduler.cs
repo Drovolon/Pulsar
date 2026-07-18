@@ -1,8 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
+using Pulsar.Concurrency;
 
 namespace Pulsar.Broadcast.Prepare;
 
@@ -17,38 +18,27 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     private sealed record SourceObserved(IMusicSource? Source, SourceSnapshot? Snapshot) : Message;
     private sealed record Tick(long Generation) : Message;
     private sealed record Cleared(TaskCompletionSource Completion) : Message;
-    private sealed record Shutdown(TaskCompletionSource Completion) : Message;
 
     private readonly SyncPrep prep;
     private readonly Func<Configuration> config;
-    private readonly Channel<Message> mailbox = Channel.CreateUnbounded<Message>(
-        new UnboundedChannelOptions { SingleReader = true });
-    private readonly Task messageLoop;
+    private readonly SerializedMailbox<Message> mailbox;
 
-    private readonly Lock lifecycleLock = new();
-    private bool accepting = true;
-    private Task? disposeTask;
-
-    // Owned by messageLoop.
     private IMusicSource? source;
     private long generation;
     private bool finalPending;
     private CancellationTokenSource? delayCts;
+    private Task? delayTask;
+    private readonly List<Task> retiredDelayTasks = [];
 
     internal PrefetchScheduler(SyncPrep prep, Func<Configuration> config)
     {
         this.prep = prep;
         this.config = config;
-        messageLoop = Task.Run(MessageLoop);
+        mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError, OnCompleted);
     }
 
     internal void Observe(IMusicSource? activeSource, SourceSnapshot? snapshot)
-    {
-        lock (lifecycleLock)
-        {
-            if (accepting) mailbox.Writer.TryWrite(new SourceObserved(activeSource, snapshot));
-        }
-    }
+        => mailbox.TryPost(new SourceObserved(activeSource, snapshot));
 
     /// <summary>
     /// Detaches from the live source before its owner disposes it. Once this completes,
@@ -57,48 +47,39 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     internal Task ClearAsync()
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (lifecycleLock)
-        {
-            if (!accepting || !mailbox.Writer.TryWrite(new Cleared(completion)))
-                completion.TrySetResult();
-        }
+        if (!mailbox.TryPost(new Cleared(completion))) completion.TrySetResult();
         return completion.Task;
     }
 
-    private async Task MessageLoop()
+    private ValueTask HandleMessage(Message message)
     {
-        await foreach (var message in mailbox.Reader.ReadAllAsync())
+        switch (message)
         {
-            try
-            {
-                switch (message)
-                {
-                    case SourceObserved(var activeSource, var snapshot):
-                        ObserveSource(activeSource, snapshot);
-                        break;
-                    case Tick(var tickGeneration):
-                        if (tickGeneration == generation) HandleTick();
-                        break;
-                    case Cleared(var completion):
-                        Clear();
-                        completion.TrySetResult();
-                        break;
-                    case Shutdown(var completion):
-                        Clear();
-                        completion.TrySetResult();
-                        return;
-                }
-            }
-            catch (Exception e)
-            {
-                Plugin.Log.Verbose($"prefetch scheduling failed: {e.Message}");
-                switch (message)
-                {
-                    case Cleared(var completion): completion.TrySetResult(); break;
-                    case Shutdown(var completion): completion.TrySetResult(); return;
-                }
-            }
+            case SourceObserved(var activeSource, var snapshot):
+                ObserveSource(activeSource, snapshot);
+                break;
+            case Tick(var tickGeneration):
+                if (tickGeneration == generation) HandleTick();
+                break;
+            case Cleared(var completion):
+                Clear();
+                completion.TrySetResult();
+                break;
         }
+
+        return ValueTask.CompletedTask;
+    }
+
+    private static void OnMessageError(Exception e, Message message)
+    {
+        Plugin.Log.Verbose($"prefetch scheduling failed: {e.Message}");
+        if (message is Cleared(var completion)) completion.TrySetResult();
+    }
+
+    private async ValueTask OnCompleted()
+    {
+        Clear();
+        if (retiredDelayTasks.Count > 0) await Task.WhenAll(retiredDelayTasks);
     }
 
     private void ObserveSource(IMusicSource? activeSource, SourceSnapshot? snapshot)
@@ -169,7 +150,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     {
         CancelDelay();
         delayCts = new CancellationTokenSource();
-        _ = PostTickAfterDelay(
+        delayTask = PostTickAfterDelay(
             TimeSpan.FromMilliseconds(Math.Clamp(delayMs, 0, int.MaxValue)),
             generation,
             delayCts.Token);
@@ -180,7 +161,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         try
         {
             await Task.Delay(delay, token);
-            mailbox.Writer.TryWrite(new Tick(tickGeneration));
+            mailbox.TryPost(new Tick(tickGeneration));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
@@ -195,30 +176,16 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
 
     private void CancelDelay()
     {
-        delayCts?.Cancel();
+        if (delayTask is not null)
+        {
+            delayCts?.Cancel();
+            if (!delayTask.IsCompleted) retiredDelayTasks.Add(delayTask);
+            delayTask = null;
+            retiredDelayTasks.RemoveAll(static task => task.IsCompleted);
+        }
         delayCts?.Dispose();
         delayCts = null;
     }
 
-    public ValueTask DisposeAsync()
-    {
-        lock (lifecycleLock)
-        {
-            if (disposeTask is null)
-            {
-                accepting = false;
-                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                mailbox.Writer.TryWrite(new Shutdown(completion));
-                mailbox.Writer.TryComplete();
-                disposeTask = FinishDispose(completion.Task);
-            }
-            return new ValueTask(disposeTask);
-        }
-    }
-
-    private async Task FinishDispose(Task shutdown)
-    {
-        await shutdown;
-        await messageLoop;
-    }
+    public ValueTask DisposeAsync() => mailbox.DisposeAsync();
 }

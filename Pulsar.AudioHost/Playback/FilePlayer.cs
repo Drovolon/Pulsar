@@ -43,7 +43,7 @@ public sealed class FilePlayer
     public FilePlayer(Func<IWavePlayer> deviceFactory)
     {
         this.deviceFactory = deviceFactory;
-        loop = Task.Run(ProcessAsync);
+        loop = ProcessAsync();
     }
 
     private static IWavePlayer DefaultDevice() => new WasapiPlayerBuilder().WithMmcssThreadPriority().Build();

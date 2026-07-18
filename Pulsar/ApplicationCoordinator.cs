@@ -33,7 +33,7 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
         this.listening = listening;
         this.ipc = ipc;
         this.debugLoopback = debugLoopback;
-        outputLoop = Task.Run(RouteOutputs);
+        outputLoop = RouteOutputs();
     }
 
     private async Task RouteOutputs()
@@ -66,5 +66,6 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
         await broadcast.DisposeAsync();
         await outputLoop;
         debugLoopback.SetEnabled(false, null);
+        await debugLoopback.DisposeAsync();
     }
 }

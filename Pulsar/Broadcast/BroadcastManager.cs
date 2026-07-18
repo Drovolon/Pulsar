@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Pulsar.Broadcast.Prepare;
 using Pulsar.Common.Api;
+using Pulsar.Concurrency;
 using Pulsar.Ipc;
 
 namespace Pulsar.Broadcast;
@@ -30,7 +31,6 @@ public sealed class BroadcastManager : IAsyncDisposable
     private sealed record SourceChanged(IMusicSource Source, SourceSnapshot? Snapshot) : Message;
     private sealed record PrepCompleted(long Generation, string OriginalPath) : Message;
     private sealed record EngineReconnected : Message;
-    private sealed record Shutdown(TaskCompletionSource Completion) : Message;
 
     private sealed record PublishedState(
         IMusicSource? Active,
@@ -41,15 +41,9 @@ public sealed class BroadcastManager : IAsyncDisposable
     private readonly SyncPrep prep;
     private readonly PrefetchScheduler prefetch;
     private readonly IRemoteEngine player;
+    private readonly Lazy<Task> disposeTask;
 
-    private readonly Channel<Message> mailbox = Channel.CreateUnbounded<Message>(
-        new UnboundedChannelOptions { SingleReader = true });
-    private readonly Task messageLoop;
-
-    // Only guards accepting lifecycle requests into the mailbox. Broadcast state itself
-    // belongs exclusively to messageLoop.
-    private readonly Lock lifecycleLock = new();
-    private bool accepting = true;
+    private readonly SerializedMailbox<Message> mailbox;
 
     private IMusicSource? active;
     private SourceSnapshot? activeSnapshot;
@@ -76,7 +70,11 @@ public sealed class BroadcastManager : IAsyncDisposable
         this.prep = prep;
         prefetch = new PrefetchScheduler(prep, config);
         this.player = player;
-        messageLoop = Task.Run(MessageLoop);
+        mailbox = new SerializedMailbox<Message>(
+            HandleMessage,
+            OnMessageError,
+            async () => await TearDownActive());
+        disposeTask = new Lazy<Task>(FinishDispose, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>The active source IF they are using the folder or mod player (not beefweb).</summary>
@@ -135,11 +133,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     public async Task SetSource(IMusicSource? source)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        bool accepted;
-        lock (lifecycleLock)
-        {
-            accepted = accepting && mailbox.Writer.TryWrite(new SourceSet(source, completion));
-        }
+        var accepted = mailbox.TryPost(new SourceSet(source, completion));
 
         if (accepted) await completion.Task;
         else if (source is not null) await source.DisposeAsync();
@@ -147,55 +141,41 @@ public sealed class BroadcastManager : IAsyncDisposable
 
     public (string, string[], PulsarCursor)? CurrentPlayerData() => published.PlayerData;
 
-    private void Post(Message message) => mailbox.Writer.TryWrite(message);
+    private void Post(Message message) => mailbox.TryPost(message);
 
-    private async Task MessageLoop()
+    private async ValueTask HandleMessage(Message message)
     {
-        await foreach (var message in mailbox.Reader.ReadAllAsync())
+        switch (message)
         {
-            try
-            {
-                switch (message)
-                {
-                    case SourceSet(var source, var completion):
-                        await SwitchSource(source);
-                        completion.TrySetResult();
-                        break;
+            case SourceSet(var source, var completion):
+                await SwitchSource(source);
+                completion.TrySetResult();
+                break;
 
-                    case SourceChanged(var source, var snapshot):
-                        if (!ReferenceEquals(active, source)) break;
-                        cursorEpoch++;
-                        snapshotGeneration++;
-                        activeSnapshot = snapshot;
-                        HandleSnapshot(snapshot);
-                        break;
+            case SourceChanged(var source, var snapshot):
+                if (!ReferenceEquals(active, source)) break;
+                cursorEpoch++;
+                snapshotGeneration++;
+                activeSnapshot = snapshot;
+                HandleSnapshot(snapshot);
+                break;
 
-                    case PrepCompleted(var generation, var originalPath):
-                        if (generation == snapshotGeneration
-                            && activeSnapshot?.FilePath == originalPath)
-                            Emit();
-                        break;
+            case PrepCompleted(var generation, var originalPath):
+                if (generation == snapshotGeneration
+                    && activeSnapshot?.FilePath == originalPath)
+                    Emit();
+                break;
 
-                    case EngineReconnected:
-                        if (active is Jukebox jukebox) jukebox.Player.ReapplyVolume();
-                        break;
-
-                    case Shutdown(var completion):
-                        await TearDownActive();
-                        completion.TrySetResult();
-                        return;
-                }
-            }
-            catch (Exception e)
-            {
-                Plugin.Log.Error(e, "broadcast message failed: {message}", message);
-                switch (message)
-                {
-                    case SourceSet(_, var completion): completion.TrySetException(e); break;
-                    case Shutdown(var completion): completion.TrySetException(e); return;
-                }
-            }
+            case EngineReconnected:
+                if (active is Jukebox jukebox) jukebox.Player.ReapplyVolume();
+                break;
         }
+    }
+
+    private static void OnMessageError(Exception e, Message message)
+    {
+        Plugin.Log.Error(e, "broadcast message failed: {message}", message);
+        if (message is SourceSet(_, var completion)) completion.TrySetException(e);
     }
 
     private async Task SwitchSource(IMusicSource? source)
@@ -207,7 +187,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         {
             var captured = source;
             activeSourceHandler = snapshot => Post(new SourceChanged(captured, snapshot));
-            source.SnapshotChanged += activeSourceHandler;
+            source.OnSnapshotChanged += activeSourceHandler;
         }
 
         cursorEpoch++;
@@ -222,7 +202,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         await prefetch.ClearAsync();
         var old = active;
         if (old is not null && activeSourceHandler is not null)
-            old.SnapshotChanged -= activeSourceHandler;
+            old.OnSnapshotChanged -= activeSourceHandler;
         activeSourceHandler = null;
         active = null;
         activeSnapshot = null;
@@ -326,28 +306,11 @@ public sealed class BroadcastManager : IAsyncDisposable
         }
     );
 
-    private Task? disposeTask;
+    public ValueTask DisposeAsync() => new(disposeTask.Value);
 
-    public ValueTask DisposeAsync()
+    private async Task FinishDispose()
     {
-        lock (lifecycleLock)
-        {
-            if (disposeTask is null)
-            {
-                accepting = false;
-                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                mailbox.Writer.TryWrite(new Shutdown(completion));
-                mailbox.Writer.TryComplete();
-                disposeTask = FinishDispose(completion.Task);
-            }
-            return new ValueTask(disposeTask);
-        }
-    }
-
-    private async Task FinishDispose(Task shutdown)
-    {
-        await shutdown;
-        await messageLoop;
+        await mailbox.DisposeAsync();
         await prefetch.DisposeAsync();
 
         outputs.Writer.TryComplete();

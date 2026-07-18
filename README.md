@@ -1,6 +1,6 @@
 # Pulsar
 
-**NOTE: PULSAR IS AN UNRELEASED WORK IN PROGRESS.** Release ETA: mid to late July.
+**NOTE: PULSAR IS AN UNRELEASED WORK IN PROGRESS.** Release ETA: late July.
 
 Pulsar is a music plugin for the Mare family of syncing services. To use Pulsar:
 
@@ -52,6 +52,7 @@ For a consistent listening experience, track-level ReplayGain is forcibly applie
 * [DESIGN.md](./DESIGN.md) - technical information
 * [CONTRIBUTING.md](./CONTRIBUTING.md) - how to contribute (for developers)
 * [API.md](./API.md) - IPC API docs and general sync integration guide
+* [AI-DECLARATION.md](./AI-DECLARATION.md) - declaration of "AI" (LLM) usage
 
 ## About the Author
 

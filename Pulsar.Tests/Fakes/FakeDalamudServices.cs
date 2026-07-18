@@ -6,6 +6,7 @@ using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Plugin.Services;
+using Dalamud.Utility;
 
 namespace Pulsar.Tests.Fakes;
 
@@ -54,6 +55,9 @@ public sealed class FakeFramework : IFramework
                                 CancellationToken cancellationToken = default) => func();
     public Task RunOnTick(Func<Task> func, TimeSpan delay = default, int delayTicks = default,
                           CancellationToken cancellationToken = default) => func();
+
+    public IDebouncer CreateDebouncer(TimeSpan delay, Action action)
+        => throw new NotSupportedException("not used in tests");
 }
 
 /// <summary>Records the text of everything printed to chat.</summary>

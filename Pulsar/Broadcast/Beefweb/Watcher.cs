@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Beefweb.Client;
 using Dalamud.Game.Text.SeStringHandling;
+using Pulsar.Concurrency;
 using Pulsar.Listening;
 using PulsarState = NAudio.Wave.PlaybackState;
 
@@ -29,6 +29,15 @@ public sealed class Watcher : IMusicSource
 {
     private enum PlayerCommand { TogglePlay, Stop, Next, Previous }
 
+    private abstract record Message;
+    private sealed record ObservationReceived(
+        Observation Observation,
+        TaskCompletionSource Completion) : Message;
+    private sealed record ConnectionChanged(bool Connected) : Message;
+    private sealed record GiveUpExpired : Message;
+
+    private sealed record PublishedState(SourceSnapshot? Current, BeefwebStatus Status);
+
     private static readonly TimeSpan DefaultGiveUpDelay = TimeSpan.FromSeconds(10);
 
     private readonly IFeed feed;
@@ -36,22 +45,21 @@ public sealed class Watcher : IMusicSource
     private readonly bool isWine;
     private readonly TimeSpan giveUpDelay;
     private readonly Discriminator discriminator = new();
-    private readonly Lock @lock = new();
     private readonly CancellationTokenSource cts = new();
     private readonly Timer giveUpTimer;
     private readonly Task pump;
-    private readonly Channel<PlayerCommand> commands = Channel.CreateUnbounded<PlayerCommand>(
-        new UnboundedChannelOptions { SingleReader = true });
-    private readonly Task commandPump;
+    private readonly SerializedMailbox<PlayerCommand> commands;
+    private readonly SerializedMailbox<Message> mailbox;
 
     private Observation? currentObs;
     private SyncVerdict currentVerdict;
+    private bool connected;
     private bool everConnected;
     private bool gaveUp;
     private bool wasUnsyncable;
 
-    // Best-effort "what plays next", resolved off-thread on each track change (slight staleness OK).
-    private volatile string? nextLocalPath;
+    private string? nextLocalPath;
+    private volatile PublishedState published = new(null, new BeefwebStatus(false, null));
 
     // giveUpDelay is for tests
     public Watcher(IFeed feed, PlayerClient client, bool isWine, TimeSpan? giveUpDelay = null)
@@ -60,10 +68,18 @@ public sealed class Watcher : IMusicSource
         this.client = client;
         this.isWine = isWine;
         this.giveUpDelay = giveUpDelay ?? DefaultGiveUpDelay;
-        giveUpTimer = new Timer(_ => OnGiveUp(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        connected = feed.Connected;
+        everConnected = connected;
+        PublishState();
+        mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError);
+        giveUpTimer = new Timer(
+            _ => mailbox.TryPost(new GiveUpExpired()),
+            null,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
+        commands = new SerializedMailbox<PlayerCommand>(DispatchCommand, OnCommandError);
         feed.OnConnectedChanged += OnConnectedChanged;
-        pump = Task.Run(PumpAsync);
-        commandPump = Task.Run(CommandLoopAsync);
+        pump = PumpAsync();
     }
 
     public static Watcher Create(int port, string? user, string? pass, bool useSse)
@@ -75,56 +91,33 @@ public sealed class Watcher : IMusicSource
         return new Watcher(feed, client, Dalamud.Utility.Util.IsWine());
     }
 
-    public void TogglePlay()   => commands.Writer.TryWrite(PlayerCommand.TogglePlay);
-    public void StopPlayback() => commands.Writer.TryWrite(PlayerCommand.Stop);
-    public void Next()         => commands.Writer.TryWrite(PlayerCommand.Next);
-    public void Previous()     => commands.Writer.TryWrite(PlayerCommand.Previous);
+    public void TogglePlay()   => commands.TryPost(PlayerCommand.TogglePlay);
+    public void StopPlayback() => commands.TryPost(PlayerCommand.Stop);
+    public void Next()         => commands.TryPost(PlayerCommand.Next);
+    public void Previous()     => commands.TryPost(PlayerCommand.Previous);
 
-    private async Task CommandLoopAsync()
-    {
-        try
+    private ValueTask DispatchCommand(PlayerCommand command)
+        => command switch
         {
-            await foreach (var command in commands.Reader.ReadAllAsync(cts.Token))
-            {
-                try
-                {
-                    await (command switch
-                    {
-                        PlayerCommand.TogglePlay => client.PlayOrPause(cts.Token),
-                        PlayerCommand.Stop => client.Stop(cts.Token),
-                        PlayerCommand.Next => client.PlayNext(cts.Token),
-                        PlayerCommand.Previous => client.PlayPrevious(cts.Token),
-                        _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
-                    });
-                }
-                catch (OperationCanceledException) when (cts.IsCancellationRequested) { break; }
-                catch (Exception e) { Plugin.Log.Verbose($"beefweb command failed: {e.Message}"); }
-            }
-        }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+            PlayerCommand.TogglePlay => client.PlayOrPause(cts.Token),
+            PlayerCommand.Stop => client.Stop(cts.Token),
+            PlayerCommand.Next => client.PlayNext(cts.Token),
+            PlayerCommand.Previous => client.PlayPrevious(cts.Token),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+
+    private void OnCommandError(Exception e, PlayerCommand _)
+    {
+        if (e is OperationCanceledException && cts.IsCancellationRequested) return;
+        Plugin.Log.Verbose($"beefweb command failed: {e.Message}");
     }
 
-    public event Action<SourceSnapshot?>? SnapshotChanged;
+    public event Action<SourceSnapshot?>? OnSnapshotChanged;
 
-    public SourceSnapshot? Current { get { lock (@lock) return BuildSnapshot(); } }
+    public SourceSnapshot? Current => published.Current;
 
-    public BeefwebStatus Status
-    {
-        get
-        {
-            lock (@lock)
-            {
-                var green = feed.Connected || (everConnected && !gaveUp);
-                UnsyncableSource? uns = null;
-                if (!gaveUp && currentObs is { RawPath: not null, State: not PulsarState.Stopped } o
-                    && !currentVerdict.Syncable)
-                    uns = new UnsyncableSource(Label(o), currentVerdict.Reason);
-                return new BeefwebStatus(green, uns);
-            }
-        }
-    }
+    public BeefwebStatus Status => published.Status;
 
-    // assumes @lock held
     private SourceSnapshot? BuildSnapshot()
     {
         if (gaveUp || currentObs is not { } o || o.State == PulsarState.Stopped) return null;
@@ -262,65 +255,104 @@ public sealed class Watcher : IMusicSource
         try
         {
             await foreach (var obs in feed.Observations(cts.Token))
-                await HandleObservation(obs);
+            {
+                var completion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!mailbox.TryPost(new ObservationReceived(obs, completion))) break;
+                await completion.Task;
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception e) { Plugin.Log.Error(e, "Beefweb Watcher pump crashed"); }
     }
 
+    private async ValueTask HandleMessage(Message message)
+    {
+        switch (message)
+        {
+            case ObservationReceived(var observation, var completion):
+                await HandleObservation(observation);
+                completion.TrySetResult();
+                break;
+            case ConnectionChanged(var value):
+                HandleConnectionChanged(value);
+                break;
+            case GiveUpExpired:
+                HandleGiveUp();
+                break;
+        }
+    }
+
+    private void OnMessageError(Exception e, Message message)
+    {
+        Plugin.Log.Error(e, "Beefweb Watcher message failed: {message}", message);
+        if (message is ObservationReceived(_, var completion)) completion.TrySetException(e);
+    }
+
     private async Task HandleObservation(Observation observation)
     {
-        bool triggerEvent;
-        bool trackChanged;
-        UnsyncableSource? warnUnsyncable = null;
-        lock (@lock)
-        {
-            var wasGiveUp = gaveUp;
-            gaveUp = false;
-            var ev = discriminator.Classify(observation);
-            currentObs = observation;
-            triggerEvent = ev is not null || wasGiveUp;
-            trackChanged = ev == CursorEvent.TrackChange;
+        var wasGiveUp = gaveUp;
+        gaveUp = false;
+        var ev = discriminator.Classify(observation);
+        currentObs = observation;
+        var triggerEvent = ev is not null || wasGiveUp;
+        var trackChanged = ev == CursorEvent.TrackChange;
 
-            var loaded = observation is { RawPath: not null, State: not PulsarState.Stopped };
-            currentVerdict = loaded ? Syncability.Check(observation.RawPath, isWine) : default;
-            var unsyncable = loaded && !currentVerdict.Syncable;
-            if (unsyncable && !wasUnsyncable) warnUnsyncable = new UnsyncableSource(Label(observation), currentVerdict.Reason);
-            wasUnsyncable = unsyncable;
-        }
+        var loaded = observation is { RawPath: not null, State: not PulsarState.Stopped };
+        currentVerdict = loaded ? Syncability.Check(observation.RawPath, isWine) : default;
+        var unsyncable = loaded && !currentVerdict.Syncable;
+        UnsyncableSource? warnUnsyncable = null;
+        if (unsyncable && !wasUnsyncable)
+            warnUnsyncable = new UnsyncableSource(Label(observation), currentVerdict.Reason);
+        wasUnsyncable = unsyncable;
         
         // Prevent a prefetch resolution race by forcing prefetch resolution here, before we inform upstream
         // TODO: this is sort of a hack, figure out a better architecture
         // Technically, this only affects prefetch-on-load, not the prefetch-near-finish...
         if (trackChanged) await ResolveNextAsync();
-        
+
+        PublishState();
         if (warnUnsyncable is { } n) NotifyUnsyncable(n, isWine);
-        if (triggerEvent) SnapshotChanged?.Invoke(Current);
+        if (triggerEvent) OnSnapshotChanged?.Invoke(published.Current);
     }
 
-    private void OnConnectedChanged(bool connected)
+    private void OnConnectedChanged(bool value) => mailbox.TryPost(new ConnectionChanged(value));
+
+    private void HandleConnectionChanged(bool value)
     {
-        if (connected)
+        connected = value;
+        if (value)
         {
-            lock (@lock) everConnected = true;
+            everConnected = true;
             giveUpTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         }
         else
         {
             giveUpTimer.Change(giveUpDelay, Timeout.InfiniteTimeSpan);
         }
+        PublishState();
     }
 
-    private void OnGiveUp()
+    private void HandleGiveUp()
     {
-        bool fire;
-        lock (@lock)
-        {
-            if (feed.Connected) return;
-            fire = !gaveUp && currentObs is { State: not PulsarState.Stopped };
-            gaveUp = true;
-        }
-        if (fire) SnapshotChanged?.Invoke(null);
+        if (connected) return;
+        var fire = !gaveUp && currentObs is { State: not PulsarState.Stopped };
+        gaveUp = true;
+        PublishState();
+        if (fire) OnSnapshotChanged?.Invoke(null);
+    }
+
+    private void PublishState()
+    {
+        var green = connected || (everConnected && !gaveUp);
+        UnsyncableSource? unsyncable = null;
+        if (!gaveUp && currentObs is { RawPath: not null, State: not PulsarState.Stopped } observation
+            && !currentVerdict.Syncable)
+            unsyncable = new UnsyncableSource(Label(observation), currentVerdict.Reason);
+
+        published = new PublishedState(
+            BuildSnapshot(),
+            new BeefwebStatus(green, unsyncable));
     }
 
     private static string Label(Observation o)
@@ -359,11 +391,11 @@ public sealed class Watcher : IMusicSource
     public async ValueTask DisposeAsync()
     {
         feed.OnConnectedChanged -= OnConnectedChanged;
-        commands.Writer.TryComplete();
         cts.Cancel();
-        await giveUpTimer.DisposeAsync();
         try { await pump; } catch { /* cancellation */ }
-        await commandPump;
+        await mailbox.DisposeAsync();
+        await giveUpTimer.DisposeAsync();
+        await commands.DisposeAsync();
         await feed.DisposeAsync();
         client.Dispose();
         cts.Dispose();

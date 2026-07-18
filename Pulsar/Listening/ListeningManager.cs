@@ -82,7 +82,13 @@ public class ListeningManager : IAsyncDisposable
     private sealed record PairVolumeSet(ulong Ident, float Value) : Message;
     private sealed record PairMutedSet(ulong Ident, bool Value) : Message;
     private sealed record PlaybackEnded(EndReason Reason) : Message;
+    private sealed record EngineChanged(EngineSnapshot Snapshot) : Message;
     private sealed record EngineReconnected : Message;
+    private sealed record PollTick(long Generation) : Message;
+    private sealed record PollCompleted(
+        long Generation,
+        EngineSnapshot? Snapshot,
+        Exception? Error) : Message;
     private sealed record PlaybackTarget(ulong SourceId, int CursorEpoch, string Path);
 
     private sealed record PublishedState(
@@ -137,14 +143,11 @@ public class ListeningManager : IAsyncDisposable
     public bool HasPin => published.HasPin;
 
     private readonly Task messageLoop;
-
-    private readonly Task updateLoop;
-    
     private readonly CancellationTokenSource asyncCts  = new();
-
-    // A reconnect should end the connection-loss backoff immediately. Keep this
-    // bounded so repeated reconnect notifications cannot accumulate stale wakes.
-    private readonly SemaphoreSlim reconnectSignal = new(0, 1);
+    private CancellationTokenSource? pollDelayCts;
+    private Task? pollDelayTask;
+    private Task? pollTask;
+    private long pollGeneration;
 
     private readonly TimeSpan updatePoll;
     private readonly TimeSpan errorBackoff;
@@ -173,8 +176,8 @@ public class ListeningManager : IAsyncDisposable
         this.engine.OnPlaybackEnded += OnPlaybackEnded;
         this.engine.OnChanged += OnEngineChanged;
 
-        messageLoop = Task.Run(() => MessageLoop(asyncCts.Token));
-        updateLoop = Task.Run(() => UpdateLoop(asyncCts.Token));
+        messageLoop = MessageLoop(asyncCts.Token);
+        Post(new PollTick(pollGeneration));
     }
 
     public async ValueTask DisposeAsync()
@@ -185,18 +188,15 @@ public class ListeningManager : IAsyncDisposable
         asyncCts.Cancel();
         mailbox.Writer.TryComplete();
         await messageLoop;
-        await updateLoop;
+        if (pollTask is not null) await pollTask;
+        await CancelPollDelay();
+        asyncCts.Dispose();
     }
 
     /// <summary>
     /// Called after the audio host reconnects.
     /// </summary>
-    public void OnEngineReconnected()
-    {
-        Post(new EngineReconnected());
-        try { reconnectSignal.Release(); }
-        catch (SemaphoreFullException) { }
-    }
+    public void OnEngineReconnected() => Post(new EngineReconnected());
 
     public void AddOrUpdatePair(ulong ident, string? displayName, PairData data)
         => Post(new PairUpdated(ident, displayName, data));
@@ -252,49 +252,91 @@ public class ListeningManager : IAsyncDisposable
         published = new PublishedState(list, autoPlay, pinnedName is not null);
     }
 
-    /// <summary>
-    /// Polls the playback engine periodically to refresh the ticking position. Discrete
-    /// transitions arrive immediately through OnEngineChanged; this is UI-only interpolation.
-    /// </summary>
-    private async Task UpdateLoop(CancellationToken token)
+    private async Task PollEngine(long generation, CancellationToken token)
     {
-        while (!token.IsCancellationRequested)
+        EngineSnapshot? snapshot = null;
+        Exception? error = null;
+        try
         {
-            try
-            {
-                var state = await engine.GetStateAsync(token);
-                PublishEngineSnapshot(state);
-                // A successful poll makes any unconsumed reconnect wake obsolete.
-                while (reconnectSignal.Wait(0, token)) { }
-                await Task.Delay(updatePoll, token);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (TaskCanceledException) when (token.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (ConnectionLostException)
-            {
-                Plugin.Log.Warning("Connection to audio host lost");
-                // back off
-                try { await reconnectSignal.WaitAsync(lostBackoff, token); }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error(ex, "Error in ListeningManager UpdateLoop");
-                // back off
-                try { await Task.Delay(errorBackoff, token); }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
-            }
+            snapshot = await engine.GetStateAsync(token);
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+
+        Post(new PollCompleted(generation, snapshot, error));
     }
 
     private void OnPlaybackEnded(object? _, EndReason reason) => Post(new PlaybackEnded(reason));
-    private void OnEngineChanged(object? _, EngineSnapshot snapshot) => PublishEngineSnapshot(snapshot);
+    private void OnEngineChanged(object? _, EngineSnapshot snapshot) => Post(new EngineChanged(snapshot));
+
+    private async ValueTask SchedulePoll(TimeSpan delay)
+    {
+        await CancelPollDelay();
+        var generation = ++pollGeneration;
+        if (delay <= TimeSpan.Zero)
+        {
+            Post(new PollTick(generation));
+            return;
+        }
+
+        pollDelayCts = CancellationTokenSource.CreateLinkedTokenSource(asyncCts.Token);
+        pollDelayTask = PostPollAfterDelay(delay, generation, pollDelayCts.Token);
+    }
+
+    private async Task PostPollAfterDelay(TimeSpan delay, long generation, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(delay, token);
+            Post(new PollTick(generation));
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+
+    private async ValueTask CancelPollDelay()
+    {
+        pollDelayCts?.Cancel();
+        if (pollDelayTask is not null) await pollDelayTask;
+        pollDelayCts?.Dispose();
+        pollDelayCts = null;
+        pollDelayTask = null;
+    }
+
+    private void StartPoll(long generation, CancellationToken token)
+    {
+        if (generation != pollGeneration || pollTask is not null) return;
+        pollDelayCts?.Dispose();
+        pollDelayCts = null;
+        pollDelayTask = null;
+        pollTask = PollEngine(generation, token);
+    }
+
+    private async ValueTask HandlePollCompleted(
+        long generation,
+        EngineSnapshot? snapshot,
+        Exception? error)
+    {
+        if (generation != pollGeneration) return;
+        pollTask = null;
+        switch (error)
+        {
+            case null:
+                if (snapshot is not null) PublishEngineSnapshot(snapshot);
+                await SchedulePoll(updatePoll);
+                break;
+            case ConnectionLostException:
+                Plugin.Log.Warning("Connection to audio host lost");
+                await SchedulePoll(lostBackoff);
+                break;
+            default:
+                Plugin.Log.Error(error, "Error polling the listening engine");
+                await SchedulePoll(errorBackoff);
+                break;
+        }
+    }
 
     private void Apply(Message message)
     {
@@ -398,8 +440,32 @@ public class ListeningManager : IAsyncDisposable
             try
             {
                 if (!await mailbox.Reader.WaitToReadAsync(token)) break;
-                while (mailbox.Reader.TryRead(out var message)) Apply(message);
-                await ReconcileActive(token);
+                var reconcile = false;
+                while (mailbox.Reader.TryRead(out var message))
+                {
+                    switch (message)
+                    {
+                        case EngineChanged(var snapshot):
+                            PublishEngineSnapshot(snapshot);
+                            break;
+                        case PollTick(var generation):
+                            StartPoll(generation, token);
+                            break;
+                        case PollCompleted(var generation, var snapshot, var error):
+                            await HandlePollCompleted(generation, snapshot, error);
+                            break;
+                        case EngineReconnected:
+                            Apply(message);
+                            if (pollTask is null) await SchedulePoll(TimeSpan.Zero);
+                            reconcile = true;
+                            break;
+                        default:
+                            Apply(message);
+                            reconcile = true;
+                            break;
+                    }
+                }
+                if (reconcile) await ReconcileActive(token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -460,64 +526,58 @@ public class ListeningManager : IAsyncDisposable
         if (activeId is not { } sourceId || active is null)
         {
             playbackTarget = null;
-            Volatile.Write(ref playback,
-                new ListenerPlaybackView(ListenerPlaybackStatus.Idle, null, null));
+            PublishPlayback(new ListenerPlaybackView(ListenerPlaybackStatus.Idle, null, null));
             return;
         }
 
         var target = new PlaybackTarget(sourceId, active.Data.CursorEpoch, active.Data.FilePath);
         if (target == playbackTarget) return;
         playbackTarget = target;
-        Volatile.Write(ref playback,
-            new ListenerPlaybackView(ListenerPlaybackStatus.Loading, target.Path, null));
+        PublishPlayback(new ListenerPlaybackView(ListenerPlaybackStatus.Loading, target.Path, null));
     }
 
     private void MarkPlayback(ListenerPlaybackStatus status)
     {
-        var current = Volatile.Read(ref playback);
-        Volatile.Write(ref playback, current with { Status = status, Position = null });
+        PublishPlayback(playback with { Status = status, Position = null });
     }
 
     private void PublishEngineSnapshot(EngineSnapshot snapshot)
     {
-        while (true)
+        var current = playback;
+        ListenerPlaybackView next;
+        if (current.TargetPath is null)
         {
-            var current = Volatile.Read(ref playback);
-            ListenerPlaybackView next;
-            if (current.TargetPath is null)
-            {
-                next = new ListenerPlaybackView(ListenerPlaybackStatus.Idle, null, null);
-            }
-            else if (snapshot.Path != current.TargetPath)
-            {
-                next = current.Status is ListenerPlaybackStatus.Ended or ListenerPlaybackStatus.Failed
-                    ? current
-                    : current with { Status = ListenerPlaybackStatus.Loading, Position = null };
-            }
-            else
-            {
-                next = snapshot.State switch
-                {
-                    PlaybackState.Playing => current with
-                    {
-                        Status = ListenerPlaybackStatus.Playing,
-                        Position = snapshot.Position,
-                    },
-                    PlaybackState.Paused => current with
-                    {
-                        Status = ListenerPlaybackStatus.Paused,
-                        Position = snapshot.Position,
-                    },
-                    _ => current with { Status = ListenerPlaybackStatus.Loading, Position = snapshot.Position },
-                };
-            }
-
-            if (ReferenceEquals(
-                    Interlocked.CompareExchange(ref playback, next, current),
-                    current))
-                return;
+            next = new ListenerPlaybackView(ListenerPlaybackStatus.Idle, null, null);
         }
+        else if (snapshot.Path != current.TargetPath)
+        {
+            next = current.Status is ListenerPlaybackStatus.Ended or ListenerPlaybackStatus.Failed
+                ? current
+                : current with { Status = ListenerPlaybackStatus.Loading, Position = null };
+        }
+        else
+        {
+            next = snapshot.State switch
+            {
+                PlaybackState.Playing => current with
+                {
+                    Status = ListenerPlaybackStatus.Playing,
+                    Position = snapshot.Position,
+                },
+                PlaybackState.Paused => current with
+                {
+                    Status = ListenerPlaybackStatus.Paused,
+                    Position = snapshot.Position,
+                },
+                _ => current with { Status = ListenerPlaybackStatus.Loading, Position = snapshot.Position },
+            };
+        }
+
+        PublishPlayback(next);
     }
+
+    private void PublishPlayback(ListenerPlaybackView value)
+        => Volatile.Write(ref playback, value);
 
     /// <summary>
     /// Contains the "which source should actually be playing" logic.

@@ -73,7 +73,7 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         await TestWait.Assert(() => watcher.Status.Connected, "the initial stopped frame arrives");
 
         var seen = new List<(string? Path, bool? Playing)>();
-        watcher.SnapshotChanged += snapshot =>
+        watcher.OnSnapshotChanged += snapshot =>
         {
             lock (seen) seen.Add((snapshot?.FilePath, snapshot?.IsPlaying));
         };

@@ -1,29 +1,33 @@
 using System;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Pulsar.Common.Api;
+using Pulsar.Concurrency;
 
 namespace Pulsar.Playback;
 
 internal class EngineQueueManager : IAsyncDisposable
 {
+    private abstract record Command;
+    private sealed record Playback(PlaybackCommand Value) : Command;
+    private sealed record ReapplyVolumeRequested : Command;
+
     private readonly IRemoteEngine player;
-    private readonly Task commandLoop;
-    
-    private readonly Channel<PlaybackCommand> mailbox =
-        Channel.CreateUnbounded<PlaybackCommand>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly SerializedMailbox<Command> commands;
+    private readonly CancellationToken ct;
+    // Owned by the serialized command handler.
+    private float latestVolume = -1f;
 
     internal EngineQueueManager(IRemoteEngine engine, CancellationToken ct)
     {
         player = engine;
-        commandLoop = Task.Run(() => CommandLoop(ct));
+        this.ct = ct;
+        commands = new SerializedMailbox<Command>(
+            command => new ValueTask(Dispatch(command, ct)),
+            OnCommandError);
     }
     
-    public async ValueTask DisposeAsync()
-    {
-        await commandLoop;
-    }
+    public ValueTask DisposeAsync() => commands.DisposeAsync();
     
     internal void Load(string path, TimeSpan position, bool startPlaying) 
         => Enqueue(new LoadCommand(path, position, startPlaying));
@@ -31,75 +35,41 @@ internal class EngineQueueManager : IAsyncDisposable
     internal void Pause() => Enqueue(new PauseCommand());
     internal void Resume() => Enqueue(new ResumeCommand());
 
-    // Since we're doing RPCs in Dispatch(), I'm mildly concerned that a GC stall
-    // or general CPU pressure could mean we can't keep up with the incoming rate
-    // volume/seek reqs, since those are sliders in the UI. So we'll keep track
-    // of the last volume and seek position separately, and in Dispatch() read
-    // directly from these fields for the Volume/Seek commands, rather than the
-    // commands themselves. It's a bit of a hack, and it's definitely unnecessary
-    // 99% of the time. But, this will be way better UX than the alternative.
-    private volatile float latestVolume = -1f; // -1 == no volume ever set
-    internal void Volume(float volume)
+    internal void Volume(float volume) => Enqueue(new VolumeCommand(volume));
+
+    internal void ReapplyVolume() => commands.TryPost(new ReapplyVolumeRequested());
+
+    internal void Seek(TimeSpan position) => Enqueue(new SeekCommand(position));
+
+    private void Enqueue(PlaybackCommand command) => commands.TryPost(new Playback(command));
+
+    private void OnCommandError(Exception ex, Command command)
     {
-        latestVolume = volume;
-        Enqueue(new VolumeCommand(volume));
+        if (ex is OperationCanceledException && ct.IsCancellationRequested) return;
+        // TODO: surface this to the user... somehow.
+        Plugin.Log.Error(ex, "Error while dispatching playback command {command}", command);
     }
 
-    internal void ReapplyVolume()
-    {
-        if (latestVolume >= 0) Enqueue(new VolumeCommand(latestVolume));
-    }
-
-    private long latestPositionTicks;
-    internal void Seek(TimeSpan position)
-    {
-        Interlocked.Exchange(ref latestPositionTicks, position.Ticks);
-        Enqueue(new SeekCommand(position));
-    }
-
-    private void Enqueue(PlaybackCommand command) => mailbox.Writer.TryWrite(command);
-
-    private async Task CommandLoop(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                var command = await mailbox.Reader.ReadAsync(ct);
-                try
-                {
-                    await Dispatch(command, ct);
-                }
-                catch (Exception ex)
-                {
-                    // TODO: surface this to the user... somehow.
-                    Plugin.Log.Error(ex, "Error while dispatching playback command {command}", command);
-                }
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.Error(ex, "Unexpected error in EQM command loop");
-            }
-        }
-    }
-
-    private async Task Dispatch(PlaybackCommand command, CancellationToken ct)
+    private async Task Dispatch(Command command, CancellationToken ct)
     {
         var task = command switch
         {
-            LoadCommand l => player.LoadFileAsync(l.Path, l.Position, l.Playing, ct),
-            SeekCommand 
-                => player.SeekAsync(TimeSpan.FromTicks(Interlocked.Read(ref latestPositionTicks)), ct),
-            VolumeCommand => player.SetVolumeAsync(latestVolume, ct),
-            PauseCommand => player.PauseAsync(ct),
-            ResumeCommand => player.ResumeAsync(ct),
-            StopCommand => player.StopAsync(ct),
+            Playback(LoadCommand l) => player.LoadFileAsync(l.Path, l.Position, l.Playing, ct),
+            Playback(SeekCommand s) => player.SeekAsync(s.Position, ct),
+            Playback(VolumeCommand v) => SetVolume(v.Volume, ct),
+            Playback(PauseCommand) => player.PauseAsync(ct),
+            Playback(ResumeCommand) => player.ResumeAsync(ct),
+            Playback(StopCommand) => player.StopAsync(ct),
+            ReapplyVolumeRequested when latestVolume >= 0 => player.SetVolumeAsync(latestVolume, ct),
+            ReapplyVolumeRequested => Task.CompletedTask,
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null)
         };
         await task;
+    }
+
+    private Task SetVolume(float value, CancellationToken ct)
+    {
+        latestVolume = value;
+        return player.SetVolumeAsync(value, ct);
     }
 }

@@ -27,16 +27,15 @@ public sealed class Jukebox(IRemoteEngine player, string directory) : IMusicSour
     {
         get
         {
-            var track = Player.CurrentTrack;
+            var (_, _, _, pos, playbackState, track, nextTrack) = Player.View;
             // null means not playing anything. As in, "not broadcasting".
             // This doesn't include paused - paused syncs as PlaybackState.Paused.
-            if (Player.State == PlaybackState.Stopped || track is null) return null;
+            if (playbackState == PlaybackState.Stopped || track is null) return null;
 
-            var pos = Player.Position;
             return new SourceSnapshot(
                 track,
-                Player.NextTrack,
-                Player.State == PlaybackState.Playing,
+                nextTrack,
+                playbackState == PlaybackState.Playing,
                 pos?.Current ?? TimeSpan.Zero,
                 DateTimeOffset.UtcNow,
                 new TrackMeta
@@ -47,8 +46,8 @@ public sealed class Jukebox(IRemoteEngine player, string directory) : IMusicSour
         }
     }
 
-    public event Action<SourceSnapshot?>? SnapshotChanged;
-    private void OnPlayerChanged(EngineSnapshot _) => SnapshotChanged?.Invoke(Current);
+    public event Action<SourceSnapshot?>? OnSnapshotChanged;
+    private void OnPlayerChanged(EngineSnapshot _) => OnSnapshotChanged?.Invoke(Current);
 
     public async ValueTask DisposeAsync()
     {

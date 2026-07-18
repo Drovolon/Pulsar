@@ -40,7 +40,7 @@ public class BeefwebWatcherTests : IAsyncLifetime
     {
         // The watcher takes ownership of the client (disposes it); the server outlives it.
         watcher = new Watcher(feed, server.CreateClient(), isWine: false, giveUpDelay);
-        watcher.SnapshotChanged += _ => Interlocked.Increment(ref changes);
+        watcher.OnSnapshotChanged += _ => Interlocked.Increment(ref changes);
         return watcher;
     }
 
