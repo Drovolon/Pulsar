@@ -37,13 +37,13 @@ The big TL;DR of how Pulsar slots into this ecosystem:
 * Sync plugins get player data from either GetPlayerData() IPC or OnPlayerDataChanged() messages
 * Player data has:
   1. the current active file that should be synced
-  2. a list of files to sync for prefetch (not yet implemented, list is always empty)
+  2. one file to sync for prefetch (not yet implemented, path is always empty)
   3. an *opaque* (to the sync plugin) blob that includes DJ playback position, track metadata like calculated loudness, original filename, artist & album & song title
 * Sync plugin does the file syncing and whatnot
 * On *a pair's machine* sync plugin calls SetPlayerData with:
   1. an address of the *source* player in the object table (just like other plugins whose data is synced)
   2. the listener-local active file path (which was synced by the plugin)
-  3. any prefetch file paths
+  3. the listener-local prefetch file path, or an empty string when there is none
   4. the sync-opaque data blob from the other client
 * The listener's client will show it as an available listening source; depending on whether they're broadcasting themselves, whether they're listening to someone else, whether they have autoplay enabled, etc., it may or may not start automatically playing
 * If the broadcaster leaves visibility, or logs off, etc., the sync plugin calls ClearPlayerData()

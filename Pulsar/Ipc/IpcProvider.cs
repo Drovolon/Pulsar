@@ -37,21 +37,21 @@ internal sealed class IpcProvider : IDisposable
     internal sealed record Gates(
         ICallGateProvider<object?> Ready,
         ICallGateProvider<object?> Disposing,
-        ICallGateProvider<string, string[], string, object?> PlayerDataChanged,
+        ICallGateProvider<string, string, string, object?> PlayerDataChanged,
         ICallGateProvider<bool> IsEnabled,
         ICallGateProvider<(int, int)> ApiVersion,
-        ICallGateProvider<(string, string[], string)?> GetPlayerData,
-        ICallGateProvider<ulong, string, string[], string, object?> SetPlayerData,
+        ICallGateProvider<(string, string, string)?> GetPlayerData,
+        ICallGateProvider<ulong, string, string, string, object?> SetPlayerData,
         ICallGateProvider<ulong, object?> ClearPlayerData)
     {
         public static Gates From(IDalamudPluginInterface pi) => new(
             pi.GetIpcProvider<object?>("Pulsar.OnReady"),
             pi.GetIpcProvider<object?>("Pulsar.OnDisposing"),
-            pi.GetIpcProvider<string, string[], string, object?>("Pulsar.OnPlayerDataChanged"),
+            pi.GetIpcProvider<string, string, string, object?>("Pulsar.OnPlayerDataChanged"),
             pi.GetIpcProvider<bool>("Pulsar.IsEnabled"),
             pi.GetIpcProvider<(int, int)>("Pulsar.ApiVersion"),
-            pi.GetIpcProvider<(string, string[], string)?>("Pulsar.GetPlayerData"),
-            pi.GetIpcProvider<ulong, string, string[], string, object?>("Pulsar.SetPlayerData"),
+            pi.GetIpcProvider<(string, string, string)?>("Pulsar.GetPlayerData"),
+            pi.GetIpcProvider<ulong, string, string, string, object?>("Pulsar.SetPlayerData"),
             pi.GetIpcProvider<ulong, object?>("Pulsar.ClearPlayerData"));
     }
 
@@ -62,11 +62,11 @@ internal sealed class IpcProvider : IDisposable
 
     private readonly ICallGateProvider<object?> ready;
     private readonly ICallGateProvider<object?> disposing;
-    private readonly ICallGateProvider<string, string[], string, object?> playerDataChanged;
+    private readonly ICallGateProvider<string, string, string, object?> playerDataChanged;
     private readonly ICallGateProvider<bool> isEnabled;
     private readonly ICallGateProvider<(int, int)> apiVersion;
-    private readonly ICallGateProvider<(string, string[], string)?> getPlayerData;
-    private readonly ICallGateProvider<ulong, string, string[], string, object?> setPlayerData;
+    private readonly ICallGateProvider<(string, string, string)?> getPlayerData;
+    private readonly ICallGateProvider<ulong, string, string, string, object?> setPlayerData;
     private readonly ICallGateProvider<ulong, object?> clearPlayerData;
 
     public IpcProvider(IDalamudPluginInterface pi, ListeningManager listening, BroadcastManager broadcast)
@@ -107,7 +107,7 @@ internal sealed class IpcProvider : IDisposable
         if (Enabled) ready.SendMessage();
     }
 
-    private void OnSetPlayerData(ulong ident, string currentFile, string[] prefetchFiles, string cursorJson)
+    private void OnSetPlayerData(ulong ident, string currentFile, string prefetchFile, string cursorJson)
     {
         try
         {
@@ -177,7 +177,7 @@ internal sealed class IpcProvider : IDisposable
         }
     }
 
-    private (string, string[], string)? GetPlayerData()
+    private (string, string, string)? GetPlayerData()
     {
         try
         {
@@ -195,7 +195,7 @@ internal sealed class IpcProvider : IDisposable
         }
     }
 
-    internal void PublishPlayerData((string, string[], PulsarCursor)? data)
+    internal void PublishPlayerData((string, string, PulsarCursor)? data)
     {
         _ = Plugin.Framework.RunOnFrameworkThread(() =>
         {
@@ -203,7 +203,7 @@ internal sealed class IpcProvider : IDisposable
             {
                 if (data is null)
                 {
-                    playerDataChanged.SendMessage("", [], "");
+                    playerDataChanged.SendMessage("", "", "");
                     return;
                 }
                 var (currentFile, prefetch, cursor) = data.Value;
@@ -219,7 +219,7 @@ internal sealed class IpcProvider : IDisposable
     /// Routes local broadcast data through the same JSON and inbound mapping path used by
     /// an external sync plugin, without depending on Dalamud's call-gate registry.
     /// </summary>
-    internal void ApplyDebugLoopback((string, string[], PulsarCursor)? data)
+    internal void ApplyDebugLoopback((string, string, PulsarCursor)? data)
     {
         if (data is null)
         {

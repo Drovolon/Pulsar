@@ -15,7 +15,7 @@ public enum BroadcastMode { Folder, Mod, Beefweb }
 
 internal abstract record BroadcastOutput
 {
-    public sealed record PlayerDataChanged((string, string[], PulsarCursor)? Data) : BroadcastOutput;
+    public sealed record PlayerDataChanged((string, string, PulsarCursor)? Data) : BroadcastOutput;
     public sealed record BroadcastingChanged(bool Value) : BroadcastOutput;
 }
 
@@ -35,7 +35,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     private sealed record PublishedState(
         IMusicSource? Active,
         SourceSnapshot? Snapshot,
-        (string, string[], PulsarCursor)? PlayerData);
+        (string, string, PulsarCursor)? PlayerData);
 
     private readonly IModResolver penumbra;
     private readonly SyncPrep prep;
@@ -56,8 +56,8 @@ public sealed class BroadcastManager : IAsyncDisposable
     // late event from a torn-down source can be told apart from the live one.
     private Action<SourceSnapshot?>? activeSourceHandler;
 
-    private (string, string[], PulsarCursor)? holdValue;     // last computed manifest; the transcode-gap hold
-    private (string, string[], PulsarCursor)? lastAnnounced; // last payload delivered; the dedup comparand
+    private (string, string, PulsarCursor)? holdValue;     // last computed manifest; the transcode-gap hold
+    private (string, string, PulsarCursor)? lastAnnounced; // last payload delivered; the dedup comparand
 
     private readonly Channel<BroadcastOutput> outputs = Channel.CreateUnbounded<BroadcastOutput>(
         new UnboundedChannelOptions { SingleReader = true });
@@ -141,7 +141,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         else if (source is not null) await source.DisposeAsync();
     }
 
-    public (string, string[], PulsarCursor)? CurrentPlayerData() => published.PlayerData;
+    public (string, string, PulsarCursor)? CurrentPlayerData() => published.PlayerData;
 
     private void Post(Message message) => mailbox.TryPost(message);
 
@@ -212,7 +212,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         if (old is not null) await old.DisposeAsync();
     }
 
-    private (string, string[], PulsarCursor)? ComputePlayerData()
+    private (string, string, PulsarCursor)? ComputePlayerData()
     {
         var snap = activeSnapshot;
         if (snap is null) return null;
@@ -279,14 +279,14 @@ public sealed class BroadcastManager : IAsyncDisposable
         outputs.Writer.TryWrite(new BroadcastOutput.PlayerDataChanged(data));
     }
 
-    private void Publish((string, string[], PulsarCursor)? data)
+    private void Publish((string, string, PulsarCursor)? data)
         => published = new PublishedState(active, activeSnapshot, data);
 
     /// <summary>
     /// Checks if two Pulsar IPC payloads are equal - ignoring prefetch.
     /// </summary>
     private static bool EqualsIgnoringPrefetch(
-        (string, string[], PulsarCursor)? a, (string, string[], PulsarCursor)? b)
+        (string, string, PulsarCursor)? a, (string, string, PulsarCursor)? b)
     {
         if (a is null || b is null) return a is null && b is null;
         var (fa, _, ca) = a.Value;
@@ -294,10 +294,10 @@ public sealed class BroadcastManager : IAsyncDisposable
         return fa == fb && ca == cb;
     }
 
-    private static (string, string[], PulsarCursor) Map(SourceSnapshot s, PreparedTrack p, int epoch) =>
+    private static (string, string, PulsarCursor) Map(SourceSnapshot s, PreparedTrack p, int epoch) =>
     (
         p.SyncPath,
-        [],
+        "",
         new PulsarCursor
         {
             PositionMs  = (long)s.Position.TotalMilliseconds,

@@ -56,7 +56,7 @@ public class IpcProviderTests : IAsyncLifetime
     {
         // A buggy peer must never explode into Dalamud's IPC dispatch.
         var ex = Record.Exception(() =>
-            gates.SetPlayerData.Action!(7UL, @"C:\x.opus", [], "{this is not json"));
+            gates.SetPlayerData.Action!(7UL, @"C:\x.opus", "", "{this is not json"));
         Assert.Null(ex);
         Assert.Empty(listening.View); // and no half-built pair materializes
     }
@@ -77,8 +77,8 @@ public class IpcProviderTests : IAsyncLifetime
 
         await broadcast.SetSource(null);
         await TestWait.Assert(() =>
-            gates.PlayerDataChanged.Sent[^1] is [string f, string[] p, string c]
-                && f == "" && p.Length == 0 && c == "",
+            gates.PlayerDataChanged.Sent[^1] is [string f, string p, string c]
+                && f == "" && p == "" && c == "",
             "a stop goes out as the empty triple");
     }
 }

@@ -21,13 +21,13 @@ public class BroadcastFlowTests : IAsyncLifetime
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-bf-test-");
     private readonly ControllablePrepareService service = new();
-    private readonly List<(string, string[], PulsarCursor)?> events = [];
+    private readonly List<(string, string, PulsarCursor)?> events = [];
     private readonly List<bool> broadcastingEvents = [];
     private SyncPrep? prep;
     private BroadcastManager? manager;
     private Task? outputPump;
     private volatile Task? outputStall;
-    private Action<(string, string[], PulsarCursor)?>? outputProbe;
+    private Action<(string, string, PulsarCursor)?>? outputProbe;
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -63,7 +63,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         return manager;
     }
 
-    private (string, string[], PulsarCursor)?[] Events
+    private (string, string, PulsarCursor)?[] Events
     {
         get { lock (events) return [.. events]; }
     }

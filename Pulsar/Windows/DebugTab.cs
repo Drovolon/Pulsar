@@ -148,7 +148,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
         try
         {
             var data = Plugin.PluginInterface
-                .GetIpcSubscriber<(string, string[], string)?>("Pulsar.GetPlayerData")
+                .GetIpcSubscriber<(string, string, string)?>("Pulsar.GetPlayerData")
                 .InvokeFunc();
             if (data is null)
             {
@@ -158,7 +158,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
 
             var (currentFile, prefetch, cursorJson) = data.Value;
             lastQueryResult =
-                $"GetPlayerData: \n  file: {currentFile}\n  prefetch: [{string.Join(", ", prefetch)}]\n  cursor: {cursorJson}";
+                $"GetPlayerData: \n  file: {currentFile}\n  prefetch: {prefetch}\n  cursor: {cursorJson}";
         }
         catch (Exception e)
         {
@@ -181,8 +181,8 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
             };
             var cursorJson = JsonSerializer.Serialize(cursor);
             Plugin.PluginInterface
-                .GetIpcSubscriber<ulong, string, string[], string, object?>("Pulsar.SetPlayerData")
-                .InvokeAction((ulong)dbgIdent, dbgPath, [], cursorJson);
+                .GetIpcSubscriber<ulong, string, string, string, object?>("Pulsar.SetPlayerData")
+                .InvokeAction((ulong)dbgIdent, dbgPath, "", cursorJson);
         }
         catch (Exception e)
         {

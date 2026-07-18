@@ -89,11 +89,11 @@ internal sealed class FakeIpcGates
 {
     public FakeCallGate<object?> Ready { get; } = new();
     public FakeCallGate<object?> Disposing { get; } = new();
-    public FakeCallGate<string, string[], string, object?> PlayerDataChanged { get; } = new();
+    public FakeCallGate<string, string, string, object?> PlayerDataChanged { get; } = new();
     public FakeCallGate<bool> IsEnabled { get; } = new();
     public FakeCallGate<(int, int)> ApiVersion { get; } = new();
-    public FakeCallGate<(string, string[], string)?> GetPlayerData { get; } = new();
-    public FakeCallGate<ulong, string, string[], string, object?> SetPlayerData { get; } = new();
+    public FakeCallGate<(string, string, string)?> GetPlayerData { get; } = new();
+    public FakeCallGate<ulong, string, string, string, object?> SetPlayerData { get; } = new();
     public FakeCallGate<ulong, object?> ClearPlayerData { get; } = new();
 
     public IpcProvider.Gates Gates => new(Ready, Disposing, PlayerDataChanged, IsEnabled,

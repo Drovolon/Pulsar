@@ -14,11 +14,15 @@ components:
 
 This format is based on [AI-DECLARATION.md](https://ai-declaration.md/en/0.1.1).
 
+## Philosophy
+
+I try to keep a light touch with LLMs. Sociopolitical concerns aside, they can be very handy, **if** appropriately directed.
+
 ## Legend
 
 Paraphrasing my understanding of ai-declaration.md:
 
-* **hint**: human does the all work, uses LLM for passive suggestions
+* **hint**: human does the all work, uses LLM for passive suggestions/review
 * **assist**: human gives specific prompts, LLM does specific, scoped work
 * **copilot**: human provides a prompt and steps back, lets the LLM do most of the work
 
