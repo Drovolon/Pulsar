@@ -284,8 +284,9 @@ public class FilePlayerTests : IDisposable
 
         player.Volume(0.5f);
         // Commands apply in order: once the seek below is observable, the volume is too.
-        player.Seek(TimeSpan.Zero);
-        await TestWait.Assert(() => player.Position is { Current: var c } && c == TimeSpan.Zero, "marker seek lands");
+        var marker = TimeSpan.FromMilliseconds(100);
+        player.Seek(marker);
+        await TestWait.Assert(() => player.Position is { Current: var c } && c == marker, "marker seek lands");
 
         var bytes = new byte[4096];
         var read = device.Provider!.Read(bytes);

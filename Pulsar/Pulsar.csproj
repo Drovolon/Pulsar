@@ -44,6 +44,26 @@
     <ProjectReference Include="..\Pulsar.TranscodeHost\Pulsar.TranscodeHost.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Pulsar.json" />
+  </ItemGroup>
+
+  <Target Name="SetPulsarSourceRevisionId" BeforeTargets="InitializeSourceControlInformationFromSourceControlManager;InitializeSourceControlInformation" Condition="'$(SourceRevisionId)' == ''">
+    <Exec Condition="'$(Configuration)' == 'Debug' and Exists('$(MSBuildProjectDirectory)/../.git')" Command="git describe --tags --dirty --always --long" WorkingDirectory="$(MSBuildProjectDirectory)/.." ConsoleToMsBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low" StandardErrorImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_PulsarGitDescribeOutput" />
+      <Output TaskParameter="ExitCode" PropertyName="_PulsarGitDescribeExitCode" />
+    </Exec>
+
+    <PropertyGroup Condition="'$(Configuration)' == 'Debug' and '$(_PulsarGitDescribeExitCode)' == '0' and '@(_PulsarGitDescribeOutput)' != ''">
+      <SourceRevisionId>@(_PulsarGitDescribeOutput)</SourceRevisionId>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(SourceRevisionId)' == ''">
+      <SourceRevisionId Condition="'$(Configuration)' == 'Debug'">local</SourceRevisionId>
+      <SourceRevisionId Condition="'$(Configuration)' != 'Debug'">build$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss:fffZ"))</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
+
   <!-- HostProcessManager spawns the hosts from the plugin directory, so their build output has
        to land in ours. The ItemGroup lives inside the target so it's evaluated after the hosts
        build; at the top level it would be empty on a clean first build. -->

@@ -24,6 +24,14 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Docs", "Docs", "{A8A4D039-C
 		AI-DECLARATION.md = AI-DECLARATION.md
 	EndProjectSection
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Deployment", "Deployment", "{58C4CD77-4EEF-4B89-A7A5-48B265185B30}"
+	ProjectSection(SolutionItems) = preProject
+		.github\scripts\New-DalamudRepoJson.ps1 = .github\scripts\New-DalamudRepoJson.ps1
+		.github\scripts\Publish-DalamudRepoBranch.ps1 = .github\scripts\Publish-DalamudRepoBranch.ps1
+		.github\workflows\pr-build.yml = .github\workflows\pr-build.yml
+		.github\workflows\release.yml = .github\workflows\release.yml
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64

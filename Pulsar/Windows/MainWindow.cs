@@ -1,5 +1,7 @@
 using System;
+using System.Globalization;
 using System.Numerics;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
@@ -24,7 +26,7 @@ public class MainWindow : Window, IDisposable
     private readonly DebugTab debugTab;
 
     public MainWindow(Plugin plugin)
-        : base("Pulsar##pulsar", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+        : base(GetWindowName(), ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         SizeConstraints = new WindowSizeConstraints
         {
@@ -40,6 +42,61 @@ public class MainWindow : Window, IDisposable
         broadcastTab = new BroadcastTab(plugin, fileDialogManager, theme);
         configTab = new ConfigTab(plugin, theme);
         debugTab = new DebugTab(plugin, fileDialogManager);
+    }
+
+    private static string GetWindowName()
+    {
+#if DEBUG
+        return $"Pulsar Dev Build ({GetTitlebarBuildVersion()})###pulsar";
+#else
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        return version is null
+            ? "Pulsar###pulsar"
+            : $"Pulsar {version.Major}.{version.Minor}.{version.Build}.{version.Revision}###pulsar";
+#endif
+    }
+
+    private static string GetTitlebarBuildVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var informationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            return FormatTitlebarBuildVersion(informationalVersion);
+        }
+
+        var version = assembly.GetName().Version;
+        return version is null
+            ? "unknown"
+            : $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
+    }
+
+    private static string FormatTitlebarBuildVersion(string informationalVersion)
+    {
+        const string dirtySuffix = "-dirty";
+
+        var isDirty = informationalVersion.EndsWith(dirtySuffix, StringComparison.Ordinal);
+        if (isDirty)
+        {
+            informationalVersion = informationalVersion[..^dirtySuffix.Length];
+        }
+
+        var metadataIndex = informationalVersion.IndexOf('+', StringComparison.Ordinal);
+        if (metadataIndex < 0 || metadataIndex >= informationalVersion.Length - 1)
+        {
+            return isDirty ? informationalVersion + "*" : informationalVersion;
+        }
+
+        var version = informationalVersion[..metadataIndex];
+        var sourceRevision = informationalVersion[(metadataIndex + 1)..];
+        var hashIndex = sourceRevision.LastIndexOf("-g", StringComparison.Ordinal);
+        var countIndex = hashIndex > 0 ? sourceRevision.LastIndexOf('-', hashIndex - 1) : -1;
+        var displayVersion = countIndex >= 0
+                             && int.TryParse(sourceRevision[(countIndex + 1)..hashIndex], NumberStyles.None, CultureInfo.InvariantCulture, out _)
+                                 ? $"{version}-{sourceRevision[(countIndex + 1)..]}"
+                                 : $"{version}+{sourceRevision}";
+
+        return isDirty ? displayVersion + "*" : displayVersion;
     }
 
     public void Dispose() => theme.Dispose();
