@@ -99,6 +99,7 @@ BroadcastManager also integrates with SyncPrep, which lives at `Broadcast/Prepar
 1. transcodes high-bitrate tracks to a reasonable bitrate
 2. does loudness calculation to apply ReplayGain during playback
     * note: target gain is put into the sync payload and applied during playback - it's not written as an RG tag in the file
+3. calculates BLAKE3 and SHA-1 hashes so the sync plugins don't have to
 
 (reminder, the actual *work* is done in the transcode host, out of the game process)
 

@@ -1,5 +1,9 @@
+using System;
 using System.IO;
+using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
+using Pulsar.Api;
 using Pulsar.Broadcast;
 using Pulsar.Broadcast.Prepare;
 using Pulsar.Ipc;
@@ -11,8 +15,8 @@ namespace Pulsar.Tests;
 
 /// <summary>
 /// The wire-contract facts external plugins depend on: malformed input is contained,
-/// the JSON is camelCase (OUR naming-policy choice, not the serializer's), and a stop
-/// is the empty triple. Everything else about IpcProvider is covered functionally by
+/// the JSON is camelCase (OUR naming-policy choice, not the serializer's), hashes occupy
+/// their named record fields, and a stop is null. Everything else is covered by
 /// LoopbackFlowTests riding the real IPC loop - deliberately no glue tests here.
 /// </summary>
 public class IpcProviderTests : IAsyncLifetime
@@ -56,29 +60,58 @@ public class IpcProviderTests : IAsyncLifetime
     {
         // A buggy peer must never explode into Dalamud's IPC dispatch.
         var ex = Record.Exception(() =>
-            gates.SetPlayerData.Action!(7UL, @"C:\x.opus", "", "{this is not json"));
+            gates.SetPlayerData.Action!(7UL, @"C:\x.opus", null, "{this is not json"));
         Assert.Null(ex);
         Assert.Empty(listening.View); // and no half-built pair materializes
     }
 
     [Fact]
-    public async Task The_wire_is_camel_case_and_stops_with_the_empty_triple()
+    public async Task ClearPlayerData_is_the_explicit_delete_operation()
     {
+        var payload = JsonSerializer.Serialize(new PulsarCursor
+        {
+            IsPlaying = true,
+            AsOfUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            CursorEpoch = 1,
+        });
+        gates.SetPlayerData.Action!(7UL, @"C:\x.opus", null, payload);
+        await TestWait.Assert(() => listening.View.Any(p => p.Ident == 7UL),
+            "SetPlayerData adds the pair");
+
+        gates.ClearPlayerData.Action!(7UL);
+        await TestWait.Assert(() => listening.View.All(p => p.Ident != 7UL),
+            "ClearPlayerData removes the pair");
+    }
+
+    [Fact]
+    public async Task The_wire_uses_named_records_and_stops_with_null()
+    {
+        Assert.Equal(PulsarApiVersions.Current, gates.ApiVersion.Func!());
+
         var track = TestData.CreateTrack(dir, "song.flac");
         await broadcast.SetSource(new FakeMusicSource { Current = TestData.Snap(track) });
         await TestWait.Assert(() => gates.PlayerDataChanged.Sent.Count > 0, "manifest reaches the wire");
 
         // camelCase is OUR PropertyNamingPolicy choice - no compile error guards it,
         // and every external consumer parses these exact keys.
-        var cursorJson = (string)gates.PlayerDataChanged.Sent[^1][2]!;
+        var changed = Assert.IsType<PulsarPlayerData>(gates.PlayerDataChanged.Sent[^1][0]);
+        Assert.Equal(ControllablePrepareService.Blake3Hash, changed.Current.Blake3Hash);
+        Assert.Equal(ControllablePrepareService.Sha1Hash, changed.Current.Sha1Hash);
+        Assert.Null(changed.Prefetch);
+        var cursorJson = changed.Payload;
         Assert.Contains("\"positionMs\"", cursorJson);
         Assert.Contains("\"cursorEpoch\"", cursorJson);
         Assert.DoesNotContain("\"PositionMs\"", cursorJson);
 
+        var queried = gates.GetPlayerData.Func!();
+        Assert.NotNull(queried);
+        Assert.Equal(ControllablePrepareService.Blake3Hash, queried.Current.Blake3Hash);
+        Assert.Equal(ControllablePrepareService.Sha1Hash, queried.Current.Sha1Hash);
+        Assert.Equal(cursorJson, queried.Payload);
+
         await broadcast.SetSource(null);
         await TestWait.Assert(() =>
-            gates.PlayerDataChanged.Sent[^1] is [string f, string p, string c]
-                && f == "" && p == "" && c == "",
-            "a stop goes out as the empty triple");
+            gates.PlayerDataChanged.Sent[^1] is [null],
+            "a stop goes out as null player data");
     }
 }

@@ -99,7 +99,7 @@ public class ScdReaderTests : System.IDisposable
         public Task<PreparedTrack> PrepareAsync(string originalPath, string transcodeOutPath, CancellationToken ct)
         {
             Operation = "Path";
-            return Task.FromResult(new PreparedTrack(originalPath, 0));
+            return Task.FromResult(new PreparedTrack(originalPath, "blake3", "sha1", 0));
         }
 
         public Task<PreparedTrack> PrepareBytesAsync(string originalPath, byte[] audioData,
@@ -107,7 +107,7 @@ public class ScdReaderTests : System.IDisposable
         {
             Operation = "Bytes";
             Bytes = audioData;
-            return Task.FromResult(new PreparedTrack(originalPath, 0));
+            return Task.FromResult(new PreparedTrack(originalPath, "blake3", "sha1", 0));
         }
     }
 

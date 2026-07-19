@@ -4,6 +4,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.ImGuiFileDialog;
+using Pulsar.Api;
 using Pulsar.Ipc;
 
 namespace Pulsar.Windows;
@@ -116,7 +117,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
         try
         {
             var enabled = Plugin.PluginInterface
-                .GetIpcSubscriber<bool>("Pulsar.IsEnabled")
+                .GetIpcSubscriber<bool>(PulsarIpcEndpoints.IsEnabled)
                 .InvokeFunc();
             lastQueryResult = $"IsEnabled: {enabled}";
         }
@@ -131,10 +132,10 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
     {
         try
         {
-            var (major, minor) = Plugin.PluginInterface
-                .GetIpcSubscriber<(int, int)>("Pulsar.ApiVersion")
+            var version = Plugin.PluginInterface
+                .GetIpcSubscriber<PulsarApiVersion>(PulsarIpcEndpoints.ApiVersion)
                 .InvokeFunc();
-            lastQueryResult = $"ApiVersion: {major}.{minor}";
+            lastQueryResult = $"ApiVersion: {version.Major}.{version.Minor}";
         }
         catch (Exception e)
         {
@@ -148,7 +149,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
         try
         {
             var data = Plugin.PluginInterface
-                .GetIpcSubscriber<(string, string, string)?>("Pulsar.GetPlayerData")
+                .GetIpcSubscriber<PulsarPlayerData?>(PulsarIpcEndpoints.GetPlayerData)
                 .InvokeFunc();
             if (data is null)
             {
@@ -156,9 +157,12 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
                 return;
             }
 
-            var (currentFile, prefetch, cursorJson) = data.Value;
             lastQueryResult =
-                $"GetPlayerData: \n  file: {currentFile}\n  prefetch: {prefetch}\n  cursor: {cursorJson}";
+                $"GetPlayerData: \n  file: {data.Current.Path}\n  BLAKE3: {data.Current.Blake3Hash}"
+                + $"\n  SHA-1: {data.Current.Sha1Hash}"
+                + $"\n  prefetch: {data.Prefetch?.Path}\n  prefetch BLAKE3: {data.Prefetch?.Blake3Hash}"
+                + $"\n  prefetch SHA-1: {data.Prefetch?.Sha1Hash}"
+                + $"\n  cursor: {data.Payload}";
         }
         catch (Exception e)
         {
@@ -181,8 +185,8 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
             };
             var cursorJson = JsonSerializer.Serialize(cursor);
             Plugin.PluginInterface
-                .GetIpcSubscriber<ulong, string, string, string, object?>("Pulsar.SetPlayerData")
-                .InvokeAction((ulong)dbgIdent, dbgPath, "", cursorJson);
+                .GetIpcSubscriber<ulong, string, string?, string, object?>(PulsarIpcEndpoints.SetPlayerData)
+                .InvokeAction((ulong)dbgIdent, dbgPath, null, cursorJson);
         }
         catch (Exception e)
         {
@@ -195,7 +199,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
         try
         {
             Plugin.PluginInterface
-                .GetIpcSubscriber<ulong, object?>("Pulsar.ClearPlayerData")
+                .GetIpcSubscriber<ulong, object?>(PulsarIpcEndpoints.ClearPlayerData)
                 .InvokeAction((ulong)dbgIdent);
         }
         catch (Exception e)

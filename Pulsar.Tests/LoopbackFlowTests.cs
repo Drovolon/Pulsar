@@ -65,11 +65,11 @@ public class LoopbackFlowTests : IAsyncLifetime
         => TestData.Snap(file, playing);
 
     private string? LatestSyncedFile
-        => coordinator.CurrentPlayerData?.Item1;
+        => coordinator.CurrentPlayerData?.CurrentPath;
 
     // Synced paths are content-hash names: identify tracks by the manifest's OriginalFileName.
     private string? LatestManifestName
-        => coordinator.CurrentPlayerData?.Item3.Meta?.OriginalFileName;
+        => coordinator.CurrentPlayerData?.Cursor.Meta?.OriginalFileName;
 
     /// <summary>Start the DJ on a track and pin the loopback pair, like a real loopback session.</summary>
     private async Task<FakeMusicSource> StartLoopbackSession(string track)

@@ -54,6 +54,11 @@
         "resolved": "0.4.0",
         "contentHash": "p1nb8yEQy/41xkVOb402SUQYKciupGk0RfVqbjkyuMoTHyj80uACmqgm8w72HeQwrd/hPGOchzt6GW+/djW+Cg=="
       },
+      "Blake3": {
+        "type": "Transitive",
+        "resolved": "2.2.1",
+        "contentHash": "HfNW2Iiy4hCaVDVGFEyk0mks+M5HSU3O8O517LyYkI6FFuj2jpvNlag4kGQFDSRmJi4/axgOei8k02NKq/uoDg=="
+      },
       "DalamudPackager": {
         "type": "Transitive",
         "resolved": "15.0.0",
@@ -610,8 +615,12 @@
           "NAudio.SoundFile": "[3.0.0-preview.16, )",
           "NAudio.WinMM": "[3.0.0-preview.16, )",
           "Penumbra.Api": "[5.13.1, )",
+          "Pulsar.Api": "[0.1.0, )",
           "Pulsar.Common": "[1.0.0, )"
         }
+      },
+      "pulsar.api": {
+        "type": "Project"
       },
       "pulsar.audiohost": {
         "type": "Project",
@@ -655,6 +664,7 @@
       "pulsar.transcodehost": {
         "type": "Project",
         "dependencies": {
+          "Blake3": "[2.2.1, )",
           "Microsoft.Extensions.Hosting": "[10.0.5, )",
           "NAudio": "[3.0.0-preview.16, )",
           "NAudio.SoundFile": "[3.0.0-preview.16, )",

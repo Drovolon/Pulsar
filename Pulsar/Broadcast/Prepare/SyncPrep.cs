@@ -12,7 +12,8 @@ namespace Pulsar.Broadcast.Prepare;
 
 public abstract record PrepResult
 {
-    public sealed record Successful(string PreparedFilePath, double GainDb) : PrepResult;
+    public sealed record Successful(
+        string PreparedFilePath, string Blake3Hash, string Sha1Hash, double GainDb) : PrepResult;
 
     public sealed record Failed(Exception Ex) : PrepResult;
 
@@ -220,7 +221,8 @@ public class SyncPrep : IAsyncDisposable
             var outPath = cacheManager.CachePathFor(job.FilePath);
             var processed =
                 await prepareService.PrepareFileAsync(job.FilePath, outPath, job.Cts.Token);
-            result = new PrepResult.Successful(processed.SyncPath, processed.GainDb);
+            result = new PrepResult.Successful(
+                processed.SyncPath, processed.Blake3Hash, processed.Sha1Hash, processed.GainDb);
         }
         catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
         {
@@ -245,8 +247,9 @@ public class SyncPrep : IAsyncDisposable
                 cacheManager.TryEvictLru(ok.PreparedFilePath, lastActiveArtifact);
                 observedResults[job.FilePath] = result;
                 break;
-            case PrepResult.Failed { Ex: not ConnectionLostException }:
+            case PrepResult.Failed { Ex: not ConnectionLostException } failed:
                 observedResults[job.FilePath] = result;
+                Plugin.Log.Error(failed.Ex, "Failed to prepare file {path}", job.FilePath);
                 break;
         }
 

@@ -14,6 +14,9 @@ namespace Pulsar.Tests.Fakes;
 /// </summary>
 public sealed class ControllablePrepareService : IPrepareService
 {
+    public const string Blake3Hash =
+        "AF1349B9F5F9A1A6A0404DEA36DCC9499BCB25C9ADC112B7CC9A93CAE41F3262";
+    public const string Sha1Hash = "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709";
     public sealed class Gate
     {
         internal readonly TaskCompletionSource<Exception?> Tcs =
@@ -75,7 +78,7 @@ public sealed class ControllablePrepareService : IPrepareService
 
         // The real host leaves the transcode on disk; caching decisions key on that.
         await System.IO.File.WriteAllBytesAsync(transcodeOutPath, new byte[ArtifactBytes], CancellationToken.None);
-        return new PreparedTrack(transcodeOutPath, GainDb);
+        return new PreparedTrack(transcodeOutPath, Blake3Hash, Sha1Hash, GainDb);
     }
 
     public Task<PreparedTrack> PrepareBytesAsync(string originalPath, byte[] audioData, string transcodeOutPath, CancellationToken ct)

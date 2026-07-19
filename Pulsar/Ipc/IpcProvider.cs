@@ -2,6 +2,7 @@ using System;
 using System.Text.Json;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
+using Pulsar.Api;
 using Pulsar.Broadcast;
 using Pulsar.Listening;
 
@@ -27,9 +28,6 @@ public sealed record PulsarCursor
 internal sealed class IpcProvider : IDisposable
 {
     private const ulong DebugLoopbackIdent = ulong.MaxValue;
-    private const int MajorVersion = 0;
-    private const int MinorVersion = 1;
-
     private static readonly JsonSerializerOptions JsonOpts =
         new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -37,22 +35,22 @@ internal sealed class IpcProvider : IDisposable
     internal sealed record Gates(
         ICallGateProvider<object?> Ready,
         ICallGateProvider<object?> Disposing,
-        ICallGateProvider<string, string, string, object?> PlayerDataChanged,
+        ICallGateProvider<PulsarPlayerData?, object?> PlayerDataChanged,
         ICallGateProvider<bool> IsEnabled,
-        ICallGateProvider<(int, int)> ApiVersion,
-        ICallGateProvider<(string, string, string)?> GetPlayerData,
-        ICallGateProvider<ulong, string, string, string, object?> SetPlayerData,
+        ICallGateProvider<PulsarApiVersion> ApiVersion,
+        ICallGateProvider<PulsarPlayerData?> GetPlayerData,
+        ICallGateProvider<ulong, string, string?, string, object?> SetPlayerData,
         ICallGateProvider<ulong, object?> ClearPlayerData)
     {
         public static Gates From(IDalamudPluginInterface pi) => new(
-            pi.GetIpcProvider<object?>("Pulsar.OnReady"),
-            pi.GetIpcProvider<object?>("Pulsar.OnDisposing"),
-            pi.GetIpcProvider<string, string, string, object?>("Pulsar.OnPlayerDataChanged"),
-            pi.GetIpcProvider<bool>("Pulsar.IsEnabled"),
-            pi.GetIpcProvider<(int, int)>("Pulsar.ApiVersion"),
-            pi.GetIpcProvider<(string, string, string)?>("Pulsar.GetPlayerData"),
-            pi.GetIpcProvider<ulong, string, string, string, object?>("Pulsar.SetPlayerData"),
-            pi.GetIpcProvider<ulong, object?>("Pulsar.ClearPlayerData"));
+            pi.GetIpcProvider<object?>(PulsarIpcEndpoints.Ready),
+            pi.GetIpcProvider<object?>(PulsarIpcEndpoints.Disposing),
+            pi.GetIpcProvider<PulsarPlayerData?, object?>(PulsarIpcEndpoints.PlayerDataChanged),
+            pi.GetIpcProvider<bool>(PulsarIpcEndpoints.IsEnabled),
+            pi.GetIpcProvider<PulsarApiVersion>(PulsarIpcEndpoints.ApiVersion),
+            pi.GetIpcProvider<PulsarPlayerData?>(PulsarIpcEndpoints.GetPlayerData),
+            pi.GetIpcProvider<ulong, string, string?, string, object?>(PulsarIpcEndpoints.SetPlayerData),
+            pi.GetIpcProvider<ulong, object?>(PulsarIpcEndpoints.ClearPlayerData));
     }
 
     public bool Enabled { get; private set; }
@@ -62,11 +60,11 @@ internal sealed class IpcProvider : IDisposable
 
     private readonly ICallGateProvider<object?> ready;
     private readonly ICallGateProvider<object?> disposing;
-    private readonly ICallGateProvider<string, string, string, object?> playerDataChanged;
+    private readonly ICallGateProvider<PulsarPlayerData?, object?> playerDataChanged;
     private readonly ICallGateProvider<bool> isEnabled;
-    private readonly ICallGateProvider<(int, int)> apiVersion;
-    private readonly ICallGateProvider<(string, string, string)?> getPlayerData;
-    private readonly ICallGateProvider<ulong, string, string, string, object?> setPlayerData;
+    private readonly ICallGateProvider<PulsarApiVersion> apiVersion;
+    private readonly ICallGateProvider<PulsarPlayerData?> getPlayerData;
+    private readonly ICallGateProvider<ulong, string, string?, string, object?> setPlayerData;
     private readonly ICallGateProvider<ulong, object?> clearPlayerData;
 
     public IpcProvider(IDalamudPluginInterface pi, ListeningManager listening, BroadcastManager broadcast)
@@ -92,7 +90,7 @@ internal sealed class IpcProvider : IDisposable
         if (Enabled) return;
 
         isEnabled.RegisterFunc(() => Enabled);
-        apiVersion.RegisterFunc(() => (MajorVersion, MinorVersion));
+        apiVersion.RegisterFunc(() => PulsarApiVersions.Current);
 
         getPlayerData.RegisterFunc(GetPlayerData);
 
@@ -107,17 +105,18 @@ internal sealed class IpcProvider : IDisposable
         if (Enabled) ready.SendMessage();
     }
 
-    private void OnSetPlayerData(ulong ident, string currentFile, string prefetchFile, string cursorJson)
+    private void OnSetPlayerData(
+        ulong ident, string currentFile, string? prefetchFile, string payload)
     {
         try
         {
             if (string.IsNullOrEmpty(currentFile))
             {
-                listening.ClearPair(ident);
+                Plugin.Log.Warning($"SetPlayerData[{ident:X}]: empty current path, ignoring");
                 return;
             }
 
-            var cursor = JsonSerializer.Deserialize<PulsarCursor>(cursorJson, JsonOpts);
+            var cursor = JsonSerializer.Deserialize<PulsarCursor>(payload, JsonOpts);
             if (cursor is null)
             {
                 Plugin.Log.Warning($"SetPlayerData[{ident:X}]: empty/invalid cursor, ignoring");
@@ -177,16 +176,14 @@ internal sealed class IpcProvider : IDisposable
         }
     }
 
-    private (string, string, string)? GetPlayerData()
+    private PulsarPlayerData? GetPlayerData()
     {
         try
         {
             var data = broadcast.CurrentPlayerData();
             if (data is null) return null;
-            var (currentFile, prefetch, cursor) = data.Value;
-            var cursorJson = JsonSerializer.Serialize(cursor, JsonOpts);
-            Plugin.Log.Debug($"GetPlayerData returning {currentFile}");
-            return (currentFile, prefetch, cursorJson);
+            Plugin.Log.Debug($"GetPlayerData returning {data.CurrentPath}");
+            return ToApiPlayerData(data);
         }
         catch (Exception e)
         {
@@ -195,31 +192,41 @@ internal sealed class IpcProvider : IDisposable
         }
     }
 
-    internal void PublishPlayerData((string, string, PulsarCursor)? data)
+    internal void PublishPlayerData(BroadcastPlayerData? data)
     {
         _ = Plugin.Framework.RunOnFrameworkThread(() =>
         {
             try
             {
+                Plugin.Log.Debug($"OnBroadcastChanged triggering with {data?.CurrentPath}");
                 if (data is null)
                 {
-                    playerDataChanged.SendMessage("", "", "");
+                    playerDataChanged.SendMessage(null);
                     return;
                 }
-                var (currentFile, prefetch, cursor) = data.Value;
-                var cursorJson = JsonSerializer.Serialize(cursor, JsonOpts);
-                Plugin.Log.Debug($"OnBroadcastChanged triggering with {currentFile}");
-                playerDataChanged.SendMessage(currentFile, prefetch, cursorJson);
+                playerDataChanged.SendMessage(ToApiPlayerData(data));
             }
             catch (Exception e) { Plugin.Log.Error(e, "OnPlayerDataChanged send failed"); }
         });
+    }
+
+    private static PulsarPlayerData ToApiPlayerData(BroadcastPlayerData data)
+    {
+        var current = new PulsarSyncFile(
+            data.CurrentPath, data.CurrentBlake3Hash, data.CurrentSha1Hash);
+        var prefetch = string.IsNullOrEmpty(data.PrefetchPath)
+            ? null
+            : new PulsarSyncFile(
+                data.PrefetchPath, data.PrefetchBlake3Hash, data.PrefetchSha1Hash);
+        return new PulsarPlayerData(
+            current, prefetch, JsonSerializer.Serialize(data.Cursor, JsonOpts));
     }
 
     /// <summary>
     /// Routes local broadcast data through the same JSON and inbound mapping path used by
     /// an external sync plugin, without depending on Dalamud's call-gate registry.
     /// </summary>
-    internal void ApplyDebugLoopback((string, string, PulsarCursor)? data)
+    internal void ApplyDebugLoopback(BroadcastPlayerData? data)
     {
         if (data is null)
         {
@@ -227,12 +234,11 @@ internal sealed class IpcProvider : IDisposable
             return;
         }
 
-        var (currentFile, prefetch, cursor) = data.Value;
         OnSetPlayerData(
             DebugLoopbackIdent,
-            currentFile,
-            prefetch,
-            JsonSerializer.Serialize(cursor, JsonOpts));
+            data.CurrentPath,
+            string.IsNullOrEmpty(data.PrefetchPath) ? null : data.PrefetchPath,
+            JsonSerializer.Serialize(data.Cursor, JsonOpts));
     }
 
     public void Dispose()

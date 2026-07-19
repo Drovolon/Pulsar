@@ -1,6 +1,8 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Threading;
+using Blake3;
 using Pulsar.TranscodeHost.Prepare;
 using Xunit;
 
@@ -15,6 +17,15 @@ public class TrackProcessorTests : IDisposable
     public void Dispose() => dir.Delete(recursive: true);
 
     private string P(string name) => Path.Combine(dir.FullName, name);
+
+    private static string Blake3Of(string path)
+    {
+        var hash = Hasher.Hash(File.ReadAllBytes(path));
+        return Convert.ToHexString(hash.AsSpan());
+    }
+
+    private static string Sha1Of(string path)
+        => Convert.ToHexString(SHA1.HashData(File.ReadAllBytes(path)));
 
     // A full-scale 997 Hz sine measures ≈ -3.01 LUFS; amplitude scales it linearly in dB.
     private static double ExpectedLufs(double amplitude) => (20 * Math.Log10(amplitude)) - 3.01;
@@ -41,6 +52,8 @@ public class TrackProcessorTests : IDisposable
 
         Assert.Equal(outPath, track.SyncPath);
         Assert.True(File.Exists(outPath), "transcoded artifact written");
+        Assert.Equal(Blake3Of(outPath), track.Blake3Hash);
+        Assert.Equal(Sha1Of(outPath), track.Sha1Hash);
     }
 
     [Fact]
@@ -54,6 +67,8 @@ public class TrackProcessorTests : IDisposable
 
         Assert.Equal(src, track.SyncPath);                      // the DJ's own file syncs as-is
         Assert.False(File.Exists(outPath), "no artifact for a passthrough");
+        Assert.Equal(Blake3Of(src), track.Blake3Hash);
+        Assert.Equal(Sha1Of(src), track.Sha1Hash);
     }
 
     [Fact]

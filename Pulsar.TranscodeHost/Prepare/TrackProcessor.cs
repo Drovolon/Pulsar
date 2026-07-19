@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Security.Cryptography;
+using Blake3;
 using NAudio.SoundFile;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
@@ -26,6 +29,9 @@ internal sealed class AnalyzerTap(ISampleProvider source, LoudnessAnalyzer analy
 
 public static class TrackProcessor
 {
+    internal readonly record struct ContentHashes(string Blake3Hash, string Sha1Hash);
+
+    private const int HashBufferSize = 128 * 1024;
     public const long BitrateThresholdBpsPerChannel = 256_000 / 2; // >=256 Kbps (stereo) gets transcoded
     public const int OpusTargetBpsPerChannel = 160_000 / 2; // 160 Kbps for stereo
     public const double TargetLufs = -18.0; // matches ReplayGain
@@ -65,6 +71,7 @@ public static class TrackProcessor
         var tap = new AnalyzerTap(sp, analyzer, ct);
 
         string syncPath;
+        ContentHashes hashes;
         if (transcode)
         {
             // Opus has strict sample rate requirements, so resample if needed
@@ -77,6 +84,7 @@ public static class TrackProcessor
                 var quality = OpusQualityForBitrate(OpusTargetBpsPerChannel);
                 SoundFileWriter.CreateSoundFile(tmp, encodeSource.ToWaveProvider(),
                     SoundFileMajorFormat.Opus, new SoundFileWriterOptions { VbrQuality = quality });
+                hashes = ComputeHashes(tmp, ct);
                 File.Move(tmp, transcodeOutPath, overwrite: true);
             }
             catch
@@ -95,6 +103,7 @@ public static class TrackProcessor
                 // AnalyzerTap still does loudness measure. Drain the tap.
             }
             syncPath = passthroughPath;
+            hashes = ComputeHashes(syncPath, ct);
         }
 
         var (lufs, peakDb) = analyzer.Result();
@@ -105,7 +114,36 @@ public static class TrackProcessor
             gainDb = Math.Min(gainDb, PeakCeilingDb - peakDb);
             gainDb = Math.Round(gainDb, 2);
         }
-        return new PreparedTrack(syncPath, gainDb);
+        return new PreparedTrack(syncPath, hashes.Blake3Hash, hashes.Sha1Hash, gainDb);
+    }
+
+    internal static ContentHashes ComputeHashes(string path, CancellationToken ct)
+    {
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read, HashBufferSize,
+            FileOptions.SequentialScan);
+        using var hasher = Hasher.New();
+        using var sha1 = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+        var buffer = ArrayPool<byte>.Shared.Rent(HashBufferSize);
+        try
+        {
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                hasher.Update(buffer.AsSpan(0, read));
+                sha1.AppendData(buffer, 0, read);
+            }
+
+            Span<byte> hash = stackalloc byte[Hash.Size];
+            hasher.Finalize(hash);
+            return new ContentHashes(
+                Convert.ToHexString(hash), Convert.ToHexString(sha1.GetHashAndReset()));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     // VBR quality in libsndfile is a [0, 1] double. But I want a target bitrate, mostly because

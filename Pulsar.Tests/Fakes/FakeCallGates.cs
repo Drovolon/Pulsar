@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Dalamud.Plugin.Ipc;
+using Pulsar.Api;
 using Pulsar.Ipc;
 
 namespace Pulsar.Tests.Fakes;
@@ -41,28 +42,8 @@ public sealed class FakeCallGate<T1, TRet> : ICallGateProvider<T1, TRet>
     public void SendMessage(T1 a1) { object?[] args = [a1]; Sent.Add(args); OnSent?.Invoke(args); }
 }
 
-public sealed class FakeCallGate<T1, T2, T3, TRet> : ICallGateProvider<T1, T2, T3, TRet>
-{
-    public Action<T1, T2, T3>? Action { get; private set; }
-    public Func<T1, T2, T3, TRet>? Func { get; private set; }
-    public List<object?[]> Sent { get; } = [];
-    public Action<object?[]>? OnSent { get; set; }
-
-    public int SubscriptionCount => 0;
-    public void RegisterAction(Action<T1, T2, T3> action) => Action = action;
-    public void RegisterFunc(Func<T1, T2, T3, TRet> func) => Func = func;
-    public void UnregisterAction() => Action = null;
-    public void UnregisterFunc() => Func = null;
-    public IpcContext? GetContext() => null;
-    public void SendMessage(T1 a1, T2 a2, T3 a3)
-    {
-        object?[] args = [a1, a2, a3];
-        Sent.Add(args);
-        OnSent?.Invoke(args);
-    }
-}
-
-public sealed class FakeCallGate<T1, T2, T3, T4, TRet> : ICallGateProvider<T1, T2, T3, T4, TRet>
+public sealed class FakeCallGate<T1, T2, T3, T4, TRet>
+    : ICallGateProvider<T1, T2, T3, T4, TRet>
 {
     public Action<T1, T2, T3, T4>? Action { get; private set; }
     public Func<T1, T2, T3, T4, TRet>? Func { get; private set; }
@@ -89,11 +70,11 @@ internal sealed class FakeIpcGates
 {
     public FakeCallGate<object?> Ready { get; } = new();
     public FakeCallGate<object?> Disposing { get; } = new();
-    public FakeCallGate<string, string, string, object?> PlayerDataChanged { get; } = new();
+    public FakeCallGate<PulsarPlayerData?, object?> PlayerDataChanged { get; } = new();
     public FakeCallGate<bool> IsEnabled { get; } = new();
-    public FakeCallGate<(int, int)> ApiVersion { get; } = new();
-    public FakeCallGate<(string, string, string)?> GetPlayerData { get; } = new();
-    public FakeCallGate<ulong, string, string, string, object?> SetPlayerData { get; } = new();
+    public FakeCallGate<PulsarApiVersion> ApiVersion { get; } = new();
+    public FakeCallGate<PulsarPlayerData?> GetPlayerData { get; } = new();
+    public FakeCallGate<ulong, string, string?, string, object?> SetPlayerData { get; } = new();
     public FakeCallGate<ulong, object?> ClearPlayerData { get; } = new();
 
     public IpcProvider.Gates Gates => new(Ready, Disposing, PlayerDataChanged, IsEnabled,

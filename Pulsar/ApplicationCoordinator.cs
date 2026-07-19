@@ -12,7 +12,7 @@ namespace Pulsar;
 /// </summary>
 internal sealed class ApplicationCoordinator : IAsyncDisposable
 {
-    private sealed record PublishedState((string, string, PulsarCursor)? PlayerData);
+    private sealed record PublishedState(BroadcastPlayerData? PlayerData);
 
     private readonly BroadcastManager broadcast;
     private readonly ListeningManager listening;
@@ -21,7 +21,7 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
     private readonly Task outputLoop;
     private volatile PublishedState published = new(null);
 
-    internal (string, string, PulsarCursor)? CurrentPlayerData => published.PlayerData;
+    internal BroadcastPlayerData? CurrentPlayerData => published.PlayerData;
 
     internal ApplicationCoordinator(
         BroadcastManager broadcast,

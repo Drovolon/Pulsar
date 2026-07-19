@@ -42,7 +42,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
     private ApplicationCoordinator? Coordinator { get; set; }
     private DebugLoopbackController? DebugLoopback { get; set; }
 
-    internal (string, string, PulsarCursor)? CurrentBroadcastPlayerData
+    internal BroadcastPlayerData? CurrentBroadcastPlayerData
         => Coordinator?.CurrentPlayerData ?? Broadcast?.CurrentPlayerData();
 
     internal void SetDebugLoopback(bool enabled)

@@ -25,6 +25,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Pulsar.Api\Pulsar.Api.csproj" />
     <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj" />
     <!-- Sidecar host processes: build them with the plugin, but never reference their assemblies. -->
     <ProjectReference Include="..\Pulsar.AudioHost\Pulsar.AudioHost.csproj"
@@ -61,6 +62,18 @@
   own directory. -->
   <Target Name="CopyHostProcesses"
           BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
+    <!-- PublishItemsOutputGroup only enumerates the deployment files; it does not ensure
+         that the project producing them is current. Build explicitly here so IDE builds
+         that skip project-reference builds cannot combine a stale host executable with
+         freshly-built shared assemblies. -->
+    <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'audio'))"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=$(Platform)" />
+
+    <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'transcode'))"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);Platform=$(Platform)" />
+
     <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'audio'))"
              Targets="PublishItemsOutputGroup"
              Properties="Configuration=$(Configuration);Platform=$(Platform)">

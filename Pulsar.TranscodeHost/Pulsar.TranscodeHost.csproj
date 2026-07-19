@@ -18,6 +18,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <PackageReference Include="Blake3" Version="2.2.1" />
         <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
         <PackageReference Include="NAudio" Version="3.0.0-preview.16" />
         <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16" />

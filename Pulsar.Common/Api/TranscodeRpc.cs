@@ -18,4 +18,5 @@ public partial interface IPrepareService
 }
 
 [GenerateShape]
-public partial record PreparedTrack(string SyncPath, double GainDb);
+public partial record PreparedTrack(
+    string SyncPath, string Blake3Hash, string Sha1Hash, double GainDb);

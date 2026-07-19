@@ -14,9 +14,9 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
     private abstract record Message;
     private sealed record EnabledSet(
         bool Value,
-        (string, string, PulsarCursor)? Current,
+        BroadcastPlayerData? Current,
         TaskCompletionSource Completion) : Message;
-    private sealed record PlayerDataChanged((string, string, PulsarCursor)? Data) : Message;
+    private sealed record PlayerDataChanged(BroadcastPlayerData? Data) : Message;
 
     private readonly IpcProvider ipc;
     private readonly SerializedMailbox<Message> mailbox;
@@ -28,7 +28,7 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
         mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError);
     }
 
-    internal void SetEnabled(bool value, (string, string, PulsarCursor)? current)
+    internal void SetEnabled(bool value, BroadcastPlayerData? current)
     {
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -36,7 +36,7 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
             completion.Task.GetAwaiter().GetResult();
     }
 
-    internal void OnPlayerDataChanged((string, string, PulsarCursor)? data)
+    internal void OnPlayerDataChanged(BroadcastPlayerData? data)
         => mailbox.TryPost(new PlayerDataChanged(data));
 
     private ValueTask HandleMessage(Message message)

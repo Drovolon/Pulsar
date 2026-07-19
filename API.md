@@ -2,27 +2,33 @@
 
 I tried to keep this as simple as possible, closely mirroring existing plugins in this ecosystem.
 
+See [`Pulsar.Api`](./Pulsar.Api) submodule. Feel free to import that as a submodule or vendor it. It's dependency-free and declares types.
+
 ## Reference
 
 ### Methods
 
+Note: take a look at [PulsarPlayerData.cs](./Pulsar.Api/PulsarPlayerData.cs).
+
 * `bool IsEnabled()` - whether Pulsar IPC is enabled/ready
-* `(int, int) ApiVersion()` - major and minor version of the API (currently `(0, 1)`)
-* `(string, string, string)? GetPlayerData()`
-  * first return value is the *active* file path, what the player is currently broadcasting. this file should be synced by the sync plugin
-  * second return value is an optional *prefetch* file. this isn't always available. will be an empty string if unavailable. this should be synced by the sync plugin too (optionally)
-  * third return value is an **opaque** (to the sync) payload. don't touch anything in here, sync it as-is.
-* `void SetPlayerData(ulong, string, string, string)`
+* `PulsarApiVersion ApiVersion()` - major and minor version of the API (currently `0.1`)
+* `PulsarPlayerData? GetPlayerData()`
+  * `Current` is the active `PulsarSyncFile`, containing the path to upload and the BLAKE3 + SHA-1 hashes of the file bytes
+  * `Prefetch` is an optional upcoming `PulsarSyncFile` that may be uploaded ahead of time
+  * `Payload` is **opaque** to the sync; don't touch anything in here, relay it as-is
+  * BLAKE3 hashes are encoded as 64 uppercase hex characters; SHA-1 hashes as 40 uppercase hex characters
+  * use whichever hash algorithm your service uses, or re-hash it yourself I suppose
+* `void SetPlayerData(ulong, string, string?, string)`
   * the mirror of GetPlayerData()
-  * 1st argument is the *address* of the *source* player in the object table (it's a bit weird, I realize, but I wanted to mirror what's done for e.g. SimpleHeels)
-  * 2nd argument is the *local file path* of the song to play. this should be the *synced* version of the 1st return value of GetPlayerData()
-  * 3rd argument is the *local file path* of the prefetched song, or an empty string.
-  * 4th argument is the **opaque** payload (the 3rd return value of GetPlayerData())
+  * 1st argument is the address of the source player in the object table
+  * 2nd argument is the local path of the downloaded `Current` file
+  * 3rd argument is the local path of the downloaded `Prefetch` file, or `null`
+  * 4th argument is the opaque payload received from GetPlayerData()
 * `void ClearPlayerData(ulong)` - clear/stop playing for that player address
 
 ### Messages
 
-* `void PlayerDataChanged(string, string, string)` - same as GetPlayerData(), but pushed as a message when broadcasting data changes
+* `void PlayerDataChanged(PulsarPlayerData?)` - same as GetPlayerData(), but pushed as a message when broadcasting data changes; `null` means broadcasting stopped
 * `void Ready()` - fired when the plugin is ready for IPC
 * `void Disposing()` - fired when the plugin is tearing down / being disposed
 
@@ -30,11 +36,11 @@ I tried to keep this as simple as possible, closely mirroring existing plugins i
 
 This *shouldn't* be too difficult to sync:
 
-1. in the PlayerDataFactory, call `activePath, prefetchPath, payload = GetPlayerData()` to get the files to sync + the opaque payload
-2. upload the two file paths returned by GetPlayerData()
-3. ship the opaque payload as-is
-4. on the receiving client side, when applying a character data payload: download the two file paths
-5. call `SetPlayerData(addr, activePath, prefetchPath, payload)`
+1. in the PlayerDataFactory, call `var data = GetPlayerData()` to get the files to sync, their BLAKE3/SHA-1 hashes, and the opaque payload
+2. upload `data.Current.Path` and optionally `data.Prefetch.Path`. see `data.{Current,Prefetch}.{Blake3Hash,Sha1Hash}` as needed.
+3. ship `data.Payload` as-is, without modification
+4. on the receiving client, if `data == null`, call `ClearPlayerData(addr)`
+5. otherwise, download the files, then call `SetPlayerData(addr, currentPath, prefetchPath, payload)`
 
 When the client leaves visibility, is paused, etc., call `ClearPlayerData(addr)`.
 

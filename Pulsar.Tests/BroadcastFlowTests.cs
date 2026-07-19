@@ -21,13 +21,13 @@ public class BroadcastFlowTests : IAsyncLifetime
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-bf-test-");
     private readonly ControllablePrepareService service = new();
-    private readonly List<(string, string, PulsarCursor)?> events = [];
+    private readonly List<BroadcastPlayerData?> events = [];
     private readonly List<bool> broadcastingEvents = [];
     private SyncPrep? prep;
     private BroadcastManager? manager;
     private Task? outputPump;
     private volatile Task? outputStall;
-    private Action<(string, string, PulsarCursor)?>? outputProbe;
+    private Action<BroadcastPlayerData?>? outputProbe;
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -63,7 +63,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         return manager;
     }
 
-    private (string, string, PulsarCursor)?[] Events
+    private BroadcastPlayerData?[] Events
     {
         get { lock (events) return [.. events]; }
     }
@@ -104,8 +104,8 @@ public class BroadcastFlowTests : IAsyncLifetime
         await TestWait.Assert(() => Events.Length > seen, "manifest emitted once prep finished");
         var manifest = Events[^1];
         Assert.NotNull(manifest);
-        Assert.Equal(Path.GetFileName(next), manifest!.Value.Item3.Meta!.OriginalFileName);
-        Assert.True(manifest.Value.Item3.CursorEpoch > Events[seen - 1]!.Value.Item3.CursorEpoch,
+        Assert.Equal(Path.GetFileName(next), manifest!.Cursor.Meta!.OriginalFileName);
+        Assert.True(manifest.Cursor.CursorEpoch > Events[seen - 1]!.Cursor.CursorEpoch,
             "track change bumps the cursor epoch");
     }
 
@@ -130,7 +130,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         await TestWait.Assert(
             () => Events.Length > seen
                   && Events[^1] is { } e
-                  && e.Item3.Meta!.OriginalFileName == "a.flac",
+                  && e.Cursor.Meta!.OriginalFileName == "a.flac",
             "the return to A is published");
 
         skippedGate.Open();
@@ -138,8 +138,8 @@ public class BroadcastFlowTests : IAsyncLifetime
 
         Assert.All(
             Events.Skip(seen),
-            e => Assert.NotEqual("b.flac", e?.Item3.Meta?.OriginalFileName));
-        Assert.Equal("a.flac", Events[^1]!.Value.Item3.Meta!.OriginalFileName);
+            e => Assert.NotEqual("b.flac", e?.Cursor.Meta?.OriginalFileName));
+        Assert.Equal("a.flac", Events[^1]!.Cursor.Meta!.OriginalFileName);
     }
 
     [Fact]
@@ -165,17 +165,17 @@ public class BroadcastFlowTests : IAsyncLifetime
         var mgr = Create();
         var track = CreateTrack("a.flac");
         var source = await StartBroadcasting(mgr, track);
-        var playingManifest = Events[^1]!.Value;
+        var playingManifest = Events[^1]!;
 
         source.Current = Snap(track, playing: false);
         source.RaiseChanged();
 
         await TestWait.Assert(
-            () => Events[^1] is { } e && !e.Item3.IsPlaying,
+            () => Events[^1] is { } e && !e.Cursor.IsPlaying,
             "paused cursor reaches listeners");
-        var paused = Events[^1]!.Value;
-        Assert.Equal(playingManifest.Item1, paused.Item1); // same synced file
-        Assert.True(paused.Item3.CursorEpoch > playingManifest.Item3.CursorEpoch);
+        var paused = Events[^1]!;
+        Assert.Equal(playingManifest.CurrentPath, paused.CurrentPath); // same synced file
+        Assert.True(paused.Cursor.CursorEpoch > playingManifest.Cursor.CursorEpoch);
     }
 
     [Fact]
@@ -247,14 +247,14 @@ public class BroadcastFlowTests : IAsyncLifetime
         var mgr = Create();
         var track = CreateTrack("a.flac");
         var source = await StartBroadcasting(mgr, track);
-        var artifact = Events[^1]!.Value.Item1;
+        var artifact = Events[^1]!.CurrentPath;
         var seen = Events.Length;
 
         // Check existence AT delivery time: the re-prep recreates the path moments later.
         var ghostsAnnounced = 0;
         outputProbe = e =>
         {
-            if (e is { } m && !File.Exists(m.Item1)) Interlocked.Increment(ref ghostsAnnounced);
+            if (e is { } m && !File.Exists(m.CurrentPath)) Interlocked.Increment(ref ghostsAnnounced);
         };
 
         // The LRU cache evicts the artifact behind the cached result...
@@ -265,7 +265,7 @@ public class BroadcastFlowTests : IAsyncLifetime
 
         // The gap must HOLD (like a transcode gap) - never announce a deleted path.
         await TestWait.Assert(
-            () => Events.Length > seen && Events[^1] is { } e && !e.Item3.IsPlaying,
+            () => Events.Length > seen && Events[^1] is { } e && !e.Cursor.IsPlaying,
             "the re-prepped manifest with the paused cursor");
         Assert.Equal(0, ghostsAnnounced);
     }
@@ -320,7 +320,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         await TestWait.Within(switching, "the switch completes");
 
         await TestWait.Assert(
-            () => Events[^1] is { } e && e.Item3.Meta!.OriginalFileName == "b.flac",
+            () => Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "b.flac",
             "the new source's manifest goes out");
         lock (broadcastingEvents) Assert.Equal([true], broadcastingEvents); // one rise at start, never a drop
         Assert.All(Events.Skip(seen), e => Assert.NotNull(e)); // and no stop on the wire
@@ -372,7 +372,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         Assert.Equal(2, seen.Length);
         Assert.NotNull(seen[0]);
         Assert.NotNull(seen[1]);
-        Assert.NotEqual(seen[0]!.Value.Item3.CursorEpoch, seen[1]!.Value.Item3.CursorEpoch);
+        Assert.NotEqual(seen[0]!.Cursor.CursorEpoch, seen[1]!.Cursor.CursorEpoch);
     }
 
     [Fact]
@@ -400,7 +400,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         gate.Open();
 
         await TestWait.Assert(
-            () => Events[^1] is { } e && e.Item3.Meta!.OriginalFileName == "slow.flac",
+            () => Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "slow.flac",
             "the new source's manifest goes out once prepared");
     }
 }
