@@ -21,12 +21,12 @@
     "DownloadLinkInstall": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
     "DownloadLinkUpdate": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
     "IsTestingExclusive": true,
-    "TestingAssemblyVersion": "0.0.1.0",
+    "TestingAssemblyVersion": "0.0.2.0",
     "TestingDalamudApiLevel": 15,
-    "TestingChangelog": "Let's see if this works!",
-    "DownloadLinkTesting": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
+    "TestingChangelog": "This should actually work this time!",
+    "DownloadLinkTesting": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.2.0/Pulsar.zip",
     "RepoUrl": "https://github.com/Drovolon/Pulsar",
     "DownloadCount": 0,
-    "LastUpdate": 1784426964
+    "LastUpdate": 1784491327
   }
 ]
