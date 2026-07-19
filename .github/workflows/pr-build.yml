@@ -29,6 +29,9 @@ jobs:
     - name: Build with dotnet
       run: dotnet build --configuration Release -p:Platform=x64 --nologo
 
+    - name: Test with dotnet
+      run: dotnet test --configuration Release -p:Platform=x64 --no-build --nologo
+
     - name: Store artifacts
       uses: actions/upload-artifact@v4
       with:
