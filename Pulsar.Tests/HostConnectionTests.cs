@@ -171,15 +171,21 @@ public class HostConnectionTests : IAsyncLifetime
     public async Task A_host_that_exits_before_serving_is_restarted()
     {
         var marker = CreateStartMarker();
-        var conn = Create(Spec(new Dictionary<string, string>
-        {
-            ["STUB_EXIT_BEFORE_SERVE"] = "1",
-            ["STUB_START_MARKER"] = marker,
-        }));
+        var conn = connection = new HostConnection<IStubHost>(
+            Spec(new Dictionary<string, string>
+            {
+                ["STUB_EXIT_BEFORE_SERVE"] = "1",
+                ["STUB_START_MARKER"] = marker,
+            }),
+            _ => { },
+            connectTimeout: TimeSpan.FromSeconds(5),
+            backoffUnit: FastBackoff,
+            maxBackoff: FastCap);
         conn.Start();
 
         await TestWait.Assert(() => StartedPids(marker).Distinct().Count() >= 2,
-            "a fresh process is started after the previous host exits");
+            "a fresh process is started promptly after the previous host exits",
+            timeout: TimeSpan.FromSeconds(1));
         pids.AddRange(StartedPids(marker));
         Assert.Null(conn.Proxy);
         await conn.DisposeAsync().AsTask().WaitAsync(TestWait.Timeout);

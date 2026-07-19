@@ -74,9 +74,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
-        var hostDir = PluginInterface.AssemblyLocation.DirectoryName!;
+        var pluginDir = PluginInterface.AssemblyLocation.DirectoryName!;
+        var hostDir = Path.Combine(pluginDir, "hosts");
         var logDir = Path.Combine(PluginInterface.ConfigDirectory.FullName, "logs");
-        var audioExe = Path.Combine(hostDir, "Pulsar.AudioHost.exe");
+        var audioExe = Path.Combine(hostDir, "audio", "Pulsar.AudioHost.exe");
 
         // Facades are inert until Start(); everything below can safely subscribe and hold
         // references first, then the supervisors bring the hosts online.
@@ -87,7 +88,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
             audioExe, PipeNames.AudioBroadcast, logDir, "audio-broadcast",
             MixerName: "Pulsar (Broadcast)"));
         Prepare = new ReconnectingPrepareService(new HostSpec(
-            Path.Combine(hostDir, "Pulsar.TranscodeHost.exe"), PipeNames.TranscodeHost, logDir, "transcode"));
+            Path.Combine(hostDir, "transcode", "Pulsar.TranscodeHost.exe"),
+            PipeNames.TranscodeHost, logDir, "transcode"));
 
         Listening = new ListeningManager(ListenEngine, Configuration);
 

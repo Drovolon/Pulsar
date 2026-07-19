@@ -81,10 +81,10 @@ public sealed class HostConnection<T> : IAsyncDisposable
             JsonRpc? rpc = null;
             try
             {
-                EnsureProcess();
+                var hostProcess = EnsureProcess();
 
                 pipe = new NamedPipeClientStream(".", spec.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                await pipe.ConnectAsync((int)connectTimeout.TotalMilliseconds, ct);
+                await ConnectWhileProcessLives(pipe, hostProcess, ct);
 
                 rpc = RpcServer.BuildSharedJsonRpc(pipe);
                 var fresh = rpc.Attach<T>();
@@ -136,6 +136,32 @@ public sealed class HostConnection<T> : IAsyncDisposable
         await Task.WhenAny(rpc.Completion, cancelled.Task);
     }
 
+    private async Task ConnectWhileProcessLives(
+        NamedPipeClientStream pipe,
+        Process hostProcess,
+        CancellationToken ct)
+    {
+        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var connect = pipe.ConnectAsync((int)connectTimeout.TotalMilliseconds, ct);
+        var exited = hostProcess.WaitForExitAsync(startupCts.Token);
+
+        if (await Task.WhenAny(connect, exited) == exited)
+        {
+            await exited;
+            throw new InvalidOperationException(
+                $"{HostName} exited with code {hostProcess.ExitCode} before opening its pipe.");
+        }
+
+        try
+        {
+            await connect;
+        }
+        finally
+        {
+            startupCts.Cancel();
+        }
+    }
+
     private void RaiseSafely(Action? handler, string name)
     {
         try
@@ -148,9 +174,9 @@ public sealed class HostConnection<T> : IAsyncDisposable
         }
     }
 
-    private void EnsureProcess()
+    private Process EnsureProcess()
     {
-        if (process is { HasExited: false }) return;
+        if (process is { HasExited: false } running) return running;
 
         process?.Dispose();
         process = null;
@@ -201,19 +227,25 @@ public sealed class HostConnection<T> : IAsyncDisposable
 
         // Forward stdout/stderr to Dalamud logs
         // (Actual logs use Serilog to disk)
-        _ = DrainToPluginLogAsync(fresh.StandardOutput, HostName);
-        _ = DrainToPluginLogAsync(fresh.StandardError, HostName);
+        _ = DrainToPluginLogAsync(fresh.StandardOutput, HostName, isError: false);
+        _ = DrainToPluginLogAsync(fresh.StandardError, HostName, isError: true);
 
         Plugin.Log.Information("Started {name} (pid {pid})", HostName, fresh.Id);
         process = fresh;
+        return fresh;
     }
 
-    private static async Task DrainToPluginLogAsync(StreamReader reader, string name)
+    private static async Task DrainToPluginLogAsync(StreamReader reader, string name, bool isError)
     {
         try
         {
             while (await reader.ReadLineAsync() is { } line)
-                Plugin.Log.Debug("[{name}] {line}", name, line);
+            {
+                if (isError)
+                    Plugin.Log.Warning("[{name}] {line}", name, line);
+                else
+                    Plugin.Log.Debug("[{name}] {line}", name, line);
+            }
         }
         catch
         {

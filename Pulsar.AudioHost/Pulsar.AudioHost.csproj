@@ -36,4 +36,13 @@
     <ItemGroup>
       <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj" />
     </ItemGroup>
+
+    <ItemGroup>
+      <None Include="..\native\win-x64\libsndfile.dll"
+            Link="libsndfile.dll"
+            TargetPath="libsndfile.dll"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
 </Project>

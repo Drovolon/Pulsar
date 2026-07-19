@@ -37,4 +37,18 @@
     <ItemGroup>
       <InternalsVisibleTo Include="Pulsar.Tests" />
     </ItemGroup>
+
+    <ItemGroup>
+      <None Include="..\native\win-x64\libsndfile.dll"
+            Link="libsndfile.dll"
+            TargetPath="libsndfile.dll"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+      <None Include="..\native\win-x64\libebur128.dll"
+            Link="libebur128.dll"
+            TargetPath="libebur128.dll"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+
 </Project>
