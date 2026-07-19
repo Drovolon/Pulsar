@@ -31,6 +31,7 @@ public class LoopbackFlowTests : IAsyncLifetime
     private readonly IpcProvider ipc;
     private readonly DebugLoopbackController debugLoopback;
     private readonly ApplicationCoordinator coordinator;
+    private readonly FakeGameBgmControl gameBgm = new();
 
     public LoopbackFlowTests()
     {
@@ -44,7 +45,13 @@ public class LoopbackFlowTests : IAsyncLifetime
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
         debugLoopback = new DebugLoopbackController(ipc);
-        coordinator = new ApplicationCoordinator(broadcast, listening, ipc, debugLoopback);
+        coordinator = new ApplicationCoordinator(
+            broadcast,
+            listening,
+            ipc,
+            debugLoopback,
+            new ListeningNotifier(config),
+            new BgmMuter(config, gameBgm));
         debugLoopback.SetEnabled(true, coordinator.CurrentPlayerData);
     }
 
@@ -54,7 +61,6 @@ public class LoopbackFlowTests : IAsyncLifetime
     {
         await coordinator.DisposeAsync();
         ipc.Dispose();
-        await listening.DisposeAsync();
         await prep.DisposeAsync();
         dir.Delete(recursive: true);
     }
@@ -81,6 +87,17 @@ public class LoopbackFlowTests : IAsyncLifetime
         await TestWait.Assert(() => listening.View.Any(p => p.Ident == MonitorIdent), "loopback pair registered");
         listening.SetActive(MonitorIdent); // pin: playback is otherwise suppressed while we broadcast
         return source;
+    }
+
+    [Fact]
+    public async Task A_paused_broadcast_still_routes_the_broadcast_bgm_mute_reason()
+    {
+        var source = new FakeMusicSource { Current = Snap(CreateTrack("paused.flac"), playing: false) };
+        await broadcast.SetSource(source);
+        await TestWait.Assert(() => gameBgm.Muted, "broadcasting mutes game BGM");
+
+        await broadcast.SetSource(null);
+        await TestWait.Assert(() => !gameBgm.Muted, "ending the broadcast restores game BGM");
     }
 
     [Fact]

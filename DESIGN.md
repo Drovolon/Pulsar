@@ -105,7 +105,7 @@ BroadcastManager also integrates with SyncPrep, which lives at `Broadcast/Prepar
 
 So, BroadcastManager has a so-called "transcode gap": a period of time when it announces the *previous* song while it awaits prep finishing.
 
-It also has an output queue where it publishes source changes. `ApplicationCoordinator` is responsible for taking broadcast changes and pushing them into the IPC, debug loopback, and listening layers.
+It also has an output queue where it publishes source changes. `ApplicationCoordinator` is responsible for taking broadcast changes and pushing them into the IPC, debug loopback, listening, and BGM-muting layers.
 
 #### Beefweb
 
@@ -133,6 +133,8 @@ Listening is where the magic happens: where file paths (from synced pairs) becom
 The ListeningManager tracks pairs (a dict of ulong (address) to pair states). Only one pair can be listened to at a time. It takes an `IRemoteEngine`, which is an interface to "play a file" - in the normal case, that's an RPC client to `Pulsar.AudioHost.Listening`.
 
 The listening path operates on a "current and desired" model. "Desired" comes from the sync plugin (or from the debug loopback path) - it's "I want this file to play, at this position, which was recorded at this timestamp". The `SyncDecider` class takes the current and desired states as inputs, and outputs an `EngineAction` - what should be done to the `IRemoteEngine` to make it match the desired. For example: if the desired is to pause, but that song is currently playing, it would return `EngineAction.Pause`.
+
+Like `BroadcastManager`, `ListeningManager` publishes changes through ApplicationCoordinator, which BgmMuter and ListeningNotifier use.
 
 #### Max Lag, Outro Grace Period
 

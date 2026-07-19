@@ -24,6 +24,9 @@ public class Configuration : IPluginConfiguration
     // When nothing is explicitly pinned, auto-play whoever nearby is broadcasting.
     public bool ListeningAutoPlay { get; set; } = true;
 
+    public bool MuteGameBgmWhileListening { get; set; } = true;
+    public bool MuteGameBgmWhileBroadcasting { get; set; } = true;
+
     // Note: nearby-broadcaster only sends one notification, even if multiple conditions are met
     public bool NotifyNearbyBroadcaster { get; set; } = true;
     public bool NotifyNearbyBroadcasterAutoPlayOff { get; set; } = true;

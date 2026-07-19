@@ -7,8 +7,13 @@ using Pulsar.Listening;
 namespace Pulsar;
 
 /// <summary>
-/// The single application-level consumer of broadcast outputs. BroadcastManager owns
-/// broadcast state; this class explicitly routes its resulting facts to the two consumers.
+/// Consumes outputs from ListeningManager and BroadcastManager, and routes
+/// them to other interested parties in the application.
+///
+/// ListeningManager disables autoplay while broadcasting, for example.
+/// Or, BgmMuter mutes in-game BGM while listening or broadcasting.
+/// Broadcast outputs are routed into the IPC layer, as well as
+/// the debug loopback layer.
 /// </summary>
 internal sealed class ApplicationCoordinator : IAsyncDisposable
 {
@@ -18,7 +23,10 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
     private readonly ListeningManager listening;
     private readonly IpcProvider ipc;
     private readonly DebugLoopbackController debugLoopback;
-    private readonly Task outputLoop;
+    private readonly ListeningNotifier listeningNotifier;
+    private readonly BgmMuter bgmMuter;
+    private readonly Task broadcastOutputLoop;
+    private readonly Task listeningOutputLoop;
     private volatile PublishedState published = new(null);
 
     internal BroadcastPlayerData? CurrentPlayerData => published.PlayerData;
@@ -27,16 +35,23 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
         BroadcastManager broadcast,
         ListeningManager listening,
         IpcProvider ipc,
-        DebugLoopbackController debugLoopback)
+        DebugLoopbackController debugLoopback,
+        ListeningNotifier listeningNotifier,
+        BgmMuter bgmMuter)
     {
         this.broadcast = broadcast;
         this.listening = listening;
         this.ipc = ipc;
         this.debugLoopback = debugLoopback;
-        outputLoop = RouteOutputs();
+        this.listeningNotifier = listeningNotifier;
+        this.bgmMuter = bgmMuter;
+        broadcastOutputLoop = RouteBroadcastOutputs();
+        listeningOutputLoop = RouteListeningOutputs();
     }
 
-    private async Task RouteOutputs()
+    internal void RefreshBgmMute() => _ = bgmMuter.Refresh();
+
+    private async Task RouteBroadcastOutputs()
     {
         await foreach (var output in broadcast.Outputs.ReadAllAsync())
         {
@@ -51,6 +66,7 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
                         break;
                     case BroadcastOutput.BroadcastingChanged(var value):
                         listening.SetBroadcasting(value);
+                        await bgmMuter.SetBroadcasting(value);
                         break;
                 }
             }
@@ -61,11 +77,43 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
         }
     }
 
+    private async Task RouteListeningOutputs()
+    {
+        await foreach (var output in listening.Outputs.ReadAllAsync())
+        {
+            try
+            {
+                listeningNotifier.Notify(output);
+                if (output is ListeningOutput.ListeningChanged(var value))
+                    await bgmMuter.SetListening(value);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.Error(e, "failed to route listening output: {output}", output);
+            }
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
-        await broadcast.DisposeAsync();
-        await outputLoop;
-        debugLoopback.SetEnabled(false, null);
-        await debugLoopback.DisposeAsync();
+        try
+        {
+            await broadcast.DisposeAsync();
+            await broadcastOutputLoop;
+            await listening.DisposeAsync();
+            await listeningOutputLoop;
+        }
+        finally
+        {
+            try
+            {
+                await bgmMuter.DisposeAsync();
+            }
+            finally
+            {
+                debugLoopback.SetEnabled(false, null);
+                await debugLoopback.DisposeAsync();
+            }
+        }
     }
 }

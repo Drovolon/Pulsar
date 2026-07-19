@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -71,13 +70,6 @@ public class ListeningManager : IAsyncDisposable
 {
     private const int MaxLoadRetries = 3;
 
-    private enum NearbyBroadcastContext
-    {
-        Normal,
-        AutoPlayOff,
-        CurrentlyBroadcasting,
-    }
-
     private abstract record Message;
     private sealed record PairUpdated(ulong Ident, string? DisplayName, PairData Data) : Message;
     private sealed record PairCleared(ulong Ident) : Message;
@@ -106,11 +98,13 @@ public class ListeningManager : IAsyncDisposable
 
     private readonly Dictionary<ulong, PairState> pairs = [];
     private readonly IRemoteEngine engine;
-    private readonly Configuration config;
     // This is the manager's synchronization boundary: callers and engine callbacks only post
     // messages; the single reader below is the sole owner of all non-published state.
     private readonly Channel<Message> mailbox = Channel.CreateUnbounded<Message>(
         new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<ListeningOutput> outputs = Channel.CreateUnbounded<ListeningOutput>(
+        new UnboundedChannelOptions { SingleReader = true });
+    internal ChannelReader<ListeningOutput> Outputs => outputs.Reader;
 
     private float masterVolume;
     private bool masterMuted;
@@ -139,6 +133,7 @@ public class ListeningManager : IAsyncDisposable
     public IReadOnlyList<PairView> View => published.View;
 
     private ListenerPlaybackView playback = new(ListenerPlaybackStatus.Idle, null, null);
+    private bool lastListening;
     public ListenerPlaybackView Playback => Volatile.Read(ref playback);
 
     // Kept as convenience views for callers that only need the old two facts.
@@ -168,7 +163,7 @@ public class ListeningManager : IAsyncDisposable
 
     public ListeningManager(IRemoteEngine engine, Configuration config)
         : this(engine, config.ListeningMasterVolume, config.ListeningPairVolumes,
-               config.ListeningAutoPlay, config,
+               config.ListeningAutoPlay,
                updatePoll: TimeSpan.FromMilliseconds(250),
                errorBackoff: TimeSpan.FromSeconds(1),
                lostBackoff: TimeSpan.FromSeconds(10)) { }
@@ -176,10 +171,8 @@ public class ListeningManager : IAsyncDisposable
     // for unit tests only
     internal ListeningManager(IRemoteEngine engine, float masterVolume,
                               IReadOnlyDictionary<string, float>? savedPairVolumes, bool autoPlay,
-                              Configuration config,
                               TimeSpan updatePoll, TimeSpan errorBackoff, TimeSpan lostBackoff)
     {
-        this.config = config;
         this.updatePoll = updatePoll;
         this.errorBackoff = errorBackoff;
         this.lostBackoff = lostBackoff;
@@ -206,6 +199,7 @@ public class ListeningManager : IAsyncDisposable
         if (pollTask is not null) await pollTask;
         await CancelPollDelay();
         asyncCts.Dispose();
+        outputs.Writer.TryComplete();
     }
 
     /// <summary>
@@ -562,9 +556,8 @@ public class ListeningManager : IAsyncDisposable
                 || !pairs.TryGetValue(ident, out var pair)
                 || SilenceReason(pair) is not { } reason)
                 continue;
-            if (config.NotifyMutedPlayback)
-                ChatNotifier.Information(
-                    "Muted Playback: ", $"{PairName(ident, pair)} started playing, but {reason}.");
+            outputs.Writer.TryWrite(new ListeningOutput.SilentPlaybackStarted(
+                PairName(ident, pair), reason));
         }
 
         newPairNotifications.Clear();
@@ -577,27 +570,12 @@ public class ListeningManager : IAsyncDisposable
 
         if (ident == selectedSourceId && pair.Data.IsPlaying && SilenceReason(pair) is { } reason)
         {
-            if (config.NotifyMutedPlayback)
-                ChatNotifier.Information("Muted Playback: ", $"{name} started playing, but {reason}.");
+            outputs.Writer.TryWrite(new ListeningOutput.SilentPlaybackStarted(name, reason));
             return;
         }
 
-        var track = TrackLabel(pair.Data);
-        var nearby = $"{name} is playing {track} nearby";
-        var (enabled, message) = ClassifyNearbyBroadcast(ident) switch
-        {
-            NearbyBroadcastContext.CurrentlyBroadcasting =>
-                (config.NotifyNearbyBroadcasterWhileBroadcasting,
-                 $"{nearby}, but you're currently broadcasting."),
-            NearbyBroadcastContext.AutoPlayOff =>
-                (config.NotifyNearbyBroadcasterAutoPlayOff,
-                 $"{nearby}, but Auto-play is Off."),
-            NearbyBroadcastContext.Normal =>
-                (config.NotifyNearbyBroadcaster, $"{name} is playing {track}."),
-            _ => throw new ArgumentOutOfRangeException(),
-        };
-
-        if (enabled) ChatNotifier.Information("Nearby Broadcast: ", message);
+        outputs.Writer.TryWrite(new ListeningOutput.NearbyBroadcastDetected(
+            Track(name, pair.Data), ClassifyNearbyBroadcast(ident)));
     }
 
     private NearbyBroadcastContext ClassifyNearbyBroadcast(ulong ident)
@@ -612,8 +590,7 @@ public class ListeningManager : IAsyncDisposable
 
     private void MaybeNotifyTrackChanged(ulong? previousSourceId, PairData? previousData)
     {
-        if (!config.NotifyListeningTrackChanged
-            || previousSourceId is not { } sourceId
+        if (previousSourceId is not { } sourceId
             || sourceId != appliedSourceId
             || previousData is null
             || appliedData is null
@@ -621,31 +598,24 @@ public class ListeningManager : IAsyncDisposable
             || !pairs.TryGetValue(sourceId, out var pair))
             return;
 
-        ChatNotifier.Information(
-            "Now Playing: ", $"{PairName(sourceId, pair)} is now playing {TrackLabel(appliedData)}.");
+        outputs.Writer.TryWrite(new ListeningOutput.TrackChanged(
+            Track(PairName(sourceId, pair), appliedData)));
     }
 
-    private string? SilenceReason(PairState pair)
+    private ListeningSilenceReason? SilenceReason(PairState pair)
     {
-        if (masterMuted) return "your master listening volume is muted";
-        if (pair.Muted) return "their listening volume is muted";
-        if (masterVolume <= 0f) return "your master listening volume is set to zero";
-        if (pair.Volume <= 0f) return "their listening volume is set to zero";
+        if (masterMuted) return ListeningSilenceReason.MasterMuted;
+        if (pair.Muted) return ListeningSilenceReason.PairMuted;
+        if (masterVolume <= 0f) return ListeningSilenceReason.MasterVolumeZero;
+        if (pair.Volume <= 0f) return ListeningSilenceReason.PairVolumeZero;
         return null;
     }
 
     private static string PairName(ulong ident, PairState pair)
         => pair.DisplayName ?? $"{ident:X}";
 
-    private static string TrackLabel(PairData data)
-    {
-        var artist = data.Meta?.Artist;
-        var title = data.Meta?.Title;
-        if (!string.IsNullOrEmpty(title))
-            return !string.IsNullOrEmpty(artist) ? $"{artist} - {title}" : title;
-        if (data.Meta?.OriginalFileName is { Length: > 0 } original) return original;
-        return Path.GetFileName(data.FilePath);
-    }
+    private static ListeningTrack Track(string sourceName, PairData data)
+        => new(sourceName, data.FilePath, data.Meta);
 
     private void SetPlaybackTarget(ulong? activeId, PairState? active)
     {
@@ -670,6 +640,15 @@ public class ListeningManager : IAsyncDisposable
     private void PublishEngineSnapshot(EngineSnapshot snapshot)
     {
         var current = playback;
+        var isListening = current.TargetPath is not null
+                          && snapshot.Path == current.TargetPath
+                          && snapshot.State == PlaybackState.Playing;
+        if (lastListening != isListening)
+        {
+            lastListening = isListening;
+            outputs.Writer.TryWrite(new ListeningOutput.ListeningChanged(isListening));
+        }
+
         ListenerPlaybackView next;
         if (current.TargetPath is null)
         {

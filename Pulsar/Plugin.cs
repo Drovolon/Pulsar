@@ -23,6 +23,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
     [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
+    [PluginService] internal static IGameConfig GameConfig { get; private set; } = null!;
     // These three have internal setters (not private): Pulsar.Tests installs fakes for them.
     [PluginService] internal static IPluginLog Log { get; set; } = null!;
     [PluginService] internal static IFramework Framework { get; set; } = null!;
@@ -47,6 +48,8 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
     internal void SetDebugLoopback(bool enabled)
         => DebugLoopback?.SetEnabled(enabled, CurrentBroadcastPlayerData);
+
+    internal void RefreshBgmMute() => Coordinator?.RefreshBgmMute();
 
     public readonly WindowSystem WindowSystem = new("Pulsar");
     private MainWindow MainWindow { get; init; }
@@ -105,7 +108,13 @@ public sealed class Plugin : IAsyncDalamudPlugin
         Ipc = new IpcProvider(PluginInterface, Listening, Broadcast);
         Ipc.Prepare();
         DebugLoopback = new DebugLoopbackController(Ipc);
-        Coordinator = new ApplicationCoordinator(Broadcast, Listening, Ipc, DebugLoopback);
+        Coordinator = new ApplicationCoordinator(
+            Broadcast,
+            Listening,
+            Ipc,
+            DebugLoopback,
+            new ListeningNotifier(Configuration),
+            new BgmMuter(Configuration, new GameBgmControl(GameConfig)));
         DebugLoopback.SetEnabled(Configuration.DebugLoopbackEnabled, CurrentBroadcastPlayerData);
 
         ListenEngine.Start();
@@ -170,11 +179,14 @@ public sealed class Plugin : IAsyncDalamudPlugin
         try
         {
             if (Coordinator is not null) await Coordinator.DisposeAsync();
-            else if (Broadcast is not null) await Broadcast.DisposeAsync();
+            else
+            {
+                if (Broadcast is not null) await Broadcast.DisposeAsync();
+                if (Listening is not null) await Listening.DisposeAsync();
+            }
             Ipc?.Dispose();
             await Framework.RunOnFrameworkThread(FrameworkDispose);
             if (SyncPrep is not null) await SyncPrep.DisposeAsync();
-            if (Listening is not null) await Listening.DisposeAsync();
         }
         finally
         {

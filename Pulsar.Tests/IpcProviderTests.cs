@@ -31,6 +31,7 @@ public class IpcProviderTests : IAsyncLifetime
     private readonly IpcProvider ipc;
     private readonly DebugLoopbackController debugLoopback;
     private readonly ApplicationCoordinator coordinator;
+    private readonly FakeGameBgmControl gameBgm = new();
 
     public IpcProviderTests()
     {
@@ -41,7 +42,13 @@ public class IpcProviderTests : IAsyncLifetime
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
         debugLoopback = new DebugLoopbackController(ipc);
-        coordinator = new ApplicationCoordinator(broadcast, listening, ipc, debugLoopback);
+        coordinator = new ApplicationCoordinator(
+            broadcast,
+            listening,
+            ipc,
+            debugLoopback,
+            new ListeningNotifier(config),
+            new BgmMuter(config, gameBgm));
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -50,7 +57,6 @@ public class IpcProviderTests : IAsyncLifetime
     {
         await coordinator.DisposeAsync();
         ipc.Dispose();
-        await listening.DisposeAsync();
         await prep.DisposeAsync();
         dir.Delete(recursive: true);
     }
@@ -81,6 +87,23 @@ public class IpcProviderTests : IAsyncLifetime
         gates.ClearPlayerData.Action!(7UL);
         await TestWait.Assert(() => listening.View.All(p => p.Ident != 7UL),
             "ClearPlayerData removes the pair");
+    }
+
+    [Fact]
+    public async Task Listening_outputs_are_routed_to_the_bgm_muter()
+    {
+        var payload = JsonSerializer.Serialize(new PulsarCursor
+        {
+            IsPlaying = true,
+            AsOfUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            CursorEpoch = 1,
+        });
+
+        gates.SetPlayerData.Action!(7UL, @"C:\x.opus", null, payload);
+        await TestWait.Assert(() => gameBgm.Muted, "listening mutes game BGM");
+
+        gates.ClearPlayerData.Action!(7UL);
+        await TestWait.Assert(() => !gameBgm.Muted, "stopping listening restores game BGM");
     }
 
     [Fact]

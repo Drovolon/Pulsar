@@ -16,6 +16,7 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
     private readonly FakeRemoteEngine engine = new();
     private readonly Configuration config = TestData.QuietConfiguration();
     private ListeningManager? manager;
+    private Task? outputLoop;
 
     public ListeningNotificationTests() => TestBootstrap.Chat.Clear();
 
@@ -24,11 +25,23 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         if (manager is not null) await manager.DisposeAsync();
+        if (outputLoop is not null) await outputLoop;
         TestBootstrap.Chat.Clear();
     }
 
     private ListeningManager Create()
-        => manager = new ListeningManager(engine, config);
+    {
+        manager = new ListeningManager(engine, config);
+        var notifier = new ListeningNotifier(config);
+        outputLoop = RouteOutputs(manager, notifier);
+        return manager;
+    }
+
+    private static async Task RouteOutputs(ListeningManager listening, ListeningNotifier notifier)
+    {
+        await foreach (var output in listening.Outputs.ReadAllAsync())
+            notifier.Notify(output);
+    }
 
     private static PairData Track(string path, bool playing = true, int epoch = 1,
                                   string title = "Song")
@@ -46,6 +59,8 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
         Assert.True(defaults.NotifyMutedPlayback);
         Assert.False(defaults.NotifyListeningTrackChanged);
         Assert.True(defaults.NotifyUnsyncableBroadcast);
+        Assert.True(defaults.MuteGameBgmWhileListening);
+        Assert.True(defaults.MuteGameBgmWhileBroadcasting);
     }
 
     [Fact]

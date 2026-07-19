@@ -7,6 +7,21 @@ internal sealed class ConfigTab(Plugin plugin, UiTheme theme)
 {
     public void Draw()
     {
+        UiUtil.SectionHeader(theme, "VOLUME");
+        ImGui.TextDisabled("Mute in-game BGM:");
+        DrawCheckbox("While listening to someone else", plugin.Configuration.MuteGameBgmWhileListening,
+            value =>
+            {
+                plugin.Configuration.MuteGameBgmWhileListening = value;
+                plugin.RefreshBgmMute();
+            });
+        DrawCheckbox("While broadcasting", plugin.Configuration.MuteGameBgmWhileBroadcasting,
+            value =>
+            {
+                plugin.Configuration.MuteGameBgmWhileBroadcasting = value;
+                plugin.RefreshBgmMute();
+            });
+
         UiUtil.SectionHeader(theme, "NOTIFICATIONS");
         ImGui.TextDisabled("Notify when nearby broadcaster is detected:");
         DrawCheckbox("Normally", plugin.Configuration.NotifyNearbyBroadcaster,

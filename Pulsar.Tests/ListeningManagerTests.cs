@@ -22,14 +22,13 @@ public class ListeningManagerTests : IAsyncLifetime
     private ListeningManager? manager;
 
     private ListeningManager Create(float masterVolume = 1f, bool autoPlay = true)
-        => manager = new ListeningManager(engine, masterVolume, null, autoPlay, config,
+        => manager = new ListeningManager(engine, masterVolume, null, autoPlay,
             updatePoll: TimeSpan.FromMilliseconds(250),
             errorBackoff: TimeSpan.FromSeconds(1),
             lostBackoff: TimeSpan.FromSeconds(10));
 
     private ListeningManager CreateFast(TimeSpan? lostBackoff = null)
         => manager = new ListeningManager(engine, 1f, null, true,
-            config,
             updatePoll: TimeSpan.FromMilliseconds(25),
             errorBackoff: TimeSpan.FromMilliseconds(50),
             lostBackoff: lostBackoff ?? TimeSpan.FromMilliseconds(50));
