@@ -1,0 +1,32 @@
+[
+  {
+    "Author": "Drovolon",
+    "Name": "Pulsar",
+    "InternalName": "Pulsar",
+    "AssemblyVersion": "0.0.1.0",
+    "Description": "A plugin to sync sound files. /pulsar to open config. Requires a compatible sync plugin, like Lightless.",
+    "ApplicableVersion": "any",
+    "Tags": [
+      "sync",
+      "music"
+    ],
+    "DalamudApiLevel": 15,
+    "LoadRequiredState": 0,
+    "LoadSync": false,
+    "CanUnloadAsync": false,
+    "LoadPriority": 0,
+    "Punchline": "A plugin to sync sound files.",
+    "AcceptsFeedback": true,
+    "Changelog": "Let's see if this works!",
+    "DownloadLinkInstall": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
+    "DownloadLinkUpdate": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
+    "IsTestingExclusive": true,
+    "TestingAssemblyVersion": "0.0.1.0",
+    "TestingDalamudApiLevel": 15,
+    "TestingChangelog": "Let's see if this works!",
+    "DownloadLinkTesting": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
+    "RepoUrl": "https://github.com/Drovolon/Pulsar",
+    "DownloadCount": 0,
+    "LastUpdate": 1784426964
+  }
+]
