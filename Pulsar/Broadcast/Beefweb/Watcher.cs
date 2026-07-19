@@ -57,19 +57,21 @@ public sealed class Watcher : IMusicSource
     private bool everConnected;
     private bool gaveUp;
     private bool wasUnsyncable;
+    private volatile bool onAir;
 
     private string? nextLocalPath;
     private volatile PublishedState published = new(null, new BeefwebStatus(false, null));
 
     // giveUpDelay is for tests
     public Watcher(IFeed feed, PlayerClient client, bool isWine, Configuration config,
-                   TimeSpan? giveUpDelay = null)
+                   TimeSpan? giveUpDelay = null, bool onAir = true)
     {
         this.feed = feed;
         this.client = client;
         this.isWine = isWine;
         this.config = config;
         this.giveUpDelay = giveUpDelay ?? DefaultGiveUpDelay;
+        this.onAir = onAir;
         connected = feed.Connected;
         everConnected = connected;
         PublishState();
@@ -90,7 +92,7 @@ public sealed class Watcher : IMusicSource
         var creds = string.IsNullOrEmpty(user) ? null : new ApiCredentials(user, pass ?? "");
         var client = new PlayerClient(baseUri, creds);
         IFeed feed = useSse ? new SseFeed(client) : new PollingFeed(client);
-        return new Watcher(feed, client, Dalamud.Utility.Util.IsWine(), config);
+        return new Watcher(feed, client, Dalamud.Utility.Util.IsWine(), config, onAir: false);
     }
 
     public void TogglePlay()   => commands.TryPost(PlayerCommand.TogglePlay);
@@ -116,7 +118,18 @@ public sealed class Watcher : IMusicSource
 
     public event Action<SourceSnapshot?>? OnSnapshotChanged;
 
-    public SourceSnapshot? Current => published.Current;
+    public SourceSnapshot? Current => onAir ? published.Current : null;
+
+    public SourceSnapshot? Observed => published.Current;
+
+    public bool OnAir => onAir;
+
+    internal void SetOnAir(bool value)
+    {
+        if (onAir == value) return;
+        onAir = value;
+        OnSnapshotChanged?.Invoke(Current);
+    }
 
     public BeefwebStatus Status => published.Status;
 
@@ -314,9 +327,9 @@ public sealed class Watcher : IMusicSource
         if (trackChanged) await ResolveNextAsync();
 
         PublishState();
-        if (warnUnsyncable is { } n && config.NotifyUnsyncableBroadcast)
+        if (warnUnsyncable is { } n && onAir && config.NotifyUnsyncableBroadcast)
             NotifyUnsyncable(n, isWine);
-        if (triggerEvent) OnSnapshotChanged?.Invoke(published.Current);
+        if (triggerEvent && onAir) OnSnapshotChanged?.Invoke(Current);
     }
 
     private void OnConnectedChanged(bool value) => mailbox.TryPost(new ConnectionChanged(value));
@@ -342,7 +355,7 @@ public sealed class Watcher : IMusicSource
         var fire = !gaveUp && currentObs is { State: not PulsarState.Stopped };
         gaveUp = true;
         PublishState();
-        if (fire) OnSnapshotChanged?.Invoke(null);
+        if (fire && onAir) OnSnapshotChanged?.Invoke(Current);
     }
 
     private void PublishState()

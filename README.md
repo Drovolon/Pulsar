@@ -49,7 +49,7 @@ Use `/pulsar` to open the UI.
 
 * Play from folder: finds all sound files (recursively) in a folder.
 * Play from mod: same as play from folder, but uses Penumbra IPC to let you pick a mod instead of hunting for the folder on disk.
-* Beefweb: Connects to foobar2000 or DeaDBeeF using the beefweb API. Requires installation of the beefweb component in foobar2000 or DeaDBeeF to function. **NOTE**: DSP effects like equalizers, etc., are NOT synced. Just the file you're playing and your position in the song.
+* Beefweb: Connects to foobar2000 or DeaDBeeF using the beefweb API. Requires installation of the beefweb component in foobar2000 or DeaDBeeF to function. Turn **On Air** on when you're ready to broadcast. **NOTE**: DSP effects like equalizers, etc., are NOT synced. Just the file you're playing and your position in the song.
 
 <img src="./screenshots/play-from-folder.png" alt="listening" width="250"/>
 <img src="./screenshots/play-from-mod.png" alt="listening" width="250"/>

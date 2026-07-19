@@ -2,10 +2,12 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Pulsar.Broadcast;
+using Pulsar.Broadcast.Beefweb;
 using Pulsar.Broadcast.Prepare;
 using Pulsar.Listening;
 using Pulsar.Tests.Fakes;
 using Xunit;
+using PulsarState = NAudio.Wave.PlaybackState;
 
 namespace Pulsar.Tests;
 
@@ -213,6 +215,44 @@ public class BroadcastSourceTests : IAsyncLifetime
     }
 
     // ---- loaders ------------------------------------------------------------------
+
+    [Fact]
+    public async Task Beefweb_stays_off_air_until_the_session_gate_is_enabled()
+    {
+        var feed = new ControllableFeed();
+        var server = new FakeBeefwebServer();
+        var watcher = new Watcher(feed, server.CreateClient(), isWine: false, config, onAir: false);
+        await broadcast.SetSource(watcher);
+        var track = Track("paused.flac");
+
+        feed.Push(new Observation(
+            track,
+            PulsarState.Paused,
+            TimeSpan.FromSeconds(12),
+            TimeSpan.FromMinutes(3),
+            "Paused Song",
+            "Band",
+            DateTimeOffset.UtcNow,
+            System.Diagnostics.Stopwatch.GetTimestamp()));
+
+        await TestWait.Assert(() => watcher.Observed is not null, "Beefweb observes its initial state");
+        Assert.False(broadcast.BeefwebOnAir);
+        Assert.Null(broadcast.CurrentSnapshot);
+        Assert.Null(broadcast.CurrentPlayerData());
+
+        broadcast.SetBeefwebOnAir(true);
+
+        await TestWait.Assert(() => broadcast.CurrentSnapshot is not null, "the session gate opens");
+        Assert.True(broadcast.BeefwebOnAir);
+        Assert.Equal(track, broadcast.CurrentSnapshot!.FilePath);
+        Assert.False(broadcast.CurrentSnapshot.IsPlaying);
+
+        broadcast.SetBeefwebOnAir(false);
+
+        await TestWait.Assert(() => broadcast.CurrentSnapshot is null, "the session gate closes");
+        Assert.False(broadcast.BeefwebOnAir);
+        Assert.Null(broadcast.CurrentPlayerData());
+    }
 
     private DirectoryInfo CreateFolder(params string[] tracks)
     {

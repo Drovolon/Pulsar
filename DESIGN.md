@@ -157,6 +157,7 @@ An example may be easiest, and it's probably illustrative of data flow:
 
 * Broadcast tab: set the source to Beefweb, let's say
 * Have a Beefweb player running
+* Enable the On Air switch
 * The Beefweb Watcher will notice when a song starts playing and notify the BroadcastManager
 * The BroadcastManager will use SyncPrep to do any necessary transcode/loudness calculation
 * When prep finishes, BroadcastManager will push the prepared file path, cursor position, and observation timestamp to ApplicationCoordinator

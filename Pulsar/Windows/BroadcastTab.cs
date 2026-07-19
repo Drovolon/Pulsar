@@ -163,8 +163,23 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
 
     private void DrawBeefweb()
     {
+        DrawBeefwebOnAir();
         DrawBeefwebConfig();
         DrawBeefwebControls();
+    }
+
+    private void DrawBeefwebOnAir()
+    {
+        UiUtil.SectionHeader(theme, "BROADCAST");
+
+        var onAir = plugin.Broadcast?.BeefwebOnAir ?? false;
+        if (ImGui.Checkbox("On Air", ref onAir))
+            plugin.Broadcast?.SetBeefwebOnAir(onAir);
+
+        ImGui.SameLine();
+        ImGui.TextDisabled(onAir
+            ? "You're broadcasting."
+            : "Not currently broadcasting.");
     }
 
     private void DrawBeefwebConfig()
@@ -221,11 +236,11 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
 
     private void DrawBeefwebControls()
     {
-        if (plugin.Broadcast?.ActiveBeefweb?.Status.Connected == false) return;
+        if (plugin.Broadcast?.ActiveBeefweb?.Status.Connected != true) return;
 
         UiUtil.SectionHeader(theme, "CONTROLS");
 
-        var snap = plugin.Broadcast?.CurrentSnapshot;
+        var snap = plugin.Broadcast?.ActiveBeefweb?.Observed;
         var uns = plugin.Broadcast?.ActiveBeefweb?.Status.Unsyncable;
         if (uns != null)
         {

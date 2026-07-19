@@ -51,6 +51,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     private long snapshotGeneration;
     private int cursorEpoch;
     private bool lastBroadcasting;
+    private volatile bool beefwebOnAir;
 
     // The active source's SnapshotChanged subscription, bound to that source's identity so a
     // late event from a torn-down source can be told apart from the live one.
@@ -85,6 +86,12 @@ public sealed class BroadcastManager : IAsyncDisposable
     /// <summary>The active source IF it is the beefweb watcher.</summary>
     public Beefweb.Watcher? ActiveBeefweb => published.Active as Beefweb.Watcher;
 
+    /// <summary>
+    /// Whether the Beefweb source should get broadcasted. Not persisted to config,
+    /// so it starts as off on every reload, login, etc.
+    /// </summary>
+    public bool BeefwebOnAir => beefwebOnAir;
+
     /// <summary>The active source's live snapshot, source-agnostic (for the shared now-playing line).</summary>
     public SourceSnapshot? CurrentSnapshot => published.Snapshot;
 
@@ -97,8 +104,19 @@ public sealed class BroadcastManager : IAsyncDisposable
     public Task LoadFolder(string directory) => LoadJukebox(directory);
 
     /// <summary>Broadcast from a local foobar2000/DeaDBeeF via the beefweb API.</summary>
-    public Task LoadBeefweb(int port, string? user, string? pass, bool useSse)
-        => SetSource(Beefweb.Watcher.Create(port, user, pass, useSse, config));
+    public async Task LoadBeefweb(int port, string? user, string? pass, bool useSse)
+    {
+        var watcher = Beefweb.Watcher.Create(port, user, pass, useSse, config);
+        await SetSource(watcher);
+
+        if (ReferenceEquals(ActiveBeefweb, watcher)) watcher.SetOnAir(beefwebOnAir);
+    }
+
+    public void SetBeefwebOnAir(bool value)
+    {
+        beefwebOnAir = value;
+        ActiveBeefweb?.SetOnAir(value);
+    }
 
     /// <summary>
     /// Broadcast from a Penumbra mod, given its directory *name*.

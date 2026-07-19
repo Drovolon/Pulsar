@@ -37,11 +37,11 @@ public class BeefwebWatcherTests : IAsyncLifetime
         dir.Delete(recursive: true);
     }
 
-    private Watcher Create(TimeSpan? giveUpDelay = null, Configuration? config = null)
+    private Watcher Create(TimeSpan? giveUpDelay = null, Configuration? config = null, bool onAir = true)
     {
         // The watcher takes ownership of the client (disposes it); the server outlives it.
         watcher = new Watcher(feed, server.CreateClient(), isWine: false,
-            config ?? new Configuration(), giveUpDelay);
+            config ?? new Configuration(), giveUpDelay, onAir);
         watcher.OnSnapshotChanged += _ => Interlocked.Increment(ref changes);
         return watcher;
     }
@@ -82,6 +82,33 @@ public class BeefwebWatcherTests : IAsyncLifetime
         Assert.True(w.Status.Connected);
         Assert.Null(w.Status.Unsyncable);
         await AwaitWake(1, "the track change wakes the pipeline");
+    }
+
+    [Fact]
+    public async Task Off_air_observes_the_player_but_publishes_nothing_until_enabled()
+    {
+        var w = Create(onAir: false);
+        var track = CreateTrack("paused.flac");
+
+        feed.Push(Obs(track, state: PulsarState.Paused));
+
+        await TestWait.Assert(() => w.Observed is not null, "the local player is observed");
+        Assert.False(w.OnAir);
+        Assert.Null(w.Current);
+        Assert.Equal(0, Changes);
+
+        w.SetOnAir(true);
+
+        Assert.True(w.OnAir);
+        Assert.Equal(track, w.Current!.FilePath);
+        Assert.False(w.Current.IsPlaying);
+        Assert.Equal(1, Changes);
+
+        w.SetOnAir(false);
+
+        Assert.False(w.OnAir);
+        Assert.Null(w.Current);
+        Assert.Equal(2, Changes);
     }
 
     [Fact]
