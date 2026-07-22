@@ -17,7 +17,7 @@ namespace Pulsar.Tests.Fakes;
 public sealed class FakeRemoteEngine : IRemoteEngine
 {
     public sealed record Call(string Op, object? Arg = null);
-    private sealed record DeferredLoad(string Path, TimeSpan Position, bool Playing);
+    private sealed record DeferredLoad(string Path, TimeSpan Position, bool Playing, long PlaybackId);
 
     private readonly List<Call> calls = [];
     private readonly Lock @lock = new();
@@ -25,10 +25,14 @@ public sealed class FakeRemoteEngine : IRemoteEngine
     private PlaybackState state = PlaybackState.Stopped;
     private string? path;
     private TimeSpan position;
+    private long playbackId;
     private DeferredLoad? deferredLoad;
 
     /// <summary>Accept Load like AudioServer does, but wait to commit it until CompleteDeferredLoad.</summary>
     public bool DeferLoads { get; set; }
+
+    /// <summary>Commit command state without publishing OnChanged, modeling a missed event feed.</summary>
+    public bool SuppressChangedEvents { get; set; }
 
     /// <summary>Reported total track length while something is loaded.</summary>
     public TimeSpan TrackDuration { get; set; } = TimeSpan.FromMinutes(3);
@@ -62,12 +66,13 @@ public sealed class FakeRemoteEngine : IRemoteEngine
                 return new EngineSnapshot(
                     state, path, null,
                     path is null ? null : new PlaybackPosition(position, TrackDuration),
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow,
+                    playbackId);
             }
         }
     }
 
-    public event EventHandler<EndReason>? OnPlaybackEnded;
+    public event EventHandler<PlaybackEnded>? OnPlaybackEnded;
     public event EventHandler<EngineSnapshot>? OnChanged;
 
     public Task<bool> WaitForCall(string op, TimeSpan? timeout = null)
@@ -79,16 +84,20 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         if (Intercept?.Invoke(op) is { } ex) throw ex;
     }
 
-    public async Task LoadAsync(string loadPath, TimeSpan pos, bool startPlaying, CancellationToken ct)
+    public async Task LoadAsync(
+        string loadPath, TimeSpan pos, bool startPlaying, long newPlaybackId, CancellationToken ct)
     {
         Enter("Load", (loadPath, pos, startPlaying));
         if (Stall?.Invoke("Load") is { } hang) await hang;
         if (DeferLoads)
         {
-            lock (@lock) deferredLoad = new DeferredLoad(loadPath, pos, startPlaying);
+            lock (@lock)
+            {
+                deferredLoad = new DeferredLoad(loadPath, pos, startPlaying, newPlaybackId);
+            }
             return;
         }
-        CommitLoad(loadPath, pos, startPlaying);
+        CommitLoad(loadPath, pos, startPlaying, newPlaybackId);
     }
 
     public void CompleteDeferredLoad()
@@ -99,21 +108,25 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             pending = deferredLoad;
             deferredLoad = null;
         }
-        if (pending is not null) CommitLoad(pending.Path, pending.Position, pending.Playing);
+        if (pending is not null)
+            CommitLoad(pending.Path, pending.Position, pending.Playing, pending.PlaybackId);
     }
 
-    private void CommitLoad(string loadPath, TimeSpan pos, bool startPlaying)
+    private void CommitLoad(string loadPath, TimeSpan pos, bool startPlaying, long newPlaybackId)
     {
         lock (@lock)
         {
             path = loadPath;
             position = pos;
+            playbackId = newPlaybackId;
             state = startPlaying ? PlaybackState.Playing : PlaybackState.Paused;
         }
-        OnChanged?.Invoke(this, Snapshot);
+        PublishChanged();
     }
 
-    public Task LoadBytesAsync(string displayPath, byte[] audioData, TimeSpan pos, bool startPlaying, CancellationToken ct)
+    public Task LoadBytesAsync(
+        string displayPath, byte[] audioData, TimeSpan pos,
+        bool startPlaying, long newPlaybackId, CancellationToken ct)
     {
         Enter("LoadBytes", (displayPath, pos, startPlaying));
         lock (@lock)
@@ -121,9 +134,10 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             path = displayPath;
             LastLoadedBytes = audioData;
             position = pos;
+            playbackId = newPlaybackId;
             state = startPlaying ? PlaybackState.Playing : PlaybackState.Paused;
         }
-        OnChanged?.Invoke(this, Snapshot);
+        PublishChanged();
         return Task.CompletedTask;
     }
 
@@ -137,7 +151,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             position = TimeSpan.Zero;
             state = PlaybackState.Stopped;
         }
-        OnChanged?.Invoke(this, Snapshot);
+        PublishChanged();
     }
 
     public Task PauseAsync(CancellationToken ct)
@@ -149,7 +163,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             if (state == PlaybackState.Playing) { state = PlaybackState.Paused; changed = true; }
         }
         // Like FilePlayer: no-op commands raise no OnChanged.
-        if (changed) OnChanged?.Invoke(this, Snapshot);
+        if (changed) PublishChanged();
         return Task.CompletedTask;
     }
 
@@ -161,7 +175,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         {
             if (state == PlaybackState.Paused) { state = PlaybackState.Playing; changed = true; }
         }
-        if (changed) OnChanged?.Invoke(this, Snapshot);
+        if (changed) PublishChanged();
         return Task.CompletedTask;
     }
 
@@ -180,14 +194,15 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         {
             if (path is not null) { position = pos; changed = true; }
         }
-        if (changed) OnChanged?.Invoke(this, Snapshot);
+        if (changed) PublishChanged();
         return Task.CompletedTask;
     }
 
-    public Task<EngineSnapshot> GetStateAsync(CancellationToken ct)
+    public async Task<EngineSnapshot> GetStateAsync(CancellationToken ct)
     {
         if (Intercept?.Invoke("GetState") is { } ex) throw ex;
-        return Task.FromResult(Snapshot);
+        if (Stall?.Invoke("GetState") is { } hang) await hang;
+        return Snapshot;
     }
 
     /// <summary>Simulate the loaded track playing to its natural end.</summary>
@@ -196,8 +211,24 @@ public sealed class FakeRemoteEngine : IRemoteEngine
     /// <summary>Simulate the loaded track failing mid-play (or a load failure).</summary>
     public void FailTrack() => EndTrack(EndReason.Failed);
 
+    /// <summary>Simulate the audio host disappearing with a track loaded.</summary>
+    public void DisconnectTrack() => EndTrack(EndReason.Disconnected);
+
+    /// <summary>Raise an event from an older playback without changing current engine state.</summary>
+    public void RaisePlaybackEnded(long endedPlaybackId, EndReason reason)
+        => OnPlaybackEnded?.Invoke(this, new PlaybackEnded(endedPlaybackId, reason));
+
+    /// <summary>Raise an arbitrary engine observation without changing current engine state.</summary>
+    public void RaiseChanged(EngineSnapshot snapshot) => OnChanged?.Invoke(this, snapshot);
+
+    private void PublishChanged()
+    {
+        if (!SuppressChangedEvents) OnChanged?.Invoke(this, Snapshot);
+    }
+
     private void EndTrack(EndReason reason)
     {
+        long endedPlaybackId;
         lock (@lock)
         {
             // The real host cannot end a track it isn't playing (no trackEnded TCS).
@@ -205,7 +236,8 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             path = null;
             position = TimeSpan.Zero;
             state = PlaybackState.Stopped;
+            endedPlaybackId = playbackId;
         }
-        OnPlaybackEnded?.Invoke(this, reason);
+        OnPlaybackEnded?.Invoke(this, new PlaybackEnded(endedPlaybackId, reason));
     }
 }

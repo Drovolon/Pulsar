@@ -11,10 +11,8 @@ namespace Pulsar.Broadcast;
 public sealed record ModEntry(string DirectoryName, string Name);
 
 /// <summary>
-/// Used to power the "play a mod" feature in the Broadcast tab. It's pretty simple:
-/// a mod just means "the mod's top level directory". So this is just the folder jukebox
-/// but a little more user-friendly, since it doesn't require them to go hunt down
-/// the mod directory on disk.
+/// Used to power the "play a mod" feature in the Broadcast tab: enumerates mods and
+/// resolves their top-level directories.
 /// </summary>
 public sealed class PenumbraIntegration : IModResolver, IDisposable
 {
@@ -98,18 +96,10 @@ public sealed class PenumbraIntegration : IModResolver, IDisposable
         }
     }
 
-    /// <summary>Resolves a mod's directory name to an existing directory under root.</summary>
+    /// <summary>Resolves a mod path against the configured Penumbra root.</summary>
     internal static string? ResolveUnder(string root, string modDirectoryName)
     {
-        // GetFileName strips separators but passes "." and ".." through untouched -
-        // Combine(root, "..") is the mod root's PARENT, and Directory.Exists says yes.
-        var leaf = Path.GetFileName(modDirectoryName);
-        if (leaf is "" or "." or "..")
-        {
-            Plugin.Log.Warning($"Refusing suspicious mod directory name: '{modDirectoryName}'");
-            return null;
-        }
-        var full = Path.Combine(root, leaf);
+        var full = Path.GetFullPath(modDirectoryName, root);
         return Directory.Exists(full) ? full : null;
     }
 

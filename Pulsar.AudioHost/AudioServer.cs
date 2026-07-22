@@ -1,6 +1,5 @@
 using Pulsar.AudioHost.Playback;
 using Pulsar.Common.Api;
-using EndReason = Pulsar.Common.Api.EndReason;
 
 namespace Pulsar.AudioHost;
 
@@ -25,15 +24,18 @@ public class AudioServer : IRemoteEngine, IAsyncDisposable
         filePlayer.OnPlaybackEnded += (_, reason) => OnPlaybackEnded?.Invoke(this, reason);
     }
     
-    public Task LoadAsync(string path, TimeSpan position, bool startPlaying, CancellationToken ct)
+    public Task LoadAsync(
+        string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
-        filePlayer.Load(path, position, startPlaying);
+        filePlayer.Load(path, position, startPlaying, playbackId);
         return Task.CompletedTask;
     }
 
-    public Task LoadBytesAsync(string displayPath, byte[] audioData, TimeSpan position, bool startPlaying, CancellationToken ct)
+    public Task LoadBytesAsync(
+        string displayPath, byte[] audioData, TimeSpan position,
+        bool startPlaying, long playbackId, CancellationToken ct)
     {
-        filePlayer.LoadBytes(displayPath, audioData, position, startPlaying);
+        filePlayer.LoadBytes(displayPath, audioData, position, startPlaying, playbackId);
         return Task.CompletedTask;
     }
 
@@ -69,15 +71,13 @@ public class AudioServer : IRemoteEngine, IAsyncDisposable
 
     public Task<EngineSnapshot> GetStateAsync(CancellationToken ct)
     {
-        return Task.FromResult(new EngineSnapshot(
-                                   filePlayer.State,
-                                   filePlayer.Path,
-                                   filePlayer.LastError,
-                                   filePlayer.Position,
-                                   DateTimeOffset.UtcNow));
+        return Task.FromResult(filePlayer.Snapshot with
+        {
+            ObservedAt = DateTimeOffset.UtcNow,
+        });
     }
 
-    public event EventHandler<EndReason>? OnPlaybackEnded;
+    public event EventHandler<PlaybackEnded>? OnPlaybackEnded;
     public event EventHandler<EngineSnapshot>? OnChanged;
 
     public async ValueTask DisposeAsync()

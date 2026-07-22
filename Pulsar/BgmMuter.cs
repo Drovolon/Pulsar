@@ -61,6 +61,7 @@ internal sealed class BgmMuter(Configuration config, IGameBgmControl gameBgm) : 
         }
     }
 
+    // runs on framework thread
     private void Apply()
     {
         var shouldMute = (listening && config.MuteGameBgmWhileListening)
@@ -84,6 +85,7 @@ internal sealed class BgmMuter(Configuration config, IGameBgmControl gameBgm) : 
         Restore();
     }
 
+    // runs on framework thread
     private void Restore()
     {
         if (!ownsMute) return;

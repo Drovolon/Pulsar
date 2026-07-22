@@ -13,7 +13,7 @@ public class SmokeTest
         Assert.Equal(Broadcast.BroadcastMode.Folder, config.BroadcastMode);
 
         var snapshot = new Common.Api.EngineSnapshot(
-            NAudio.Wave.PlaybackState.Stopped, null, null, null, System.DateTimeOffset.UtcNow);
+            NAudio.Wave.PlaybackState.Stopped, null, null, null, System.DateTimeOffset.UtcNow, 0);
         Assert.Null(snapshot.Path);
     }
 }

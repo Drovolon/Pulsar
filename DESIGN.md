@@ -33,11 +33,11 @@ These are a rough sketch of how I wanted the design to play out.
 
 The big TL;DR of how Pulsar slots into this ecosystem:
 
-* User broadcasts some music from an IMusicSource (Jukebox, Beefweb Watcher)
+* User broadcasts some music from an IMusicSource (LocalPlaybackSource, Beefweb Watcher)
 * Sync plugins get player data from either GetPlayerData() IPC or OnPlayerDataChanged() messages
 * Player data has:
-  1. the current active file that should be synced
-  2. one file to sync for prefetch (not yet implemented, path is always empty)
+  1. the current active file that should be synced (& its BLAKE3 and SHA-1 hashes)
+  2. one file (& hashes) to sync for prefetch (not yet implemented, path is always empty)
   3. an *opaque* (to the sync plugin) blob that includes DJ playback position, track metadata like calculated loudness, original filename, artist & album & song title
 * Sync plugin does the file syncing and whatnot
 * On *a pair's machine* sync plugin calls SetPlayerData with:
@@ -86,9 +86,9 @@ Broadcast is for the DJ. The majority of that code lives in `Broadcast/`, with t
 
 Support `BroadcastMode`'s:
 
-* Local folder playback - the `Jukebox`. Simply finds all audio files (recursively) in a directory, offers a simple shuffle, next/prev controls. Intended to be lightweight, easy to use. Per non-goals, intentionally NOT a library manager. I didn't want to write code to manage ID3v2 tags, sorting/filtering (besides basic search), playlist management, etc.
-* Local mod playback - same as local folder, just has a nice UI that instantiates a `Jukebox` with that mod directory as the path. Uses Penumbra IPC to do mod enumeration. Since .scd files are supported, this lets users "play" existing DAM mods (like Thunderdome) which already have music loaded into them.
-* Beefweb - most complex, but allows the user to use any player that supports the beefweb API (at the time of writing: just foobar2000 and DeaDBeeF) to pick the song they want to play.
+* Local folder playback - a `FolderTrackCatalogLoader` recursively finds audio files, and hands them to `LocalPlaybackSource`. It offers simple shuffle and next/prev controls. Intended to be lightweight, easy to use. Per non-goals, intentionally NOT a library manager. I didn't want to write code to manage ID3v2 tags, user-authored playlists, etc.
+* Local mod playback - uses Penumbra IPC to offer a mod selector. When a mod is selected, it builds "groups" - the first is always "All Files" (equivalent of FolderTrackCatalogLoader). But it also reads `group_*.json` from the filesystem to *infer* "playlists" that users have built with DAM mods like Thunderdome. This is very best-effort. Anyway, that's all powered by `ModTrackCatalogLoader`.
+* Beefweb - most complex, but allows the user to use any player that supports the beefweb API (at the time of writing: just foobar2000 and DeaDBeeF) to pick the song they want to play. This is implemented by the `Watcher` class in the Beefweb namespace.
 
 BroadcastManager has a notion of the *active source* (which of those three is selected). Like everywhere, it has an actor loop that handles commands like "change the source" or "the source reported a change" (new song playing, for example) or "the source was disconnected, but now it's reconnected".
 
@@ -124,15 +124,17 @@ So, our solution is:
   * this is done by using monotonic timestamps and checking how far the cursor has changed since the last observation: e.g., if our last observation was 10 seconds ago, and the playback cursor has advanced by 10 seconds, the user has *not* performed a seek
 * a `Watcher` that ties it all together
 
-None of that machinery is necessary for the Jukebox source (local folder), since we are in the path of all user inputs.
+None of that machinery is necessary for the local playback source, since we are in the path of all user inputs.
 
 ### Listening
 
 Listening is where the magic happens: where file paths (from synced pairs) become sound. It's also fairly complex. Like broadcasts, there's a ListeningManager that coordinates the whole show.
 
-The ListeningManager tracks pairs (a dict of ulong (address) to pair states). Only one pair can be listened to at a time. It takes an `IRemoteEngine`, which is an interface to "play a file" - in the normal case, that's an RPC client to `Pulsar.AudioHost.Listening`.
+The ListeningManager tracks pairs (a dict of ulong (address) to pair states). Only one pair can be listened to at a time. It sends "desired" playback state in `EngineSession`. EngineSession manages `IRemoteEngine`: it assigns playback IDs, handles stale events, polls for state, handles host disconnect/reconnect, etc.
 
-The listening path operates on a "current and desired" model. "Desired" comes from the sync plugin (or from the debug loopback path) - it's "I want this file to play, at this position, which was recorded at this timestamp". The `SyncDecider` class takes the current and desired states as inputs, and outputs an `EngineAction` - what should be done to the `IRemoteEngine` to make it match the desired. For example: if the desired is to pause, but that song is currently playing, it would return `EngineAction.Pause`.
+The listening path operates on a "current and desired" model. "Desired" comes from the sync plugin (or from the debug loopback path) - it's "I want this file to play, at this position, which was recorded at this timestamp". The `SyncDecider` class takes the current and desired states as inputs, and outputs an `EngineAction` - what should be done to make the confirmed engine snapshot match the desired. For example: if the desired is to pause, but that song is currently playing, it would return `EngineAction.Pause`. ListeningManager sends *that* to `EngineSession`, which itself has a "current and desired" model.
+
+(It's a bit weird because EngineSession came later, when tightening up the broadcast path to support multiple catalogs. So, there's an opportunity to refactor ListeningManager to be a thinner layer around EngineSession, probably.)
 
 Like `BroadcastManager`, `ListeningManager` publishes changes through ApplicationCoordinator, which BgmMuter and ListeningNotifier use.
 
@@ -172,7 +174,8 @@ An example may be easiest, and it's probably illustrative of data flow:
 * In the Listening tab of the plugin, select the "debug loopback" pair (pinning it)
 * ListeningManager notices the new pin and asks SyncDecider how to make the engine match the desired pair state
 * (If it wasn't playing already) SyncDecider will likely return EngineAction.Load() with the file path and cursor
-* ListeningManager will invoke RemoteEngineLoad.LoadFileAsync
+* ListeningManager will submit the load target to EngineSession
+* EngineSession will invoke RemoteEngineLoad.LoadFileAsync
 * RemoteEngineLoad will:
   * if it's an .scd file: use Dalamud's Lumina instance to parse the .scd file and extract the raw Vorbis bytes, then call IRemoteEngine.LoadBytesAsync()
   * if it's anything else: call IRemoteEngine.LoadAsync() with the raw file path

@@ -48,7 +48,7 @@ And yes, if the DJ seeks in the song, that seek is synced and everyone will hear
 Use `/pulsar` to open the UI.
 
 * Play from folder: finds all sound files (recursively) in a folder.
-* Play from mod: same as play from folder, but uses Penumbra IPC to let you pick a mod instead of hunting for the folder on disk.
+* Play from mod: same as play from folder, but uses Penumbra IPC to let you pick a mod instead of hunting for the folder on disk. For DAM-style mods, Pulsar **attempts** to detect option groups that act as genre playlists. "All Files" is always available if mod groups aren't detected properly.
 * Beefweb: Connects to foobar2000 or DeaDBeeF using the beefweb API. Requires installation of the beefweb component in foobar2000 or DeaDBeeF to function. Turn **On Air** on when you're ready to broadcast. **NOTE**: DSP effects like equalizers, etc., are NOT synced. Just the file you're playing and your position in the song.
 
 <img src="./screenshots/play-from-folder.png" alt="listening" width="250"/>

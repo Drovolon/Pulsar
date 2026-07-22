@@ -19,11 +19,13 @@ public sealed class FakeWavePlayer : IWavePlayer
 
     /// <summary>The audio pipeline handed to Init - tests can pull samples through it.</summary>
     public IWaveProvider? Provider { get; private set; }
+    public Action? BeforeInit { get; set; }
 
     public event EventHandler<StoppedEventArgs>? PlaybackStopped;
 
     public void Init(IWaveProvider waveProvider)
     {
+        BeforeInit?.Invoke();
         Provider = waveProvider;
         OutputWaveFormat = waveProvider.WaveFormat;
     }

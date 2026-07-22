@@ -14,7 +14,7 @@ public class Configuration : IPluginConfiguration
     public bool DebugMode { get; set; } = false;
     public bool DebugLoopbackEnabled { get; set; } = false;
 
-    // Broadcast (DJ) side: the local monitor/jukebox output volume.
+    // Broadcast (DJ) side: the local monitor/player output volume.
     public float MonitorVolume { get; set; } = 1.0f;
 
     // Listening (receiver) side volumes.
@@ -44,7 +44,10 @@ public class Configuration : IPluginConfiguration
     // Broadcast (DJ) side: the directory *name* of the last-selected Penumbra mod
     public string? BroadcastMod { get; set; } = null;
 
-    // Broadcast (DJ) side: whether the jukebox plays in shuffled order.
+    // Broadcast (DJ) side: the selected inferred group for BroadcastMod. null means All Files.
+    public string? BroadcastModGroup { get; set; } = null;
+
+    // Broadcast (DJ) side: whether the local playlist plays in shuffled order.
     public bool Shuffle { get; set; } = false;
 
     // Broadcast (DJ) side: beefweb source. Host isn't configurable, since we need to sync files...

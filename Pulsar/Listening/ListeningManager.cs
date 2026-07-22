@@ -6,7 +6,6 @@ using System.Threading.Tasks;
 using NAudio.Wave;
 using Pulsar.Common.Api;
 using Pulsar.Playback;
-using StreamJsonRpc;
 
 namespace Pulsar.Listening;
 
@@ -81,14 +80,9 @@ public class ListeningManager : IAsyncDisposable
     private sealed record MasterMutedSet(bool Value) : Message;
     private sealed record PairVolumeSet(ulong Ident, float Value) : Message;
     private sealed record PairMutedSet(ulong Ident, bool Value) : Message;
-    private sealed record PlaybackEnded(EndReason Reason) : Message;
-    private sealed record EngineChanged(EngineSnapshot Snapshot) : Message;
+    private sealed record PlaybackEndedMessage(EngineSessionEnded Ended) : Message;
+    private sealed record EngineObserved(EngineObservation Observation) : Message;
     private sealed record EngineReconnected : Message;
-    private sealed record PollTick(long Generation) : Message;
-    private sealed record PollCompleted(
-        long Generation,
-        EngineSnapshot? Snapshot,
-        Exception? Error) : Message;
     private sealed record PlaybackTarget(ulong SourceId, int CursorEpoch, string Path);
 
     private sealed record PublishedState(
@@ -97,7 +91,7 @@ public class ListeningManager : IAsyncDisposable
         bool HasPin);
 
     private readonly Dictionary<ulong, PairState> pairs = [];
-    private readonly IRemoteEngine engine;
+    private readonly EngineSession engineSession;
     // This is the manager's synchronization boundary: callers and engine callbacks only post
     // messages; the single reader below is the sole owner of all non-published state.
     private readonly Channel<Message> mailbox = Channel.CreateUnbounded<Message>(
@@ -152,14 +146,6 @@ public class ListeningManager : IAsyncDisposable
 
     private readonly Task messageLoop;
     private readonly CancellationTokenSource asyncCts  = new();
-    private CancellationTokenSource? pollDelayCts;
-    private Task? pollDelayTask;
-    private Task? pollTask;
-    private long pollGeneration;
-
-    private readonly TimeSpan updatePoll;
-    private readonly TimeSpan errorBackoff;
-    private readonly TimeSpan lostBackoff;
 
     public ListeningManager(IRemoteEngine engine, Configuration config)
         : this(engine, config.ListeningMasterVolume, config.ListeningPairVolumes,
@@ -173,31 +159,34 @@ public class ListeningManager : IAsyncDisposable
                               IReadOnlyDictionary<string, float>? savedPairVolumes, bool autoPlay,
                               TimeSpan updatePoll, TimeSpan errorBackoff, TimeSpan lostBackoff)
     {
-        this.updatePoll = updatePoll;
-        this.errorBackoff = errorBackoff;
-        this.lostBackoff = lostBackoff;
-        this.engine = engine;
+        engineSession = new EngineSession(
+            engine,
+            pollPlaying: updatePoll,
+            pollIdle: updatePoll,
+            errorBackoff: errorBackoff,
+            disposeTimeout: TimeSpan.FromSeconds(2),
+            lostBackoff: lostBackoff);
         this.masterVolume = masterVolume;
         preferredVolumes = savedPairVolumes is null ? [] : new Dictionary<string, float>(savedPairVolumes);
         this.autoPlay = autoPlay;
         published = new PublishedState([], autoPlay, false);
-        this.engine.OnPlaybackEnded += OnPlaybackEnded;
-        this.engine.OnChanged += OnEngineChanged;
+        engineSession.OnPlaybackEnded += OnPlaybackEnded;
+        engineSession.OnObserved += OnEngineObserved;
+        engineSession.OnReconnected += OnSessionReconnected;
 
         messageLoop = MessageLoop(asyncCts.Token);
-        Post(new PollTick(pollGeneration));
     }
 
     public async ValueTask DisposeAsync()
     {
         GC.SuppressFinalize(this);
-        engine.OnPlaybackEnded -= OnPlaybackEnded;
-        engine.OnChanged -= OnEngineChanged;
+        engineSession.OnPlaybackEnded -= OnPlaybackEnded;
+        engineSession.OnObserved -= OnEngineObserved;
+        engineSession.OnReconnected -= OnSessionReconnected;
         asyncCts.Cancel();
         mailbox.Writer.TryComplete();
         await messageLoop;
-        if (pollTask is not null) await pollTask;
-        await CancelPollDelay();
+        await engineSession.DisposeAsync();
         asyncCts.Dispose();
         outputs.Writer.TryComplete();
     }
@@ -205,7 +194,7 @@ public class ListeningManager : IAsyncDisposable
     /// <summary>
     /// Called after the audio host reconnects.
     /// </summary>
-    public void OnEngineReconnected() => Post(new EngineReconnected());
+    public void OnEngineReconnected() => engineSession.OnEngineReconnected();
 
     public void AddOrUpdatePair(ulong ident, string? displayName, PairData data)
         => Post(new PairUpdated(ident, displayName, data));
@@ -261,91 +250,11 @@ public class ListeningManager : IAsyncDisposable
         published = new PublishedState(list, autoPlay, pinnedName is not null);
     }
 
-    private async Task PollEngine(long generation, CancellationToken token)
-    {
-        EngineSnapshot? snapshot = null;
-        Exception? error = null;
-        try
-        {
-            snapshot = await engine.GetStateAsync(token);
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
-        catch (Exception ex)
-        {
-            error = ex;
-        }
-
-        Post(new PollCompleted(generation, snapshot, error));
-    }
-
-    private void OnPlaybackEnded(object? _, EndReason reason) => Post(new PlaybackEnded(reason));
-    private void OnEngineChanged(object? _, EngineSnapshot snapshot) => Post(new EngineChanged(snapshot));
-
-    private async ValueTask SchedulePoll(TimeSpan delay)
-    {
-        await CancelPollDelay();
-        var generation = ++pollGeneration;
-        if (delay <= TimeSpan.Zero)
-        {
-            Post(new PollTick(generation));
-            return;
-        }
-
-        pollDelayCts = CancellationTokenSource.CreateLinkedTokenSource(asyncCts.Token);
-        pollDelayTask = PostPollAfterDelay(delay, generation, pollDelayCts.Token);
-    }
-
-    private async Task PostPollAfterDelay(TimeSpan delay, long generation, CancellationToken token)
-    {
-        try
-        {
-            await Task.Delay(delay, token);
-            Post(new PollTick(generation));
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-    }
-
-    private async ValueTask CancelPollDelay()
-    {
-        pollDelayCts?.Cancel();
-        if (pollDelayTask is not null) await pollDelayTask;
-        pollDelayCts?.Dispose();
-        pollDelayCts = null;
-        pollDelayTask = null;
-    }
-
-    private void StartPoll(long generation, CancellationToken token)
-    {
-        if (generation != pollGeneration || pollTask is not null) return;
-        pollDelayCts?.Dispose();
-        pollDelayCts = null;
-        pollDelayTask = null;
-        pollTask = PollEngine(generation, token);
-    }
-
-    private async ValueTask HandlePollCompleted(
-        long generation,
-        EngineSnapshot? snapshot,
-        Exception? error)
-    {
-        if (generation != pollGeneration) return;
-        pollTask = null;
-        switch (error)
-        {
-            case null:
-                if (snapshot is not null) PublishEngineSnapshot(snapshot);
-                await SchedulePoll(updatePoll);
-                break;
-            case ConnectionLostException:
-                Plugin.Log.Warning("Connection to audio host lost");
-                await SchedulePoll(lostBackoff);
-                break;
-            default:
-                Plugin.Log.Error(error, "Error polling the listening engine");
-                await SchedulePoll(errorBackoff);
-                break;
-        }
-    }
+    private void OnPlaybackEnded(EngineSessionEnded ended)
+        => Post(new PlaybackEndedMessage(ended));
+    private void OnEngineObserved(EngineObservation observation)
+        => Post(new EngineObserved(observation));
+    private void OnSessionReconnected() => Post(new EngineReconnected());
 
     private void Apply(Message message)
     {
@@ -416,24 +325,36 @@ public class ListeningManager : IAsyncDisposable
                 if (pairs.TryGetValue(ident, out var mutePair)) mutePair.Muted = value;
                 break;
 
-            case PlaybackEnded(var reason):
+            case PlaybackEndedMessage(var ended):
+                if (engineTarget?.Revision != ended.Revision) break;
                 if (PeekActive() is not { } activeId || !pairs.TryGetValue(activeId, out var active))
                     break;
-                if (reason == EndReason.Failed)
+                switch (ended.Reason)
                 {
-                    active.FailCount++;
-                    if (active.FailCount <= MaxLoadRetries && appliedSourceId == activeId)
-                    {
+                    case EndReason.Disconnected:
                         appliedSourceId = null;
                         appliedData = null;
+                        engineTarget = null;
                         MarkPlayback(ListenerPlaybackStatus.Loading);
+                        break;
+                    case EndReason.Failed:
+                    {
+                        active.FailCount++;
+                        if (active.FailCount <= MaxLoadRetries && appliedSourceId == activeId)
+                        {
+                            appliedSourceId = null;
+                            appliedData = null;
+                            MarkPlayback(ListenerPlaybackStatus.Loading);
+                        }
+                        else MarkPlayback(ListenerPlaybackStatus.Failed);
+
+                        break;
                     }
-                    else MarkPlayback(ListenerPlaybackStatus.Failed);
-                }
-                else
-                {
-                    active.FailCount = 0;
-                    MarkPlayback(ListenerPlaybackStatus.Ended);
+                    case EndReason.Finished:
+                    default:
+                        active.FailCount = 0;
+                        MarkPlayback(ListenerPlaybackStatus.Ended);
+                        break;
                 }
                 break;
 
@@ -441,7 +362,7 @@ public class ListeningManager : IAsyncDisposable
                 // A fresh host has neither our track nor our volume.
                 appliedSourceId = null;
                 appliedData = null;
-                lastVolumeSet = -1f;
+                engineTarget = null;
                 if (playbackTarget is not null) MarkPlayback(ListenerPlaybackStatus.Loading);
                 break;
         }
@@ -459,19 +380,11 @@ public class ListeningManager : IAsyncDisposable
                 {
                     switch (message)
                     {
-                        case EngineChanged(var snapshot):
-                            PublishEngineSnapshot(snapshot);
-                            break;
-                        case PollTick(var generation):
-                            StartPoll(generation, token);
-                            break;
-                        case PollCompleted(var generation, var snapshot, var error):
-                            await HandlePollCompleted(generation, snapshot, error);
-                            break;
-                        case EngineReconnected:
-                            Apply(message);
-                            if (pollTask is null) await SchedulePoll(TimeSpan.Zero);
-                            reconcile = true;
+                        case EngineObserved(var observation):
+                            if (engineTarget?.Revision == observation.Revision
+                                || (engineTarget is null
+                                    && observation.Snapshot.State == PlaybackState.Stopped))
+                                PublishEngineSnapshot(observation.Snapshot);
                             break;
                         default:
                             Apply(message);
@@ -489,10 +402,6 @@ public class ListeningManager : IAsyncDisposable
             {
                 break;
             }
-            catch (ConnectionLostException)
-            {
-                Plugin.Log.Warning("Connection to audio host lost during reconcile");
-            }
             catch (Exception ex)
             {
                 Plugin.Log.Error(ex, "Error in ListeningManager message loop");
@@ -507,6 +416,8 @@ public class ListeningManager : IAsyncDisposable
     private ulong? appliedSourceId;
     private PairData? appliedData;
     private PlaybackTarget? playbackTarget;
+    private EngineTarget? engineTarget;
+    private long nextEngineRevision;
 
     private async Task ReconcileActive(CancellationToken token)
     {
@@ -519,7 +430,7 @@ public class ListeningManager : IAsyncDisposable
         if (activeId is { } aid)
             active = pairs[aid];
 
-        var snapshot = await engine.GetStateAsync(token);
+        var snapshot = await engineSession.RefreshAsync(token);
         PublishEngineSnapshot(snapshot);
         var current = activeId == appliedSourceId ? appliedData : null;
         var action = SyncDecider.Decide(current, active?.Data, snapshot);
@@ -529,14 +440,14 @@ public class ListeningManager : IAsyncDisposable
             // The pending cursor is deliberately not applied yet. Controls may still
             // change during the grace period, but ReplayGain belongs to the old track.
             if (active is not null && current is not null)
-                await ApplyActiveVolume(active, current, token);
+                ApplyActiveVolume(active, current);
             return;
         }
 
         SetPlaybackTarget(activeId, active);
         if (active is not null)
-            await ApplyActiveVolume(active, active.Data, token);
-        await Apply(action, token);
+            ApplyActiveVolume(active, active.Data);
+        Apply(action);
         appliedSourceId = activeId;
         appliedData = active?.Data;
         MaybeNotifyTrackChanged(previousAppliedSourceId, previousAppliedData);
@@ -737,7 +648,7 @@ public class ListeningManager : IAsyncDisposable
     private static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);
 
     private float lastVolumeSet = -1f;
-    private async Task ApplyActiveVolume(PairState pair, PairData track, CancellationToken token)
+    private void ApplyActiveVolume(PairState pair, PairData track)
     {
         var rawRg = track.Meta?.ReplayGainDb ?? 0.0;
         // Stop a peer from sending ridiculous gain values.
@@ -748,28 +659,42 @@ public class ListeningManager : IAsyncDisposable
             : masterVolume * pair.Volume * DbToLinear(rgDb);
         
         if (float.IsFinite(effective) && effective == lastVolumeSet) return; // make method idempotent
-        await engine.SetVolumeAsync(effective, token);
+        engineSession.SetVolume(effective);
         lastVolumeSet = effective;
     }
 
-    private async Task Apply(EngineAction action, CancellationToken token)
+    private void Apply(EngineAction action)
     {
         switch (action)
         {
             case EngineAction.Load l:
-                await engine.LoadFileAsync(l.Path, l.Position, l.Playing, token);
+                engineTarget = new EngineTarget(
+                    ++nextEngineRevision,
+                    l.Path,
+                    l.Playing ? PlaybackState.Playing : PlaybackState.Paused,
+                    l.Position);
+                engineSession.SetTarget(engineTarget);
                 break;
             case EngineAction.Seek s:
-                await engine.SeekAsync(s.Position, token);
+                engineSession.Seek(s.Position);
                 break;
             case EngineAction.Pause:
-                await engine.PauseAsync(token);
+                if (engineTarget is not null)
+                {
+                    engineTarget = engineTarget with { State = PlaybackState.Paused };
+                    engineSession.SetTarget(engineTarget);
+                }
                 break;
             case EngineAction.Resume:
-                await engine.ResumeAsync(token);
+                if (engineTarget is not null)
+                {
+                    engineTarget = engineTarget with { State = PlaybackState.Playing };
+                    engineSession.SetTarget(engineTarget);
+                }
                 break;
             case EngineAction.Stop:
-                await engine.StopAsync(token);
+                engineTarget = null;
+                engineSession.SetTarget(null);
                 break;
         }
     }

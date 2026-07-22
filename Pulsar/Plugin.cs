@@ -82,8 +82,6 @@ public sealed class Plugin : IAsyncDalamudPlugin
         var logDir = Path.Combine(PluginInterface.ConfigDirectory.FullName, "logs");
         var audioExe = Path.Combine(hostDir, "audio", "Pulsar.AudioHost.exe");
 
-        // Facades are inert until Start(); everything below can safely subscribe and hold
-        // references first, then the supervisors bring the hosts online.
         ListenEngine = new ReconnectingEngine(new HostSpec(
             audioExe, PipeNames.AudioListening, logDir, "audio-listening",
             MixerName: "Pulsar (Listening)"));
@@ -139,7 +137,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
                     break;
                 case BroadcastMode.Mod:
                     if (Configuration.BroadcastMod is { } mod)
-                        await Broadcast.LoadMod(mod);
+                        await Broadcast.LoadMod(mod, Configuration.BroadcastModGroup);
                     break;
                 case BroadcastMode.Beefweb:
                     await Broadcast.LoadBeefweb(Configuration.BeefwebPort, Configuration.BeefwebUsername,

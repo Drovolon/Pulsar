@@ -6,16 +6,17 @@ using Pulsar.Ipc;
 namespace Pulsar;
 
 /// <summary>
-/// Optional debug-only route from local broadcast output back into Pulsar's inbound
-/// player-data path. A mailbox linearizes UI enablement with broadcast updates.
+/// Debug route from local broadcast outputs back into Pulsar's inbound listening
+/// path. This lets you test Pulsar end to end - play something via the broadcast tab,
+/// listen to it via the listening tab.
+///
+/// Enabled by going to Config -> Debug Mode, then in the Debug tab checking
+/// the "Debug Loopback" checkbox.
 /// </summary>
 internal sealed class DebugLoopbackController : IAsyncDisposable
 {
     private abstract record Message;
-    private sealed record EnabledSet(
-        bool Value,
-        BroadcastPlayerData? Current,
-        TaskCompletionSource Completion) : Message;
+    private sealed record EnabledSet(bool Value, BroadcastPlayerData? Current) : Message;
     private sealed record PlayerDataChanged(BroadcastPlayerData? Data) : Message;
 
     private readonly IpcProvider ipc;
@@ -29,12 +30,7 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
     }
 
     internal void SetEnabled(bool value, BroadcastPlayerData? current)
-    {
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        if (mailbox.TryPost(new EnabledSet(value, current, completion)))
-            completion.Task.GetAwaiter().GetResult();
-    }
+        => mailbox.TryPost(new EnabledSet(value, current));
 
     internal void OnPlayerDataChanged(BroadcastPlayerData? data)
         => mailbox.TryPost(new PlayerDataChanged(data));
@@ -43,13 +39,12 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
     {
         switch (message)
         {
-            case EnabledSet(var value, var current, var completion):
+            case EnabledSet(var value, var current):
                 if (enabled != value)
                 {
                     enabled = value;
                     ipc.ApplyDebugLoopback(value ? current : null);
                 }
-                completion.TrySetResult();
                 break;
             case PlayerDataChanged(var data) when enabled:
                 ipc.ApplyDebugLoopback(data);
@@ -60,10 +55,7 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
     }
 
     private static void OnMessageError(Exception e, Message message)
-    {
-        Plugin.Log.Error(e, "debug loopback message failed: {message}", message);
-        if (message is EnabledSet(_, _, var completion)) completion.TrySetException(e);
-    }
+        => Plugin.Log.Error(e, "debug loopback message failed: {message}", message);
 
     public ValueTask DisposeAsync() => mailbox.DisposeAsync();
 }

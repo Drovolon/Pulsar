@@ -22,8 +22,11 @@ public static class PipeNames
 [GenerateShape(IncludeMethods = MethodShapeFlags.AllPublic)]
 public partial interface IRemoteEngine
 {
-    Task LoadAsync(string path, TimeSpan position, bool startPlaying, CancellationToken ct);
-    Task LoadBytesAsync(string displayPath, byte[] audioData, TimeSpan position, bool startPlaying, CancellationToken ct);
+    Task LoadAsync(
+        string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct);
+    Task LoadBytesAsync(
+        string displayPath, byte[] audioData, TimeSpan position,
+        bool startPlaying, long playbackId, CancellationToken ct);
 
     Task StopAsync(CancellationToken ct);
     Task PauseAsync(CancellationToken ct);
@@ -36,16 +39,17 @@ public partial interface IRemoteEngine
     Task<EngineSnapshot> GetStateAsync(CancellationToken ct);
     
     /// <summary>
-    /// Fires when playback ends, whether naturally or because of an error
+    /// Fires when playback ends, whether naturally or because of an error. PlaybackId
+    /// identifies the Load call that produced the event.
     /// </summary>
-    event EventHandler<EndReason> OnPlaybackEnded;
+    event EventHandler<PlaybackEnded> OnPlaybackEnded;
 
     /// <summary>
     /// Fires on a load/track change, play, pause, resume, seek, and stop. Note, does NOT fire
     /// on a natural track end; that's what OnPlaybackEnded is for. OnChanged is more or less
     /// "the user took an action of some kind".
     ///
-    /// Payload is the state after the event.
+    /// Payload is the state after the event and identifies its originating Load.
     /// </summary>
     event EventHandler<EngineSnapshot> OnChanged;
 }
@@ -56,7 +60,11 @@ public partial record EngineSnapshot(
     string? Path,
     string? LastError,
     PlaybackPosition? Position,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt,
+    long PlaybackId = 0);
+
+[GenerateShape]
+public partial record PlaybackEnded(long PlaybackId, EndReason Reason);
 
 [GenerateShape]
 public partial record PlaybackPosition(TimeSpan Current, TimeSpan Total);
@@ -65,4 +73,5 @@ public enum EndReason
 {
     Finished, // the track played to its natural end
     Failed,   // a load or playback error tore it down
+    Disconnected, // the audio host disappeared; the caller may restore playback after reconnect
 }

@@ -162,7 +162,8 @@ public class ScdReaderTests : System.IDisposable
         var engine = new FakeRemoteEngine();
 
         await prep.PrepareFileAsync(path, "out", _ => extracted, CancellationToken.None);
-        await engine.LoadFileAsync(path, TimeSpan.FromSeconds(3), true, _ => extracted, CancellationToken.None);
+        await engine.LoadFileAsync(
+            path, TimeSpan.FromSeconds(3), true, 1, _ => extracted, CancellationToken.None);
 
         Assert.Equal("Bytes", prep.Operation);
         Assert.Same(extracted, prep.Bytes);
@@ -172,6 +173,7 @@ public class ScdReaderTests : System.IDisposable
         Assert.Same(extracted, engine.LastLoadedBytes);
         Assert.Equal(TimeSpan.FromSeconds(3), args.Item2);
         Assert.True(args.Item3);
+        Assert.Equal(1, engine.Snapshot.PlaybackId);
     }
 
     [Fact]
@@ -183,10 +185,11 @@ public class ScdReaderTests : System.IDisposable
         static byte[] Fail(string _) => throw new InvalidDataException("bad SCD");
 
         await prep.PrepareFileAsync(path, "out", Fail, CancellationToken.None);
-        await engine.LoadFileAsync(path, TimeSpan.Zero, true, Fail, CancellationToken.None);
+        await engine.LoadFileAsync(path, TimeSpan.Zero, true, 1, Fail, CancellationToken.None);
 
         Assert.Equal("Path", prep.Operation);
         Assert.Contains(engine.Calls, c => c.Op == "Load");
         Assert.DoesNotContain(engine.Calls, c => c.Op == "LoadBytes");
+        Assert.Equal(1, engine.Snapshot.PlaybackId);
     }
 }

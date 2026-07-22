@@ -5,7 +5,7 @@ using Xunit;
 namespace Pulsar.Tests;
 
 /// <summary>
-/// The number-aware ordering DirectoryPlayer relies on for playlists. The comparer
+/// The number-aware ordering folder catalogs rely on for playlists. The comparer
 /// exists precisely because ordinal ordering gets track numbers wrong.
 /// </summary>
 public class NaturalPathComparerTests

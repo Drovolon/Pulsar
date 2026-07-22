@@ -232,6 +232,52 @@ public class ListeningManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Load_dispatch_failures_use_the_same_bounded_retry_policy()
+    {
+        engine.Intercept = op => op == "Load"
+            ? new InvalidOperationException("host rejected the load")
+            : null;
+        var lm = Create();
+
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+
+        await TestWait.Assert(
+            () => LoadCount == 4 && lm.Playback.Status == ListenerPlaybackStatus.Failed,
+            "the initial dispatch and three retries exhaust the load budget");
+        await Task.Delay(100);
+        Assert.Equal(4, LoadCount);
+    }
+
+    [Fact]
+    public async Task Stale_engine_events_cannot_disturb_a_newer_listener_load()
+    {
+        var lm = Create();
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "Alice starts");
+        var stalePlaybackId = engine.Snapshot.PlaybackId;
+
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, epoch: 2));
+        await TestWait.Assert(() => engine.Snapshot.Path == BobTrack, "Bob replaces Alice");
+        var loads = LoadCount;
+
+        engine.RaiseChanged(new Pulsar.Common.Api.EngineSnapshot(
+            NAudio.Wave.PlaybackState.Playing,
+            AliceTrack,
+            null,
+            new Pulsar.Common.Api.PlaybackPosition(TimeSpan.Zero, TimeSpan.FromMinutes(3)),
+            DateTimeOffset.UtcNow,
+            stalePlaybackId));
+        engine.RaisePlaybackEnded(stalePlaybackId, Pulsar.Common.Api.EndReason.Failed);
+        lm.SetPairVolume(1, 0.5f); // mailbox barrier after both stale events
+        await TestWait.Assert(() => engine.LastVolume == 0.5f, "stale events are processed");
+
+        Assert.Equal(loads, LoadCount);
+        Assert.Equal(BobTrack, engine.Snapshot.Path);
+        Assert.Equal(BobTrack, lm.Playback.TargetPath);
+        Assert.Equal(ListenerPlaybackStatus.Playing, lm.Playback.Status);
+    }
+
+    [Fact]
     public async Task A_fresh_cursor_resets_the_retry_budget()
     {
         var lm = Create();
@@ -385,6 +431,7 @@ public class ListeningManagerTests : IAsyncLifetime
                   && lm.Playback is { Status: ListenerPlaybackStatus.Loading, TargetPath: AliceTrack },
             "the selected source is shown as loading while the host opens it");
 
+        await engine.WaitForCall("Load");
         engine.CompleteDeferredLoad();
         await TestWait.Assert(
             () => lm.Playback is

@@ -1,10 +1,14 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Pulsar.Broadcast;
 using Pulsar.Broadcast.Beefweb;
+using Pulsar.Broadcast.Local;
 using Pulsar.Broadcast.Prepare;
 using Pulsar.Listening;
+using Pulsar.Playback;
 using Pulsar.Tests.Fakes;
 using Xunit;
 using PulsarState = NAudio.Wave.PlaybackState;
@@ -48,6 +52,21 @@ public class BroadcastSourceTests : IAsyncLifetime
     {
         public string? Result;
         public string? ResolveModDirectory(string modDirectoryName) => Result;
+    }
+
+    private sealed class GatedCatalogLoader(string root) : ITrackCatalogLoader
+    {
+        private int calls;
+        public string RootDirectory { get; } = root;
+        public int Calls => Volatile.Read(ref calls);
+        public TaskCompletionSource<TrackCatalog> Result { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref calls);
+            return Result.Task;
+        }
     }
 
     private string Track(string name) => TestData.CreateTrack(dir, name);
@@ -217,6 +236,28 @@ public class BroadcastSourceTests : IAsyncLifetime
     // ---- loaders ------------------------------------------------------------------
 
     [Fact]
+    public async Task Catalog_loading_does_not_block_events_from_the_current_source()
+    {
+        var first = Track("first.flac");
+        var second = Track("second.flac");
+        var current = new FakeMusicSource { Current = TestData.Snap(first) };
+        await broadcast.SetSource(current);
+        var loader = new GatedCatalogLoader(Path.Combine(dir.FullName, "pending"));
+        var loading = broadcast.LoadLocalSource(loader);
+        await TestWait.Assert(() => loader.Calls == 1, "catalog loading starts");
+
+        current.Current = TestData.Snap(second);
+        current.RaiseChanged();
+
+        await TestWait.Assert(
+            () => broadcast.CurrentSnapshot?.FilePath == second,
+            "the current source remains responsive during the scan");
+        loader.Result.TrySetResult(new TrackCatalog(
+            [new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [])]));
+        await TestWait.Within(loading, "the catalog load finishes");
+    }
+
+    [Fact]
     public async Task Beefweb_stays_off_air_until_the_session_gate_is_enabled()
     {
         var feed = new ControllableFeed();
@@ -262,23 +303,119 @@ public class BroadcastSourceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task LoadFolder_installs_a_playable_jukebox()
+    public async Task LoadFolder_installs_a_playable_local_source()
     {
         var folder = CreateFolder("a.mp3", "b.mp3");
         await broadcast.LoadFolder(folder.FullName);
 
-        Assert.NotNull(broadcast.ActiveJukebox);
-        broadcast.ActiveJukebox!.Player.Play();
+        Assert.NotNull(broadcast.ActiveLocalSource);
+        broadcast.ActiveLocalSource!.Play();
         await TestWait.Assert(() => broadcast.CurrentSnapshot is { IsPlaying: true },
-            "the jukebox snapshot goes live through the manager");
+            "the local snapshot goes live through the manager");
+    }
+
+    [Fact]
+    public async Task Poll_confirmation_starts_broadcasting_when_the_load_event_is_missed()
+    {
+        engine.SuppressChangedEvents = true;
+        var folder = CreateFolder("a.mp3");
+        await broadcast.LoadFolder(folder.FullName);
+
+        broadcast.ActiveLocalSource!.Play();
+        await TestWait.Assert(() => engine.Snapshot.State == PulsarState.Playing,
+            "the host starts playing without publishing its change event");
+        await TestWait.Assert(() => broadcast.CurrentSnapshot is { IsPlaying: true },
+            "poll confirmation promotes playback into the broadcast pipeline");
+    }
+
+    [Fact]
+    public async Task Reconnecting_the_audio_host_restores_local_playback()
+    {
+        var folder = CreateFolder("a.mp3");
+        await broadcast.LoadFolder(folder.FullName);
+        broadcast.ActiveLocalSource!.Play();
+        await TestWait.Assert(() => engine.Snapshot.State == PulsarState.Playing, "local track starts");
+        var loads = engine.Ops.Count(op => op == "Load");
+
+        engine.DisconnectTrack();
+        await TestWait.Assert(() => broadcast.CurrentSnapshot is null, "disconnect clears the broadcast");
+        broadcast.OnEngineReconnected();
+
+        await TestWait.Assert(
+            () => engine.Ops.Count(op => op == "Load") == loads + 1
+                  && engine.Snapshot.State == PulsarState.Playing,
+            "the selected track reloads after reconnect");
+        Assert.NotNull(broadcast.CurrentSnapshot);
     }
 
     [Fact]
     public async Task LoadFolder_on_a_missing_directory_installs_nothing()
     {
         await broadcast.LoadFolder(Path.Combine(dir.FullName, "does-not-exist"));
-        Assert.Null(broadcast.ActiveJukebox);
+        Assert.Null(broadcast.ActiveLocalSource);
         Assert.Null(broadcast.CurrentSnapshot);
+    }
+
+    [Fact]
+    public async Task Local_source_requests_are_applied_in_request_order()
+    {
+        var older = new GatedCatalogLoader(Path.Combine(dir.FullName, "older"));
+        var newer = new GatedCatalogLoader(Path.Combine(dir.FullName, "newer"));
+        var olderLoad = broadcast.LoadLocalSource(older, "OlderMod");
+        await TestWait.Assert(() => older.Calls == 1, "the older source build starts");
+        var newerLoad = broadcast.LoadLocalSource(newer, "NewerMod");
+        Assert.Equal(0, newer.Calls);
+
+        TrackCatalog Catalog(GatedCatalogLoader loader, string name)
+        {
+            var track = new LocalTrack(Path.Combine(loader.RootDirectory, name), name, name);
+            return new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [track])]);
+        }
+
+        older.Result.TrySetResult(Catalog(older, "old.scd"));
+        await TestWait.Within(olderLoad, "the older source installs");
+        Assert.Equal("OlderMod", broadcast.ActiveLocalSource?.ModDirectoryName);
+
+        await TestWait.Assert(() => newer.Calls == 1, "the newer source build starts next");
+        newer.Result.TrySetResult(Catalog(newer, "new.scd"));
+        await TestWait.Within(newerLoad, "the newer source installs");
+
+        Assert.Equal("NewerMod", broadcast.ActiveLocalSource?.ModDirectoryName);
+        Assert.Equal(newer.RootDirectory, broadcast.ActiveLocalSource?.RootDirectory);
+    }
+
+    [Fact]
+    public async Task A_failed_catalog_load_keeps_the_current_source()
+    {
+        var live = Track("live.flac");
+        await broadcast.SetSource(new FakeMusicSource { Current = TestData.Snap(live) });
+        var failing = new GatedCatalogLoader(Path.Combine(dir.FullName, "broken"));
+        failing.Result.TrySetException(new IOException("scan failed"));
+
+        await broadcast.LoadLocalSource(failing, "BrokenMod");
+
+        Assert.Equal(live, broadcast.CurrentSnapshot?.FilePath);
+        Assert.Null(broadcast.ActiveLocalSource);
+    }
+
+    [Fact]
+    public async Task A_queue_only_rescan_does_not_advance_the_playback_cursor()
+    {
+        var folder = CreateFolder("a.mp3", "b.mp3");
+        await broadcast.LoadFolder(folder.FullName);
+        var source = broadcast.ActiveLocalSource!;
+        source.Play();
+        await TestWait.Assert(
+            () => broadcast.CurrentPlayerData() is not null,
+            "the playing track is published");
+        var epoch = broadcast.CurrentPlayerData()!.Cursor.CursorEpoch;
+        File.Delete(Path.Combine(folder.FullName, "b.mp3"));
+        var newNext = TestData.CreateTrack(folder, "c.mp3");
+
+        await source.Rescan();
+        Assert.True(await service.WaitForPrepare(newNext), "the new queue reaches prefetch");
+
+        Assert.Equal(epoch, broadcast.CurrentPlayerData()!.Cursor.CursorEpoch);
     }
 
     [Fact]
@@ -287,9 +424,9 @@ public class BroadcastSourceTests : IAsyncLifetime
         resolver.Result = CreateFolder("mod-song.mp3").FullName;
         await broadcast.LoadMod("CoolMod");
 
-        Assert.NotNull(broadcast.ActiveJukebox);
-        broadcast.ActiveJukebox!.Player.Play();
-        await TestWait.Assert(() => broadcast.CurrentSnapshot is { IsPlaying: true }, "mod jukebox plays");
+        Assert.NotNull(broadcast.ActiveLocalSource);
+        broadcast.ActiveLocalSource!.Play();
+        await TestWait.Assert(() => broadcast.CurrentSnapshot is { IsPlaying: true }, "mod local source plays");
     }
 
     [Fact]

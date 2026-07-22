@@ -12,6 +12,7 @@ using Dalamud.Interface.Utility.Raii;
 using NAudio.Wave;
 using Pulsar.Broadcast;
 using Pulsar.Broadcast.Beefweb;
+using Pulsar.Broadcast.Local;
 using Pulsar.Playback;
 
 namespace Pulsar.Windows;
@@ -28,14 +29,14 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
     private bool seeking;
     private float? pendingSeek;
     private float seekValue;
-    private DirectoryPlayer? lastPlayer;
+    private LocalSource? lastPlayer;
     private int lastScrolledIndex = -1;
 
     // search filter. note: doesn't affect playlist, just the results table in UI
     private string libFilter = "";
-    private IReadOnlyList<string>? lastTracks;
+    private IReadOnlyList<LocalTrack>? lastTracks;
     private string lastLibFilter = "";
-    // Name = filename; Dir = folder relative to the player root ("" for root-level
+    // Name = catalog display name; Dir = folder relative to the catalog root ("" for root-level
     // files); Rel = the two joined, used for filtering and the hover tooltip.
     private readonly List<(int Index, string Name, string Dir, string Rel)> filteredTracks = [];
 
@@ -86,7 +87,8 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                 _ = folders.Count > 0 ? plugin.Broadcast?.LoadFolder(folders[0]) : plugin.Broadcast?.SetSource(null);
                 break;
             case BroadcastMode.Mod:
-                if (plugin.Configuration.BroadcastMod is { } mod) _ = plugin.Broadcast?.LoadMod(mod);
+                if (plugin.Configuration.BroadcastMod is { } mod)
+                    _ = plugin.Broadcast?.LoadMod(mod, plugin.Configuration.BroadcastModGroup);
                 else _ = plugin.Broadcast?.SetSource(null);
                 break;
             case BroadcastMode.Beefweb:
@@ -110,7 +112,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         ImGui.SameLine();
         if (UiUtil.IconButton("folderrefresh", FontAwesomeIcon.Sync, "Refresh"))
         {
-            if (plugin.Broadcast?.ActiveJukebox?.Player is { } p) _ = p.Rescan();
+            if (plugin.Broadcast?.ActiveLocalSource is { } source) _ = source.Rescan();
         }
 
         var savedFolder = plugin.Configuration.BroadcastFolders.Count > 0
@@ -140,18 +142,64 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         if (UiUtil.IconButton("modrefresh", FontAwesomeIcon.Sync, "Refresh"))
         {
             mods = plugin.Penumbra.GetMods();
-            if (plugin.Broadcast?.ActiveJukebox?.Player is { } p) _ = p.Rescan();
+            if (plugin.Broadcast?.ActiveLocalSource is { ModDirectoryName: not null } source)
+                _ = source.Rescan();
         }
         ImGui.SameLine();
         ImGui.SetNextItemWidth(-1f);
         if (modCombo.Draw("##mod", preview, mods, current, out var picked))
         {
-            plugin.Configuration.BroadcastMod = picked!.DirectoryName;
+            selectedDir = picked!.DirectoryName;
+            plugin.Configuration.BroadcastMod = selectedDir;
+            plugin.Configuration.BroadcastModGroup = null;
             plugin.Configuration.Save();
-            _ = plugin.Broadcast?.LoadMod(picked.DirectoryName);
+            _ = plugin.Broadcast?.LoadMod(selectedDir, null);
         }
 
+        DrawModGroup(selectedDir);
+
         DrawPlayer();
+    }
+
+    private void DrawModGroup(string? selectedMod)
+    {
+        var source = plugin.Broadcast?.ActiveLocalSource;
+        if (source?.ModDirectoryName != selectedMod) source = null;
+
+        var sourceView = source?.View;
+        var selected = sourceView?.SelectedGroup;
+        var preview = selected?.Name ?? TrackCatalog.AllFilesName;
+        ImGui.BeginDisabled(source is null);
+        ImGui.SetNextItemWidth(-1f);
+        
+        if (sourceView is null) return;
+        
+        if (ImGui.BeginCombo("##modgroup", preview))
+        {
+            foreach (var group in sourceView!.Catalog.Groups)
+            {
+                var isSelected = group.Id == selected!.Id;
+                if (ImGui.Selectable($"{group.Name} ({group.Tracks.Count})", isSelected) && !isSelected)
+                {
+                    _ = source!.SelectGroup(group.Id);
+                    selected = group;
+                }
+                if (isSelected) ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.EndDisabled();
+
+        if (source is not null)
+        {
+            var selectedId = source.View.SelectedGroup.Id;
+            var actual = selectedId == TrackCatalog.AllFilesId ? null : selectedId;
+            if (plugin.Configuration.BroadcastModGroup != actual)
+            {
+                plugin.Configuration.BroadcastModGroup = actual;
+                plugin.Configuration.Save();
+            }
+        }
     }
 
     private void ReloadBeefweb()
@@ -299,15 +347,16 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         }
     }
 
-    // Shared transport + library controls for whatever Jukebox is currently active (folder or mod).
+    // Shared transport + library controls for whatever local source is active (folder or mod).
     private void DrawPlayer()
     {
-        var player = plugin.Broadcast?.ActiveJukebox?.Player;
+        var player = plugin.Broadcast?.ActiveLocalSource;
 
         if (player is not null && !ReferenceEquals(player, lastPlayer))
         {
             player.Volume(broadcastMuted ? 0f : volume);
-            if (player.Shuffle != plugin.Configuration.Shuffle) player.ToggleShuffle();
+            if (player.Shuffle != plugin.Configuration.Shuffle)
+                player.SetShuffle(plugin.Configuration.Shuffle);
             lastPlayer = player;
         }
 
@@ -322,8 +371,8 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         var track = player.CurrentTrack;
         var status = player.State switch
         {
-            PlaybackState.Playing when track is not null => $"Playing: {Path.GetFileName(track)}",
-            PlaybackState.Paused when track is not null => $"Paused: {Path.GetFileName(track)}",
+            PlaybackState.Playing when track is not null => $"Playing: {track.DisplayName}",
+            PlaybackState.Paused when track is not null => $"Paused: {track.DisplayName}",
             _ => "Not playing"
         };
         UiUtil.NowPlaying(theme, FontAwesomeIcon.Music, status);
@@ -336,7 +385,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         DrawLibrary(player);
     }
 
-    private void DrawControls(DirectoryPlayer player)
+    private void DrawControls(LocalSource player)
     {
         var playing = player.State == PlaybackState.Playing;
         if (UiUtil.IconButton("playpause", playing ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
@@ -355,8 +404,9 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         ImGui.SameLine();
         if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Random, player.Shuffle ? "On" : "Off"))
         {
-            player.ToggleShuffle();
-            plugin.Configuration.Shuffle = player.Shuffle;
+            var shuffle = !player.Shuffle;
+            player.SetShuffle(shuffle);
+            plugin.Configuration.Shuffle = shuffle;
             plugin.Configuration.Save();
         }
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Shuffle");
@@ -389,7 +439,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         }
     }
 
-    private void DrawSeek(DirectoryPlayer player)
+    private void DrawSeek(LocalSource player)
     {
         var pos = player.Position;
         if (pos is null || pos.Total <= TimeSpan.Zero)
@@ -419,25 +469,28 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         }
     }
 
-    private void DrawLibrary(DirectoryPlayer player)
+    private void DrawLibrary(LocalSource player)
     {
         var tracks = player.Tracks;
         var hasCurrent = player.State is PlaybackState.Playing or PlaybackState.Paused;
         var currentIndex = hasCurrent ? player.Index : -1;
 
-        if (!ReferenceEquals(tracks, lastTracks) || libFilter != lastLibFilter)
+        var tracksChanged = !ReferenceEquals(tracks, lastTracks);
+        if (tracksChanged || libFilter != lastLibFilter)
         {
+            if (tracksChanged) lastScrolledIndex = -1;
             lastTracks = tracks;
             lastLibFilter = libFilter;
             filteredTracks.Clear();
-            var root = player.Directory;
             for (var i = 0; i < tracks.Count; i++)
             {
-                var rel = Path.GetRelativePath(root, tracks[i]).Replace('\\', '/');
-                if (libFilter.Length != 0 && !rel.Contains(libFilter, StringComparison.OrdinalIgnoreCase))
+                var rel = tracks[i].RelativePath;
+                if (libFilter.Length != 0
+                    && !rel.Contains(libFilter, StringComparison.OrdinalIgnoreCase)
+                    && !tracks[i].DisplayName.Contains(libFilter, StringComparison.OrdinalIgnoreCase))
                     continue;
                 var slash = rel.LastIndexOf('/');
-                var name = slash < 0 ? rel : rel[(slash + 1)..];
+                var name = tracks[i].DisplayName;
                 var dir = slash < 0 ? "" : rel[..slash];
                 filteredTracks.Add((i, name, dir, rel));
             }

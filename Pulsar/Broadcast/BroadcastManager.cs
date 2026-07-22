@@ -3,10 +3,12 @@ using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Pulsar.Broadcast.Local;
 using Pulsar.Broadcast.Prepare;
 using Pulsar.Common.Api;
 using Pulsar.Concurrency;
 using Pulsar.Ipc;
+using Pulsar.Playback;
 
 namespace Pulsar.Broadcast;
 
@@ -27,8 +29,11 @@ internal abstract record BroadcastOutput
 public sealed class BroadcastManager : IAsyncDisposable
 {
     private abstract record Message;
-    private sealed record SourceSet(IMusicSource? Source, TaskCompletionSource Completion) : Message;
+    private sealed record SourceSet(
+        IMusicSource? Source,
+        TaskCompletionSource Completion) : Message;
     private sealed record SourceChanged(IMusicSource Source, SourceSnapshot? Snapshot) : Message;
+    private sealed record QueueChanged(LocalSource Source) : Message;
     private sealed record PrepCompleted(long Generation, string OriginalPath) : Message;
     private sealed record EngineReconnected : Message;
 
@@ -40,9 +45,12 @@ public sealed class BroadcastManager : IAsyncDisposable
     private readonly IModResolver penumbra;
     private readonly SyncPrep prep;
     private readonly PrefetchScheduler prefetch;
-    private readonly IRemoteEngine player;
+    private readonly EngineSession engineSession;
     private readonly Configuration config;
     private readonly Lazy<Task> disposeTask;
+    // used to serialize source loading (which can be expensive - directory scans and such)
+    private readonly SemaphoreSlim sourceGate = new(1, 1);
+    private readonly CancellationToken lifetimeToken;
 
     private readonly SerializedMailbox<Message> mailbox;
 
@@ -50,12 +58,12 @@ public sealed class BroadcastManager : IAsyncDisposable
     private SourceSnapshot? activeSnapshot;
     private long snapshotGeneration;
     private int cursorEpoch;
+    private readonly CancellationTokenSource lifetimeCts = new();
     private bool lastBroadcasting;
     private volatile bool beefwebOnAir;
 
-    // The active source's SnapshotChanged subscription, bound to that source's identity so a
-    // late event from a torn-down source can be told apart from the live one.
     private Action<SourceSnapshot?>? activeSourceHandler;
+    private Action? activeQueueHandler;
 
     private BroadcastPlayerData? holdValue; // last computed manifest
     private BroadcastPlayerData? lastAnnounced; // last payload announced
@@ -66,22 +74,23 @@ public sealed class BroadcastManager : IAsyncDisposable
 
     private volatile PublishedState published = new(null, null, null);
 
-    public BroadcastManager(IRemoteEngine player, IModResolver penumbra, SyncPrep prep, Configuration config)
+    public BroadcastManager(IRemoteEngine engine, IModResolver penumbra, SyncPrep prep, Configuration config)
     {
         this.penumbra = penumbra;
         this.prep = prep;
         this.config = config;
         prefetch = new PrefetchScheduler(prep, config);
-        this.player = player;
+        engineSession = new EngineSession(engine);
+        lifetimeToken = lifetimeCts.Token;
         mailbox = new SerializedMailbox<Message>(
             HandleMessage,
             OnMessageError,
-            async () => await TearDownActive());
+            OnCompleted);
         disposeTask = new Lazy<Task>(FinishDispose, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>The active source IF they are using the folder or mod player (not beefweb).</summary>
-    public Jukebox? ActiveJukebox => published.Active as Jukebox;
+    public LocalSource? ActiveLocalSource => published.Active as LocalSource;
 
     /// <summary>The active source IF it is the beefweb watcher.</summary>
     public Beefweb.Watcher? ActiveBeefweb => published.Active as Beefweb.Watcher;
@@ -101,14 +110,37 @@ public sealed class BroadcastManager : IAsyncDisposable
     public void OnEngineReconnected() => Post(new EngineReconnected());
 
     /// <summary>Broadcast from a local folder on disk.</summary>
-    public Task LoadFolder(string directory) => LoadJukebox(directory);
+    public async Task LoadFolder(string directory)
+    {
+        FolderTrackCatalogLoader loader;
+        try
+        {
+            loader = new FolderTrackCatalogLoader(directory);
+        }
+        catch (Exception e)
+        {
+            Plugin.Log.Error(e, "Failed to load broadcast source");
+            return;
+        }
+
+        await LoadLocalSource(loader, null, null);
+    }
 
     /// <summary>Broadcast from a local foobar2000/DeaDBeeF via the beefweb API.</summary>
     public async Task LoadBeefweb(int port, string? user, string? pass, bool useSse)
     {
-        var watcher = Beefweb.Watcher.Create(port, user, pass, useSse, config);
-        await SetSource(watcher);
+        Beefweb.Watcher watcher;
+        try
+        {
+            watcher = Beefweb.Watcher.Create(port, user, pass, useSse, config);
+        }
+        catch (Exception e)
+        {
+            Plugin.Log.Error(e, "Failed to load broadcast source");
+            return;
+        }
 
+        await SetSource(watcher);
         if (ReferenceEquals(ActiveBeefweb, watcher)) watcher.SetOnAir(beefwebOnAir);
     }
 
@@ -121,43 +153,85 @@ public sealed class BroadcastManager : IAsyncDisposable
     /// <summary>
     /// Broadcast from a Penumbra mod, given its directory *name*.
     /// </summary>
-    public async Task LoadMod(string modDirectoryName)
+    public async Task LoadMod(string modDirectoryName, string? selectedGroupId = null)
     {
-        var directory = penumbra.ResolveModDirectory(modDirectoryName);
-        if (directory is null)
-        {
-            Plugin.Log.Error(
-                $"Could not resolve Penumbra mod '{modDirectoryName}' (Penumbra unavailable or mod missing)");
-            return;
-        }
-        await LoadJukebox(directory);
-    }
-
-    private async Task LoadJukebox(string directory)
-    {
-        Jukebox jukebox;
+        ModTrackCatalogLoader loader;
         try
         {
-            jukebox = new Jukebox(player, directory);
-            await jukebox.Initialize();
+            var directory = penumbra.ResolveModDirectory(modDirectoryName)
+                ?? throw new InvalidOperationException(
+                    $"Could not resolve Penumbra mod '{modDirectoryName}' "
+                    + "(Penumbra unavailable or mod missing)");
+            loader = new ModTrackCatalogLoader(directory);
         }
         catch (Exception e)
         {
-            Plugin.Log.Error(e, "Failed to load jukebox");
+            Plugin.Log.Error(e, "Failed to load broadcast source");
             return;
         }
-        await SetSource(jukebox);
+
+        await LoadLocalSource(loader, modDirectoryName, selectedGroupId);
+    }
+
+    internal async Task LoadLocalSource(
+        ITrackCatalogLoader loader,
+        string? modDirectoryName = null,
+        string? selectedGroupId = null)
+    {
+        try
+        {
+            await sourceGate.WaitAsync(lifetimeToken);
+            try
+            {
+                var catalog = await loader.LoadAsync(lifetimeToken);
+                var source = await LocalSource.Create(
+                    engineSession, loader, catalog, modDirectoryName, selectedGroupId);
+                await PostSource(source);
+            }
+            finally
+            {
+                sourceGate.Release();
+            }
+        }
+        catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested) { }
+        catch (Exception e)
+        {
+            Plugin.Log.Error(e, "Failed to load broadcast source");
+        }
     }
 
     /// <summary>Swap the active source, disposing the previous one. null stops broadcasting.</summary>
     public async Task SetSource(IMusicSource? source)
     {
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var accepted = mailbox.TryPost(new SourceSet(source, completion));
-
-        if (accepted) await completion.Task;
-        else if (source is not null) await source.DisposeAsync();
+        try
+        {
+            await sourceGate.WaitAsync(lifetimeToken);
+            try
+            {
+                await PostSource(source);
+            }
+            finally
+            {
+                sourceGate.Release();
+            }
+        }
+        catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
+        {
+            if (source is not null) await source.DisposeAsync();
+        }
     }
+
+    private async Task PostSource(IMusicSource? source)
+    {
+        var completion = NewCompletion();
+        if (mailbox.TryPost(new SourceSet(source, completion)))
+            await completion.Task;
+        else if (source is not null)
+            await source.DisposeAsync();
+    }
+
+    private static TaskCompletionSource NewCompletion()
+        => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal BroadcastPlayerData? CurrentPlayerData() => published.PlayerData;
 
@@ -168,8 +242,18 @@ public sealed class BroadcastManager : IAsyncDisposable
         switch (message)
         {
             case SourceSet(var source, var completion):
-                await SwitchSource(source);
-                completion.TrySetResult();
+                try
+                {
+                    await TearDownActive();
+                    InstallSource(source);
+                    completion.TrySetResult();
+                }
+                catch
+                {
+                    if (source is not null && !ReferenceEquals(active, source))
+                        await source.DisposeAsync();
+                    throw;
+                }
                 break;
 
             case SourceChanged(var source, var snapshot):
@@ -180,14 +264,21 @@ public sealed class BroadcastManager : IAsyncDisposable
                 HandleSnapshot(snapshot);
                 break;
 
-            case PrepCompleted(var generation, var originalPath):
-                if (generation == snapshotGeneration
+            case QueueChanged(var source):
+                if (!ReferenceEquals(active, source)) break;
+                activeSnapshot = source.Current;
+                Publish(holdValue);
+                prefetch.Observe(source, activeSnapshot);
+                break;
+
+            case PrepCompleted(var prepGeneration, var originalPath):
+                if (prepGeneration == snapshotGeneration
                     && activeSnapshot?.FilePath == originalPath)
                     Emit();
                 break;
 
             case EngineReconnected:
-                if (active is Jukebox jukebox) jukebox.Player.ReapplyVolume();
+                engineSession.OnEngineReconnected();
                 break;
         }
     }
@@ -195,19 +286,25 @@ public sealed class BroadcastManager : IAsyncDisposable
     private static void OnMessageError(Exception e, Message message)
     {
         Plugin.Log.Error(e, "broadcast message failed: {message}", message);
-        if (message is SourceSet(_, var completion)) completion.TrySetException(e);
+        switch (message)
+        {
+            case SourceSet(_, var completion): completion.TrySetException(e); break;
+        }
     }
 
-    private async Task SwitchSource(IMusicSource? source)
+    private void InstallSource(IMusicSource? source)
     {
-        await TearDownActive();
-
         active = source;
         if (source is not null)
         {
             var captured = source;
             activeSourceHandler = snapshot => Post(new SourceChanged(captured, snapshot));
             source.OnSnapshotChanged += activeSourceHandler;
+            if (source is LocalSource local)
+            {
+                activeQueueHandler = () => Post(new QueueChanged(local));
+                local.OnQueueChanged += activeQueueHandler;
+            }
         }
 
         cursorEpoch++;
@@ -223,7 +320,10 @@ public sealed class BroadcastManager : IAsyncDisposable
         var old = active;
         if (old is not null && activeSourceHandler is not null)
             old.OnSnapshotChanged -= activeSourceHandler;
+        if (old is LocalSource local && activeQueueHandler is not null)
+            local.OnQueueChanged -= activeQueueHandler;
         activeSourceHandler = null;
+        activeQueueHandler = null;
         active = null;
         activeSnapshot = null;
         Publish(null);
@@ -332,10 +432,18 @@ public sealed class BroadcastManager : IAsyncDisposable
                 Meta        = s.Meta with { ReplayGainDb = p.GainDb },
             });
 
+    private async ValueTask OnCompleted()
+    {
+        await TearDownActive();
+        await engineSession.DisposeAsync();
+        lifetimeCts.Dispose();
+    }
+
     public ValueTask DisposeAsync() => new(disposeTask.Value);
 
     private async Task FinishDispose()
     {
+        lifetimeCts.Cancel();
         await mailbox.DisposeAsync();
         await prefetch.DisposeAsync();
 
