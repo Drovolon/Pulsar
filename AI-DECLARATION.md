@@ -16,7 +16,7 @@ This format is based on [AI-DECLARATION.md](https://ai-declaration.md/en/0.1.1).
 
 ## Philosophy
 
-I try to keep a light touch with LLMs. Sociopolitical concerns aside, they can be very handy, **if** appropriately directed.
+I try to keep a light touch with LLMs. Sociopolitical concerns aside, they can be very handy, **if** appropriately directed. Sociopolitical concerns forward, IMO, individual use (or not) won't solve our problems: please, please, please, go vote, and convince the people you know to vote, too. (Highly US-centric perspective here.)
 
 ## Legend
 
