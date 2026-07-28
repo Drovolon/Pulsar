@@ -169,30 +169,31 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         var sourceView = source?.View;
         var selected = sourceView?.SelectedGroup;
         var preview = selected?.Name ?? TrackCatalog.AllFilesName;
-        ImGui.BeginDisabled(source is null);
-        ImGui.SetNextItemWidth(-1f);
-        
-        if (sourceView is null) return;
-        
-        if (ImGui.BeginCombo("##modgroup", preview))
+        using (ImRaii.Disabled(sourceView is null))
         {
-            foreach (var group in sourceView!.Catalog.Groups)
+            ImGui.SetNextItemWidth(-1f);
+            if (ImGui.BeginCombo("##modgroup", preview))
             {
-                var isSelected = group.Id == selected!.Id;
-                if (ImGui.Selectable($"{group.Name} ({group.Tracks.Count})", isSelected) && !isSelected)
+                if (sourceView is not null)
                 {
-                    _ = source!.SelectGroup(group.Id);
-                    selected = group;
+                    foreach (var group in sourceView.Catalog.Groups)
+                    {
+                        var isSelected = group.Id == selected!.Id;
+                        if (ImGui.Selectable($"{group.Name} ({group.Tracks.Count})", isSelected) && !isSelected)
+                        {
+                            _ = source!.SelectGroup(group.Id);
+                            selected = group;
+                        }
+                        if (isSelected) ImGui.SetItemDefaultFocus();
+                    }
                 }
-                if (isSelected) ImGui.SetItemDefaultFocus();
+                ImGui.EndCombo();
             }
-            ImGui.EndCombo();
         }
-        ImGui.EndDisabled();
 
-        if (source is not null)
+        if (sourceView is not null)
         {
-            var selectedId = source.View.SelectedGroup.Id;
+            var selectedId = sourceView.SelectedGroup.Id;
             var actual = selectedId == TrackCatalog.AllFilesId ? null : selectedId;
             if (plugin.Configuration.BroadcastModGroup != actual)
             {
