@@ -65,6 +65,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
         MainWindow = new MainWindow(this);
         WindowSystem.AddWindow(MainWindow);
 
+        PluginInterface.UiBuilder.DisableGposeUiHide = true;
+        PluginInterface.UiBuilder.DisableCutsceneUiHide = true;
+
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
             HelpMessage = "Open the Pulsar UI"
