@@ -21,12 +21,12 @@
     "DownloadLinkInstall": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
     "DownloadLinkUpdate": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.1.0/Pulsar.zip",
     "IsTestingExclusive": true,
-    "TestingAssemblyVersion": "0.0.4.0",
+    "TestingAssemblyVersion": "0.0.5.0",
     "TestingDalamudApiLevel": 15,
-    "TestingChangelog": "Fixes a rare bug that could brick the whole Dalamud plugin UI, turning it nearly-invisible",
-    "DownloadLinkTesting": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.4.0/Pulsar.zip",
+    "TestingChangelog": "Allow Pulsar to be used in gpose and cutscenes",
+    "DownloadLinkTesting": "https://github.com/Drovolon/Pulsar/releases/download/v0.0.5.0/Pulsar.zip",
     "RepoUrl": "https://github.com/Drovolon/Pulsar",
     "DownloadCount": 0,
-    "LastUpdate": 1785210639
+    "LastUpdate": 1785887206
   }
 ]
