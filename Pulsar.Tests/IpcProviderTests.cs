@@ -25,6 +25,8 @@ public class IpcProviderTests : IAsyncLifetime
     private readonly ControllablePrepareService service = new();
     private readonly FakeRemoteEngine listenEngine = new();
     private readonly FakeIpcGates gates = new();
+    private readonly Configuration config = TestData.QuietConfiguration();
+    private readonly PrefetchTiming prefetchTiming = new();
     private readonly SyncPrep prep;
     private readonly BroadcastManager broadcast;
     private readonly ListeningManager listening;
@@ -36,8 +38,7 @@ public class IpcProviderTests : IAsyncLifetime
     public IpcProviderTests()
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        var config = TestData.QuietConfiguration();
-        broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, config);
+        broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, config, prefetchTiming);
         listening = new ListeningManager(listenEngine, config);
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
@@ -136,5 +137,35 @@ public class IpcProviderTests : IAsyncLifetime
         await TestWait.Assert(() =>
             gates.PlayerDataChanged.Sent[^1] is [null],
             "a stop goes out as null player data");
+    }
+
+    [Fact]
+    public async Task A_completed_prefetch_is_pushed_and_queryable_with_an_unchanged_payload()
+    {
+        // TestData.Snap has 55s remaining, so this fires about 200ms after arming.
+        prefetchTiming.LeadMs = 54_800;
+        prefetchTiming.FinalMs = 100;
+        var current = TestData.CreateTrack(dir, "current.flac");
+        var next = TestData.CreateTrack(dir, "next.flac");
+
+        await broadcast.SetSource(new FakeMusicSource { Current = TestData.Snap(current, next: next) });
+        await TestWait.Assert(
+            () => gates.PlayerDataChanged.Sent.LastOrDefault() is [PulsarPlayerData { Prefetch: null }],
+            "the current-only manifest reaches IPC");
+        var before = Assert.IsType<PulsarPlayerData>(gates.PlayerDataChanged.Sent[^1][0]);
+
+        Assert.False(await service.WaitForPrepare(next, TimeSpan.FromMilliseconds(100)),
+            "prefetch does not start at the track switch");
+        Assert.True(await service.WaitForPrepare(next), "the checkpoint starts prefetch");
+        await TestWait.Assert(
+            () => gates.PlayerDataChanged.Sent.LastOrDefault() is [PulsarPlayerData { Prefetch: not null }],
+            "the prefetch-only update reaches IPC");
+
+        var pushed = Assert.IsType<PulsarPlayerData>(gates.PlayerDataChanged.Sent[^1][0]);
+        Assert.Equal(before.Current, pushed.Current);
+        Assert.Equal(before.Payload, pushed.Payload);
+        Assert.Equal(pushed, gates.GetPlayerData.Func!());
+        Assert.Equal(ControllablePrepareService.Blake3Hash, pushed.Prefetch!.Blake3Hash);
+        Assert.Equal(ControllablePrepareService.Sha1Hash, pushed.Prefetch.Sha1Hash);
     }
 }

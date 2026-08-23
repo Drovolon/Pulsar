@@ -35,7 +35,17 @@ public sealed class BroadcastManager : IAsyncDisposable
     private sealed record SourceChanged(IMusicSource Source, SourceSnapshot? Snapshot) : Message;
     private sealed record QueueChanged(LocalSource Source) : Message;
     private sealed record PrepCompleted(long Generation, string OriginalPath) : Message;
+    private sealed record PrefetchCompleted(
+        IMusicSource Source,
+        string CurrentPath,
+        string NextPath,
+        PrepResult.Successful Result) : Message;
     private sealed record EngineReconnected : Message;
+
+    private sealed record PreparedPrefetch(
+        string CurrentPath,
+        string OriginalPath,
+        PreparedTrack Track);
 
     private sealed record PublishedState(
         IMusicSource? Active,
@@ -67,6 +77,7 @@ public sealed class BroadcastManager : IAsyncDisposable
 
     private BroadcastPlayerData? holdValue; // last computed manifest
     private BroadcastPlayerData? lastAnnounced; // last payload announced
+    private PreparedPrefetch? preparedPrefetch;
 
     private readonly Channel<BroadcastOutput> outputs = Channel.CreateUnbounded<BroadcastOutput>(
         new UnboundedChannelOptions { SingleReader = true });
@@ -75,11 +86,21 @@ public sealed class BroadcastManager : IAsyncDisposable
     private volatile PublishedState published = new(null, null, null);
 
     public BroadcastManager(IRemoteEngine engine, IModResolver penumbra, SyncPrep prep, Configuration config)
+        : this(engine, penumbra, prep, config, new PrefetchTiming()) { }
+
+    internal BroadcastManager(
+        IRemoteEngine engine,
+        IModResolver penumbra,
+        SyncPrep prep,
+        Configuration config,
+        PrefetchTiming prefetchTiming)
     {
         this.penumbra = penumbra;
         this.prep = prep;
         this.config = config;
-        prefetch = new PrefetchScheduler(prep, config);
+        prefetch = new PrefetchScheduler(prep, prefetchTiming,
+            (source, current, next, result) =>
+                Post(new PrefetchCompleted(source, current, next, result)));
         engineSession = new EngineSession(engine);
         lifetimeToken = lifetimeCts.Token;
         mailbox = new SerializedMailbox<Message>(
@@ -267,7 +288,8 @@ public sealed class BroadcastManager : IAsyncDisposable
             case QueueChanged(var source):
                 if (!ReferenceEquals(active, source)) break;
                 activeSnapshot = source.Current;
-                Publish(holdValue);
+                InvalidatePrefetch(activeSnapshot);
+                Emit();
                 prefetch.Observe(source, activeSnapshot);
                 break;
 
@@ -275,6 +297,24 @@ public sealed class BroadcastManager : IAsyncDisposable
                 if (prepGeneration == snapshotGeneration
                     && activeSnapshot?.FilePath == originalPath)
                     Emit();
+                break;
+
+            case PrefetchCompleted(var source, var currentPath, var nextPath, var result):
+                var live = source.Current;
+                if (!ReferenceEquals(active, source)
+                    || activeSnapshot?.FilePath != currentPath
+                    || live?.FilePath != currentPath
+                    || live.NextFilePath != nextPath)
+                    break;
+                preparedPrefetch = new PreparedPrefetch(
+                    currentPath,
+                    nextPath,
+                    new PreparedTrack(
+                        result.PreparedFilePath,
+                        result.Blake3Hash,
+                        result.Sha1Hash,
+                        result.GainDb));
+                Emit();
                 break;
 
             case EngineReconnected:
@@ -310,6 +350,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         cursorEpoch++;
         snapshotGeneration++;
         holdValue = null;
+        preparedPrefetch = null;
         activeSnapshot = source?.Current;
         HandleSnapshot(activeSnapshot);
     }
@@ -326,6 +367,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         activeQueueHandler = null;
         active = null;
         activeSnapshot = null;
+        preparedPrefetch = null;
         Publish(null);
         if (old is not null) await old.DisposeAsync();
     }
@@ -341,7 +383,9 @@ public sealed class BroadcastManager : IAsyncDisposable
                 case PrepResult.Successful s when File.Exists(s.PreparedFilePath):
                     return Map(snap,
                         new PreparedTrack(
-                            s.PreparedFilePath, s.Blake3Hash, s.Sha1Hash, s.GainDb), cursorEpoch);
+                            s.PreparedFilePath, s.Blake3Hash, s.Sha1Hash, s.GainDb),
+                        LivePrefetch(),
+                        cursorEpoch);
                 case PrepResult.Successful:
                     break;
                 case PrepResult.Failed:
@@ -355,6 +399,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     /// <summary>Announce + prep + prefetch for a snapshot, shared by source events and source switches.</summary>
     private void HandleSnapshot(SourceSnapshot? snap)
     {
+        InvalidatePrefetch(snap);
         AnnounceBroadcasting();
         Emit();
         if (snap is not null)
@@ -362,6 +407,22 @@ public sealed class BroadcastManager : IAsyncDisposable
         // Active prep is requested first: SyncPrep gives it priority over this best-effort work.
         prefetch.Observe(active, snap);
     }
+
+    private void InvalidatePrefetch(SourceSnapshot? snapshot)
+    {
+        if (preparedPrefetch is not { } ready) return;
+        if (snapshot is not null
+            && snapshot.FilePath == ready.CurrentPath
+            && snapshot.NextFilePath == ready.OriginalPath)
+            return;
+        preparedPrefetch = null;
+    }
+
+    private PreparedTrack? LivePrefetch()
+        => preparedPrefetch is { Track: var track }
+           && File.Exists(track.SyncPath)
+            ? track
+            : null;
 
     private void StartActivePrep(string originalPath, long generation)
     {
@@ -394,7 +455,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         var data = ComputePlayerData();
         holdValue = data;
         Publish(data);
-        if (EqualsIgnoringPrefetch(data, lastAnnounced)) return;
+        if (Equals(data, lastAnnounced)) return;
         lastAnnounced = data;
         outputs.Writer.TryWrite(new BroadcastOutput.PlayerDataChanged(data));
     }
@@ -402,34 +463,25 @@ public sealed class BroadcastManager : IAsyncDisposable
     private void Publish(BroadcastPlayerData? data)
         => published = new PublishedState(active, activeSnapshot, data);
 
-    /// <summary>
-    /// Checks if two Pulsar IPC payloads are equal - ignoring prefetch.
-    /// </summary>
-    private static bool EqualsIgnoringPrefetch(
-        BroadcastPlayerData? a, BroadcastPlayerData? b)
-    {
-        if (a is null || b is null) return a is null && b is null;
-        return a.CurrentPath == b.CurrentPath
-               && a.CurrentBlake3Hash == b.CurrentBlake3Hash
-               && a.CurrentSha1Hash == b.CurrentSha1Hash
-               && a.Cursor == b.Cursor;
-    }
-
-    private static BroadcastPlayerData Map(SourceSnapshot s, PreparedTrack p, int epoch) =>
+    private static BroadcastPlayerData Map(
+        SourceSnapshot s,
+        PreparedTrack current,
+        PreparedTrack? prefetch,
+        int epoch) =>
         new(
-            p.SyncPath,
-            p.Blake3Hash,
-            p.Sha1Hash,
-            "",
-            "",
-            "",
+            current.SyncPath,
+            current.Blake3Hash,
+            current.Sha1Hash,
+            prefetch?.SyncPath ?? "",
+            prefetch?.Blake3Hash ?? "",
+            prefetch?.Sha1Hash ?? "",
             new PulsarCursor
             {
-                PositionMs  = (long)s.Position.TotalMilliseconds,
-                IsPlaying   = s.IsPlaying,
-                AsOfUnixMs  = s.AsOf.ToUnixTimeMilliseconds(),
+                PositionMs = (long)s.Position.TotalMilliseconds,
+                IsPlaying = s.IsPlaying,
+                AsOfUnixMs = s.AsOf.ToUnixTimeMilliseconds(),
                 CursorEpoch = epoch,
-                Meta        = s.Meta with { ReplayGainDb = p.GainDb },
+                Meta = s.Meta with { ReplayGainDb = current.GainDb },
             });
 
     private async ValueTask OnCompleted()

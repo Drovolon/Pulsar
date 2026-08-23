@@ -39,10 +39,11 @@ public class BroadcastFlowTests : IAsyncLifetime
         dir.Delete(recursive: true);
     }
 
-    private BroadcastManager Create()
+    private BroadcastManager Create(PrefetchTiming? prefetchTiming = null)
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        manager = new BroadcastManager(new FakeRemoteEngine(), null!, prep, new Configuration());
+        manager = new BroadcastManager(
+            new FakeRemoteEngine(), null!, prep, new Configuration(), prefetchTiming ?? new PrefetchTiming());
         outputPump = Task.Run(async () =>
         {
             await foreach (var output in manager.Outputs.ReadAllAsync())
@@ -179,9 +180,12 @@ public class BroadcastFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Track_change_kicks_a_prefetch_for_the_upcoming_track()
+    public async Task Scheduled_prefetch_republishes_the_same_cursor_with_the_upcoming_file()
     {
-        var mgr = Create();
+        // TestData.Snap is 5s into a 60s track: the 54.8s lead schedules a tick
+        // about 200ms from now.
+        var prefetchTiming = new PrefetchTiming { LeadMs = 54_800, FinalMs = 100 };
+        var mgr = Create(prefetchTiming);
         var source = await StartBroadcasting(mgr, CreateTrack("a.flac"));
 
         var current = CreateTrack("b.flac");
@@ -189,8 +193,23 @@ public class BroadcastFlowTests : IAsyncLifetime
         source.Current = Snap(current, next: upcoming);
         source.RaiseChanged();
 
+        await TestWait.Assert(
+            () => Events[^1]?.Cursor.Meta?.OriginalFileName == "b.flac",
+            "the current track manifest is ready");
+        var withoutPrefetch = Events[^1]!;
+        Assert.False(await service.WaitForPrepare(upcoming, TimeSpan.FromMilliseconds(100)),
+            "switching tracks does not immediately start the prefetch");
+
         Assert.True(await service.WaitForPrepare(upcoming),
-            "the next track is prepared ahead of time");
+            "the lead checkpoint prepares the upcoming track");
+        await TestWait.Assert(
+            () => Events[^1] is { PrefetchPath.Length: > 0 },
+            "the prepared upcoming track is republished");
+
+        var withPrefetch = Events[^1]!;
+        Assert.Equal(withoutPrefetch.CurrentPath, withPrefetch.CurrentPath);
+        Assert.Equal(withoutPrefetch.Cursor, withPrefetch.Cursor);
+        Assert.NotEqual(withPrefetch.CurrentPath, withPrefetch.PrefetchPath);
     }
 
     [Fact]

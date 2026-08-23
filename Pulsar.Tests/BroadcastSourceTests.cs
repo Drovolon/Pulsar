@@ -32,11 +32,12 @@ public class BroadcastSourceTests : IAsyncLifetime
     private readonly BroadcastManager broadcast;
 
     private readonly Configuration config = new();
+    private readonly PrefetchTiming prefetchTiming = new();
 
     public BroadcastSourceTests()
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        broadcast = new BroadcastManager(engine, resolver, prep, config);
+        broadcast = new BroadcastManager(engine, resolver, prep, config, prefetchTiming);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -82,8 +83,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     public async Task The_lead_checkpoint_prefetches_the_live_next_track()
     {
         // dur 1000ms, lead 700ms -> lead tick ~300ms after arming.
-        config.PrefetchLeadMs = 700;
-        config.PrefetchFinalMs = 100;
+        prefetchTiming.LeadMs = 700;
+        prefetchTiming.FinalMs = 100;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -97,6 +98,9 @@ public class BroadcastSourceTests : IAsyncLifetime
         source.Current = TimedSnap(current, durationMs: 1000, next: next);
 
         Assert.True(await service.WaitForPrepare(next), "the lead tick prefetched the next track");
+        await TestWait.Assert(
+            () => broadcast.CurrentPlayerData()?.PrefetchPath is { Length: > 0 },
+            "the completed prefetch reaches the published manifest");
     }
 
     [Fact]
@@ -104,8 +108,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     {
         // lead (5s) > duration (1s): arming lands INSIDE the lead window, so the
         // FINAL checkpoint is scheduled directly (~700ms: remaining 1000 - final 300).
-        config.PrefetchLeadMs = 5000;
-        config.PrefetchFinalMs = 300;
+        prefetchTiming.LeadMs = 5000;
+        prefetchTiming.FinalMs = 300;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -119,12 +123,35 @@ public class BroadcastSourceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_completed_prefetch_is_discarded_if_the_live_queue_head_changed()
+    {
+        prefetchTiming.LeadMs = 700;
+        prefetchTiming.FinalMs = 100;
+        var current = Track("current.flac");
+        var staleNext = Track("stale-next.flac");
+        var liveNext = Track("live-next.flac");
+        var staleGate = service.GateFor(staleNext);
+        var source = new FakeMusicSource
+        {
+            Current = TimedSnap(current, durationMs: 1000, next: staleNext),
+        };
+        await broadcast.SetSource(source);
+
+        Assert.True(await service.WaitForPrepare(staleNext), "the checkpoint samples the old queue head");
+        source.Current = TimedSnap(current, durationMs: 1000, next: liveNext); // no event
+        staleGate.Open();
+
+        await Task.Delay(200);
+        Assert.True(string.IsNullOrEmpty(broadcast.CurrentPlayerData()?.PrefetchPath));
+    }
+
+    [Fact]
     public async Task A_paused_source_disarms_the_prefetch_timer()
     {
         // If the pause guard regresses, these values arm the erroneous lead tick in
         // ~100ms (1000ms remaining - 900ms lead), comfortably inside the negative wait.
-        config.PrefetchLeadMs = 900;
-        config.PrefetchFinalMs = 50;
+        prefetchTiming.LeadMs = 900;
+        prefetchTiming.FinalMs = 50;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -139,8 +166,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     [Fact]
     public async Task Unknown_duration_disarms_the_prefetch_timer()
     {
-        config.PrefetchLeadMs = 100;
-        config.PrefetchFinalMs = 50;
+        prefetchTiming.LeadMs = 100;
+        prefetchTiming.FinalMs = 50;
         var current = Track("current.flac");
         var next = Track("next.flac");
 
@@ -156,8 +183,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     [Fact]
     public async Task Pausing_cancels_an_armed_timer_and_resuming_arms_a_fresh_one()
     {
-        config.PrefetchLeadMs = 700;
-        config.PrefetchFinalMs = 100;
+        prefetchTiming.LeadMs = 700;
+        prefetchTiming.FinalMs = 100;
         var current = Track("current.flac");
         var staleNext = Track("stale-next.flac");
         var liveNext = Track("live-next.flac");
@@ -183,8 +210,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     [Fact]
     public async Task Switching_sources_cancels_the_old_sources_armed_timer()
     {
-        config.PrefetchLeadMs = 700;
-        config.PrefetchFinalMs = 100;
+        prefetchTiming.LeadMs = 700;
+        prefetchTiming.FinalMs = 100;
         var oldCurrent = Track("old-current.flac");
         var oldNext = Track("old-next.flac");
         var newCurrent = Track("new-current.flac");
@@ -401,6 +428,9 @@ public class BroadcastSourceTests : IAsyncLifetime
     [Fact]
     public async Task A_queue_only_rescan_does_not_advance_the_playback_cursor()
     {
+        // Keep this queue-notification test fast while still going through a timer tick.
+        prefetchTiming.LeadMs = int.MaxValue;
+        prefetchTiming.FinalMs = int.MaxValue;
         var folder = CreateFolder("a.mp3", "b.mp3");
         await broadcast.LoadFolder(folder.FullName);
         var source = broadcast.ActiveLocalSource!;

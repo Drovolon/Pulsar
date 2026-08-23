@@ -56,11 +56,6 @@ public class Configuration : IPluginConfiguration
     public string? BeefwebPassword { get; set; } = null;
     public BeefwebTransport BeefwebTransport { get; set; } = BeefwebTransport.Sse;
 
-    // Re-check/prefetch the next track this many ms before the current one ends...
-    public int PrefetchLeadMs { get; set; } = 30_000;
-    // ...and a final re-check this many ms before the end.
-    public int PrefetchFinalMs { get; set; } = 5_000;
-
     // The below exists just to make saving less cumbersome
     public void Save()
     {
