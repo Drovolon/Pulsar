@@ -1,6 +1,6 @@
 # Pulsar
 
-**NOTE: PULSAR IS AN UNRELEASED WORK IN PROGRESS.** Release ETA: late July.
+**NOTE: PULSAR IS AN UNRELEASED WORK IN PROGRESS.** Release ETA: late August / early Sept.
 
 Pulsar is a music plugin for the Mare family of syncing services. To use Pulsar:
 
