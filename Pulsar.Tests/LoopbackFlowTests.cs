@@ -24,6 +24,7 @@ public class LoopbackFlowTests : IAsyncLifetime
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-e2e-test-");
     private readonly ControllablePrepareService service = new();
     private readonly FakeRemoteEngine listenEngine = new();
+    private readonly Configuration config = TestData.QuietConfiguration();
     private readonly SyncPrep prep;
     private readonly BroadcastManager broadcast;
     private readonly ListeningManager listening;
@@ -36,7 +37,6 @@ public class LoopbackFlowTests : IAsyncLifetime
     public LoopbackFlowTests()
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
-        var config = TestData.QuietConfiguration();
         broadcast = new BroadcastManager(new FakeRemoteEngine(), null!, prep, config);
         listening = new ListeningManager(listenEngine, config);
 
@@ -136,7 +136,7 @@ public class LoopbackFlowTests : IAsyncLifetime
             "listener plays the synced artifact");
         Assert.NotEqual("song.flac", Path.GetFileName(LatestSyncedFile!));
 
-        var expected = TestData.DbToLinear(service.GainDb);
+        var expected = config.ListeningMasterVolume * TestData.DbToLinear(service.GainDb);
         await TestWait.Assert(() => Math.Abs(listenEngine.LastVolume - expected) < 0.001f,
             "the manifest's ReplayGain shapes the listener volume");
     }
@@ -299,7 +299,7 @@ public class LoopbackFlowTests : IAsyncLifetime
             () => listenEngine.Ops.Count(o => o == "Load") > loadsBefore
                   && listenEngine.Snapshot.State == PlaybackState.Playing,
             "track reloads after the host restart");
-        var expected = 0.5f * TestData.DbToLinear(service.GainDb);
+        var expected = config.ListeningMasterVolume * 0.5f * TestData.DbToLinear(service.GainDb);
         await TestWait.Assert(() => Math.Abs(listenEngine.LastVolume - expected) < 0.001f,
             "volume is pushed to the fresh host");
     }

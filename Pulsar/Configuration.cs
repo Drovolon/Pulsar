@@ -15,10 +15,10 @@ public class Configuration : IPluginConfiguration
     public bool DebugLoopbackEnabled { get; set; } = false;
 
     // Broadcast (DJ) side: the local monitor/player output volume.
-    public float MonitorVolume { get; set; } = 1.0f;
+    public float MonitorVolume { get; set; } = 0.5f;
 
     // Listening (receiver) side volumes.
-    public float ListeningMasterVolume { get; set; } = 1.0f;
+    public float ListeningMasterVolume { get; set; } = 0.5f;
     // Map of character names -> volumes.
     public Dictionary<string, float> ListeningPairVolumes { get; set; } = [];
     // When nothing is explicitly pinned, auto-play whoever nearby is broadcasting.
