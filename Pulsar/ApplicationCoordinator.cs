@@ -11,7 +11,7 @@ namespace Pulsar;
 /// them to other interested parties in the application.
 ///
 /// ListeningManager disables autoplay while broadcasting, for example.
-/// Or, BgmMuter mutes in-game BGM while listening or broadcasting.
+/// Or, BgmMuter mutes in-game BGM while listening or producing broadcast-side audio.
 /// Broadcast outputs are routed into the IPC layer, as well as
 /// the debug loopback layer.
 /// </summary>
@@ -67,7 +67,9 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
                             break;
                         case BroadcastOutput.BroadcastingChanged(var value):
                             listening.SetBroadcasting(value);
-                            await bgmMuter.SetBroadcasting(value);
+                            break;
+                        case BroadcastOutput.BroadcastAudioChanged(var value):
+                            await bgmMuter.SetBroadcastAudio(value);
                             break;
                     }
                 }

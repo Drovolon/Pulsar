@@ -83,10 +83,31 @@ public class LoopbackFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_paused_broadcast_still_routes_the_broadcast_bgm_mute_reason()
+    public async Task Off_air_local_monitor_mutes_bgm_until_the_monitor_stops()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(dir.FullName, "private-monitor"));
+        TestData.CreateTrack(folder, "private.flac");
+        await broadcast.LoadFolder(folder.FullName);
+        var source = broadcast.ActiveLocalSource!;
+
+        source.Play();
+        await TestWait.Assert(() => gameBgm.Muted, "private monitoring mutes game BGM");
+        Assert.False(broadcast.OnAir);
+        Assert.Null(broadcast.CurrentPlayerData());
+
+        source.Pause();
+        await TestWait.Assert(() => source.State == PlaybackState.Paused, "private monitor pauses");
+        Assert.True(gameBgm.Muted);
+
+        source.Stop();
+        await TestWait.Assert(() => !gameBgm.Muted, "stopping private monitoring restores game BGM");
+    }
+
+    [Fact]
+    public async Task A_paused_beefweb_broadcast_still_routes_the_broadcast_bgm_mute_reason()
     {
         var source = new FakeMusicSource { Current = Snap(CreateTrack("paused.flac"), false) };
-        await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
+        await broadcast.BroadcastFromForTests(BroadcastProvider.Beefweb, source);
         await TestWait.Assert(() => gameBgm.Muted, "broadcasting mutes game BGM");
 
         broadcast.SetOnAir(false);

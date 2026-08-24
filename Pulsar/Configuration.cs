@@ -27,6 +27,7 @@ public class Configuration : IPluginConfiguration
     public bool ListeningAutoPlay { get; set; } = true;
 
     public bool MuteGameBgmWhileListening { get; set; } = true;
+    // Includes private playback through the broadcast tab's local monitor.
     public bool MuteGameBgmWhileBroadcasting { get; set; } = true;
 
     // Note: nearby-broadcaster only sends one notification, even if multiple conditions are met

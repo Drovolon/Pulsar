@@ -27,13 +27,13 @@ public sealed class BgmMuterTests
         await using var muter = new BgmMuter(new Configuration(), game);
 
         await muter.SetListening(true);
-        await muter.SetBroadcasting(true);
+        await muter.SetBroadcastAudio(true);
         await muter.SetListening(false);
 
         Assert.True(game.Muted);
         Assert.Equal(1, game.SetCount);
 
-        await muter.SetBroadcasting(false);
+        await muter.SetBroadcastAudio(false);
         Assert.False(game.Muted);
         Assert.Equal(2, game.SetCount);
     }
@@ -60,7 +60,7 @@ public sealed class BgmMuterTests
         await muter.Refresh();
         Assert.False(game.Muted);
 
-        await muter.SetBroadcasting(true);
+        await muter.SetBroadcastAudio(true);
         Assert.True(game.Muted);
     }
 
@@ -96,7 +96,7 @@ public sealed class BgmMuterTests
     {
         var game = new FakeGameBgmControl();
         var muter = new BgmMuter(new Configuration(), game);
-        await muter.SetBroadcasting(true);
+        await muter.SetBroadcastAudio(true);
 
         await muter.DisposeAsync();
 

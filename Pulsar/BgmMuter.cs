@@ -25,20 +25,20 @@ internal sealed class GameBgmControl(IGameConfig gameConfig) : IGameBgmControl
 }
 
 /// <summary>
-/// Mutes in-game BGM when listening or broadcasting, if that is enabled in config.
+/// Mutes in-game BGM when listening or producing broadcast-side audio, if that is enabled in config.
 /// </summary>
 internal sealed class BgmMuter(Configuration config, IGameBgmControl gameBgm) : IAsyncDisposable
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private bool listening;
-    private bool broadcasting;
+    private bool broadcastAudio;
     private bool ownsMute;
     private bool restoreMuted;
     private bool wroteMute;
     private bool disposed;
 
     internal Task SetListening(bool value) => Update(() => listening = value);
-    internal Task SetBroadcasting(bool value) => Update(() => broadcasting = value);
+    internal Task SetBroadcastAudio(bool value) => Update(() => broadcastAudio = value);
     internal Task Refresh() => Update(null);
 
     private async Task Update(Action? change)
@@ -63,7 +63,7 @@ internal sealed class BgmMuter(Configuration config, IGameBgmControl gameBgm) : 
     private void Apply()
     {
         var shouldMute = (listening && config.MuteGameBgmWhileListening) ||
-                         (broadcasting && config.MuteGameBgmWhileBroadcasting);
+                         (broadcastAudio && config.MuteGameBgmWhileBroadcasting);
         if (shouldMute == ownsMute) return;
 
         if (shouldMute)

@@ -23,6 +23,7 @@ public class BroadcastFlowTests : IAsyncLifetime
     private readonly ControllablePrepareService service = new();
     private readonly List<BroadcastPlayerData?> events = [];
     private readonly List<bool> broadcastingEvents = [];
+    private readonly List<bool> broadcastAudioEvents = [];
     private SyncPrep? prep;
     private BroadcastManager? manager;
     private Task? outputPump;
@@ -72,6 +73,13 @@ public class BroadcastFlowTests : IAsyncLifetime
                         }
 
                         break;
+                    case BroadcastOutput.BroadcastAudioChanged(var value):
+                        lock (broadcastAudioEvents)
+                        {
+                            broadcastAudioEvents.Add(value);
+                        }
+
+                        break;
                 }
             }
         });
@@ -89,6 +97,17 @@ public class BroadcastFlowTests : IAsyncLifetime
         }
     }
 
+    private bool[] BroadcastAudioEvents
+    {
+        get
+        {
+            lock (broadcastAudioEvents)
+            {
+                return [.. broadcastAudioEvents];
+            }
+        }
+    }
+
     private string CreateTrack(string name) => TestData.CreateTrack(dir, name);
 
     private static SourceSnapshot Snap(string file, bool playing = true, string? next = null) =>
@@ -100,6 +119,31 @@ public class BroadcastFlowTests : IAsyncLifetime
         await mgr.BroadcastFromForTests(BroadcastProvider.Local, source);
         await TestWait.Assert(() => Events.Any(e => e is not null), $"initial manifest for {track}");
         return source;
+    }
+
+    [Fact]
+    public async Task Private_local_monitor_keeps_broadcast_audio_active_across_on_air_toggle()
+    {
+        var mgr = Create();
+        var folder = Directory.CreateDirectory(Path.Combine(dir.FullName, "local-monitor"));
+        TestData.CreateTrack(folder, "local.flac");
+        await mgr.LoadFolder(folder.FullName);
+        var source = mgr.ActiveLocalSource!;
+
+        source.Play();
+        await TestWait.Assert(() => BroadcastAudioEvents is [true], "private monitor starts broadcast-side audio");
+        Assert.False(mgr.OnAir);
+        Assert.Null(mgr.CurrentPlayerData());
+
+        mgr.SetOnAir(true);
+        await TestWait.Assert(() => Events.LastOrDefault() is not null, "monitor goes on air");
+        mgr.SetOnAir(false);
+        await TestWait.Assert(() => Events.LastOrDefault() is null, "publication stops");
+        Assert.Equal([true], BroadcastAudioEvents);
+
+        source.Stop();
+        await TestWait.Assert(() => BroadcastAudioEvents is [true, false],
+                              "stopping the monitor clears broadcast audio");
     }
 
     [Fact]

@@ -14,7 +14,8 @@ internal sealed class ConfigTab(Plugin plugin, UiTheme theme)
             plugin.Configuration.MuteGameBgmWhileListening = value;
             plugin.RefreshBgmMute();
         });
-        DrawCheckbox("While broadcasting", plugin.Configuration.MuteGameBgmWhileBroadcasting, value =>
+        DrawCheckbox("While broadcasting or monitoring locally", plugin.Configuration.MuteGameBgmWhileBroadcasting,
+                     value =>
         {
             plugin.Configuration.MuteGameBgmWhileBroadcasting = value;
             plugin.RefreshBgmMute();

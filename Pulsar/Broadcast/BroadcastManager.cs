@@ -71,6 +71,7 @@ internal abstract record BroadcastOutput
     }
 
     public sealed record BroadcastingChanged(bool Value) : BroadcastOutput;
+    public sealed record BroadcastAudioChanged(bool Value) : BroadcastOutput;
 }
 
 /// <summary>
@@ -182,6 +183,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     private PreparedPrefetch? preparedPrefetch;
     private long cursorEpoch = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     private bool lastBroadcasting;
+    private bool lastBroadcastAudio;
     private BroadcastPlayerData? lastAnnounced;
 
     private readonly Channel<BroadcastOutput> outputs =
@@ -425,6 +427,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         }
 
         PublishState();
+        AnnounceBroadcastAudio();
         ReleaseUnusedProviders();
         return ValueTask.CompletedTask;
     }
@@ -917,6 +920,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     {
         PublishState();
         AnnounceBroadcasting(data is not null);
+        AnnounceBroadcastAudio();
         if (Equals(data, lastAnnounced)) return;
         List<SyncPrep.ArtifactLease>? artifacts = null;
         if (data is not null)
@@ -947,6 +951,14 @@ public sealed class BroadcastManager : IAsyncDisposable
         if (lastBroadcasting == value) return;
         lastBroadcasting = value;
         outputs.Writer.TryWrite(new BroadcastOutput.BroadcastingChanged(value));
+    }
+
+    private void AnnounceBroadcastAudio()
+    {
+        var value = committed is not null || currentLocal.Source.Frame is not null;
+        if (lastBroadcastAudio == value) return;
+        lastBroadcastAudio = value;
+        outputs.Writer.TryWrite(new BroadcastOutput.BroadcastAudioChanged(value));
     }
 
     private BroadcastPlayerData Map(SourceSnapshot snapshot, PreparedTrack current, PreparedTrack? prefetch, long epoch) =>
