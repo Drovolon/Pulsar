@@ -35,7 +35,7 @@ public class Configuration : IPluginConfiguration
     public bool NotifyListeningTrackChanged { get; set; } = false;
     public bool NotifyUnsyncableBroadcast { get; set; } = true;
 
-    // Broadcast (DJ) side: which source the broadcast tab plays from.
+    // Broadcast (DJ) side: the selected source. Folder and Mod share the local queue.
     public BroadcastMode BroadcastMode { get; set; } = BroadcastMode.Folder;
 
     // Broadcast (DJ) side: persisted folders to broadcast from.
@@ -46,9 +46,6 @@ public class Configuration : IPluginConfiguration
 
     // Broadcast (DJ) side: the selected inferred group for BroadcastMod. null means All Files.
     public string? BroadcastModGroup { get; set; } = null;
-
-    // Broadcast (DJ) side: whether the local playlist plays in shuffled order.
-    public bool Shuffle { get; set; } = false;
 
     // Broadcast (DJ) side: beefweb source. Host isn't configurable, since we need to sync files...
     public int BeefwebPort { get; set; } = 8880;

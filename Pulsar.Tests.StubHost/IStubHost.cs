@@ -22,11 +22,9 @@ public class StubServer : IStubHost, IRemoteEngine
 
     private EngineSnapshot snapshot = new(
         NAudio.Wave.PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow);
+    private long sequence;
 
-#pragma warning disable CS0067 // Required by IRemoteEngine; this crash stub never ends a track normally.
-    public event EventHandler<PlaybackEnded>? OnPlaybackEnded;
-#pragma warning restore CS0067
-    public event EventHandler<EngineSnapshot>? OnChanged;
+    public event EventHandler<EngineSnapshot>? OnUpdated;
 
     public Task<int> GetPidAsync(CancellationToken ct) => Task.FromResult(Environment.ProcessId);
     public Task<string> EchoAsync(string message, CancellationToken ct) => Task.FromResult(message);
@@ -46,8 +44,9 @@ public class StubServer : IStubHost, IRemoteEngine
             null,
             new PlaybackPosition(position, TimeSpan.FromMinutes(3)),
             DateTimeOffset.UtcNow,
-            playbackId);
-        OnChanged?.Invoke(this, snapshot);
+            playbackId,
+            ++sequence);
+        OnUpdated?.Invoke(this, snapshot);
         if (path == ExitAfterLoadPath) ExitSoon();
         return Task.CompletedTask;
     }
@@ -65,8 +64,10 @@ public class StubServer : IStubHost, IRemoteEngine
             Path = null,
             Position = null,
             ObservedAt = DateTimeOffset.UtcNow,
+            Sequence = ++sequence,
+            TerminalReason = null,
         };
-        OnChanged?.Invoke(this, snapshot);
+        OnUpdated?.Invoke(this, snapshot);
         return Task.CompletedTask;
     }
 

@@ -51,10 +51,7 @@ internal sealed class ListeningNotifier(Configuration config)
 
     private static string TrackLabel(ListeningTrack track)
     {
-        var artist = track.Meta?.Artist;
-        var title = track.Meta?.Title;
-        if (!string.IsNullOrEmpty(title))
-            return !string.IsNullOrEmpty(artist) ? $"{artist} - {title}" : title;
+        if (track.Meta?.DisplayName is { Length: > 0 } displayName) return displayName;
         if (track.Meta?.OriginalFileName is { Length: > 0 } original) return original;
         return Path.GetFileName(track.FilePath);
     }

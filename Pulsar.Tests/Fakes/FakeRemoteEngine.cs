@@ -9,10 +9,8 @@ using Pulsar.Common.Api;
 namespace Pulsar.Tests.Fakes;
 
 /// <summary>
-/// In-memory IRemoteEngine that mirrors FilePlayer's observable semantics: commands
-/// commit state, then OnChanged fires with the post-transition snapshot (loads, stop,
-/// pause, resume, seek - not volume). Natural track end is simulated via FinishTrack/
-/// FailTrack, which unload and fire OnPlaybackEnded, exactly like the real host.
+/// In-memory IRemoteEngine that mirrors FilePlayer: commands publish a sequenced update,
+/// then raise OnUpdated. Natural ends and failures include a terminal reason.
 /// </summary>
 public sealed class FakeRemoteEngine : IRemoteEngine
 {
@@ -26,16 +24,31 @@ public sealed class FakeRemoteEngine : IRemoteEngine
     private string? path;
     private TimeSpan position;
     private long playbackId;
+    private long sequence;
+    private EndReason? terminalReason;
+    private TimeSpan trackDuration = TimeSpan.FromMinutes(3);
     private DeferredLoad? deferredLoad;
 
     /// <summary>Accept Load like AudioServer does, but wait to commit it until CompleteDeferredLoad.</summary>
     public bool DeferLoads { get; set; }
 
-    /// <summary>Commit command state without publishing OnChanged, modeling a missed event feed.</summary>
-    public bool SuppressChangedEvents { get; set; }
+    /// <summary>Update state without raising OnUpdated.</summary>
+    public bool SuppressUpdatedEvents { get; set; }
 
     /// <summary>Reported total track length while something is loaded.</summary>
-    public TimeSpan TrackDuration { get; set; } = TimeSpan.FromMinutes(3);
+    public TimeSpan TrackDuration
+    {
+        get { lock (@lock) return trackDuration; }
+        set
+        {
+            lock (@lock)
+            {
+                if (trackDuration == value) return;
+                trackDuration = value;
+                if (path is not null) sequence++;
+            }
+        }
+    }
 
     /// <summary>Latest volume the engine was told to use; -1 = never set.</summary>
     public float LastVolume { get; private set; } = -1f;
@@ -65,15 +78,16 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             {
                 return new EngineSnapshot(
                     state, path, null,
-                    path is null ? null : new PlaybackPosition(position, TrackDuration),
+                    path is null ? null : new PlaybackPosition(position, trackDuration),
                     DateTimeOffset.UtcNow,
-                    playbackId);
+                    playbackId,
+                    sequence,
+                    terminalReason);
             }
         }
     }
 
-    public event EventHandler<PlaybackEnded>? OnPlaybackEnded;
-    public event EventHandler<EngineSnapshot>? OnChanged;
+    public event EventHandler<EngineSnapshot>? OnUpdated;
 
     public Task<bool> WaitForCall(string op, TimeSpan? timeout = null)
         => TestWait.Until(() => Ops.Contains(op), timeout);
@@ -120,8 +134,10 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             position = pos;
             playbackId = newPlaybackId;
             state = startPlaying ? PlaybackState.Playing : PlaybackState.Paused;
+            terminalReason = null;
+            sequence++;
         }
-        PublishChanged();
+        PublishUpdated();
     }
 
     public Task LoadBytesAsync(
@@ -136,8 +152,10 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             position = pos;
             playbackId = newPlaybackId;
             state = startPlaying ? PlaybackState.Playing : PlaybackState.Paused;
+            terminalReason = null;
+            sequence++;
         }
-        PublishChanged();
+        PublishUpdated();
         return Task.CompletedTask;
     }
 
@@ -150,8 +168,10 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             path = null;
             position = TimeSpan.Zero;
             state = PlaybackState.Stopped;
+            terminalReason = null;
+            sequence++;
         }
-        PublishChanged();
+        PublishUpdated();
     }
 
     public Task PauseAsync(CancellationToken ct)
@@ -160,10 +180,15 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         var changed = false;
         lock (@lock)
         {
-            if (state == PlaybackState.Playing) { state = PlaybackState.Paused; changed = true; }
+            if (state == PlaybackState.Playing)
+            {
+                state = PlaybackState.Paused;
+                sequence++;
+                changed = true;
+            }
         }
-        // Like FilePlayer: no-op commands raise no OnChanged.
-        if (changed) PublishChanged();
+        // Like FilePlayer: no-op commands raise no OnUpdated.
+        if (changed) PublishUpdated();
         return Task.CompletedTask;
     }
 
@@ -173,9 +198,14 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         var changed = false;
         lock (@lock)
         {
-            if (state == PlaybackState.Paused) { state = PlaybackState.Playing; changed = true; }
+            if (state == PlaybackState.Paused)
+            {
+                state = PlaybackState.Playing;
+                sequence++;
+                changed = true;
+            }
         }
-        if (changed) PublishChanged();
+        if (changed) PublishUpdated();
         return Task.CompletedTask;
     }
 
@@ -192,9 +222,14 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         var changed = false;
         lock (@lock)
         {
-            if (path is not null) { position = pos; changed = true; }
+            if (path is not null)
+            {
+                position = pos;
+                sequence++;
+                changed = true;
+            }
         }
-        if (changed) PublishChanged();
+        if (changed) PublishUpdated();
         return Task.CompletedTask;
     }
 
@@ -214,16 +249,12 @@ public sealed class FakeRemoteEngine : IRemoteEngine
     /// <summary>Simulate the audio host disappearing with a track loaded.</summary>
     public void DisconnectTrack() => EndTrack(EndReason.Disconnected);
 
-    /// <summary>Raise an event from an older playback without changing current engine state.</summary>
-    public void RaisePlaybackEnded(long endedPlaybackId, EndReason reason)
-        => OnPlaybackEnded?.Invoke(this, new PlaybackEnded(endedPlaybackId, reason));
-
     /// <summary>Raise an arbitrary engine observation without changing current engine state.</summary>
-    public void RaiseChanged(EngineSnapshot snapshot) => OnChanged?.Invoke(this, snapshot);
+    public void RaiseUpdated(EngineSnapshot snapshot) => OnUpdated?.Invoke(this, snapshot);
 
-    private void PublishChanged()
+    private void PublishUpdated()
     {
-        if (!SuppressChangedEvents) OnChanged?.Invoke(this, Snapshot);
+        if (!SuppressUpdatedEvents) OnUpdated?.Invoke(this, Snapshot);
     }
 
     private void EndTrack(EndReason reason)
@@ -237,7 +268,11 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             position = TimeSpan.Zero;
             state = PlaybackState.Stopped;
             endedPlaybackId = playbackId;
+            terminalReason = reason;
+            sequence++;
         }
-        OnPlaybackEnded?.Invoke(this, new PlaybackEnded(endedPlaybackId, reason));
+        var terminal = Snapshot;
+        if (!SuppressUpdatedEvents && terminal.PlaybackId == endedPlaybackId)
+            OnUpdated?.Invoke(this, terminal);
     }
 }

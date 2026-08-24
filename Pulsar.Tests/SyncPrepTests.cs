@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Pulsar.Broadcast.Prepare;
+using Pulsar.Common.Api;
 using Pulsar.Tests.Fakes;
 using Xunit;
 
@@ -13,6 +15,50 @@ namespace Pulsar.Tests;
 /// </summary>
 public class SyncPrepTests : IAsyncLifetime
 {
+    private sealed class NonCooperativePrepareService : IPrepareService
+    {
+        private int calls;
+        private readonly TaskCompletionSource releaseFirst = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private Task<PreparedTrack>? firstAttempt;
+
+        internal Task FirstAttempt => firstAttempt!;
+        internal void ReleaseFirst() => releaseFirst.TrySetResult();
+
+        public Task<PreparedTrack> PrepareAsync(
+            string originalPath,
+            string transcodeOutPath,
+            CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+                return firstAttempt = CompleteLate(transcodeOutPath);
+            File.WriteAllBytes(transcodeOutPath, [2]);
+            return Task.FromResult(new PreparedTrack(
+                transcodeOutPath,
+                ControllablePrepareService.Blake3Hash,
+                ControllablePrepareService.Sha1Hash,
+                0));
+        }
+
+        private async Task<PreparedTrack> CompleteLate(string transcodeOutPath)
+        {
+            await releaseFirst.Task;
+            File.WriteAllBytes(transcodeOutPath, [1]);
+            return new PreparedTrack(
+                transcodeOutPath,
+                ControllablePrepareService.Blake3Hash,
+                ControllablePrepareService.Sha1Hash,
+                0);
+        }
+
+        public Task<PreparedTrack> PrepareBytesAsync(
+            string originalPath,
+            byte[] audioData,
+            string transcodeOutPath,
+            CancellationToken ct)
+            => PrepareAsync(originalPath, transcodeOutPath, ct);
+    }
+
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-sp-test-");
     private readonly ControllablePrepareService service = new();
     private SyncPrep? prep;
@@ -46,6 +92,34 @@ public class SyncPrepTests : IAsyncLifetime
         // calls into a disposed SyncPrep; the worker is gone, so enqueueing would hang.
         var result = await Within(sp.PrepareActive(track), "prep requested after dispose");
         Assert.IsType<PrepResult.Preempted>(result);
+    }
+
+    [Fact]
+    public async Task Timed_out_noncooperative_attempt_cannot_overwrite_its_retry()
+    {
+        var service = new NonCooperativePrepareService();
+        prep = new SyncPrep(
+            new CacheManager(Path.Combine(dir.FullName, "cache")),
+            service,
+            attemptTimeout: TimeSpan.FromMilliseconds(50));
+        var stuck = CreateTrack("stuck.flac");
+
+        Assert.IsType<PrepResult.Failed>(
+            await TestWait.Within(prep.PrepareActive(stuck), "noncooperative timeout"));
+        var retry = Assert.IsType<PrepResult.Successful>(
+            await TestWait.Within(prep.PrepareActive(stuck), "retry starts after timeout"));
+        Assert.Equal([2], File.ReadAllBytes(retry.PreparedFilePath));
+
+        // The first attempt finishes after its timeout. Its temporary file must not
+        // overwrite the retry's output.
+        service.ReleaseFirst();
+        await TestWait.Within(service.FirstAttempt, "abandoned physical attempt finishes");
+        await TestWait.Assert(
+            () => Directory.GetFiles(Path.Combine(dir.FullName, "cache"), "*.attempt-*").Length == 0,
+            "abandoned staging artifact is cleaned");
+        Assert.Equal([2], File.ReadAllBytes(retry.PreparedFilePath));
+
+        await TestWait.Within(prep.DisposeAsync().AsTask(), "prep shutdown after abandoned worker");
     }
 
     [Fact]
@@ -86,6 +160,7 @@ public class SyncPrepTests : IAsyncLifetime
         gate.Open();
         var ok = Assert.IsType<PrepResult.Successful>(await Within(active, "the promoted prep"));
         await Within(prefetch, "the original prefetch");
+        using var liveArtifact = sp.PinArtifact(ok.PreparedFilePath);
 
         // A later prefetch completes and runs an over-cap eviction pass.
         var trackB = CreateTrack("b.flac");
@@ -286,6 +361,7 @@ public class SyncPrepTests : IAsyncLifetime
 
         var active = Assert.IsType<PrepResult.Successful>(
             await Within(sp.PrepareActive(onAir), "active prep"));
+        using var liveArtifact = sp.PinArtifact(active.PreparedFilePath);
         File.SetLastAccessTimeUtc(active.PreparedFilePath, DateTime.UtcNow.AddHours(-1)); // oldest by LRU
 
         Assert.IsType<PrepResult.Successful>(

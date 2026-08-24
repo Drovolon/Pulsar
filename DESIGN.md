@@ -37,7 +37,7 @@ The big TL;DR of how Pulsar slots into this ecosystem:
 * Sync plugins get player data from either GetPlayerData() IPC or OnPlayerDataChanged() messages
 * Player data has:
   1. the current active file that should be synced (& its BLAKE3 and SHA-1 hashes)
-  2. one file (& hashes) to sync for prefetch (not yet implemented, path is always empty)
+  2. one file (& hashes) to sync for prefetch, when we can figure out what plays next
   3. an *opaque* (to the sync plugin) blob that includes DJ playback position, track metadata like calculated loudness, original filename, artist & album & song title
 * Sync plugin does the file syncing and whatnot
 * On *a pair's machine* sync plugin calls SetPlayerData with:
@@ -90,7 +90,9 @@ Support `BroadcastMode`'s:
 * Local mod playback - uses Penumbra IPC to offer a mod selector. When a mod is selected, it builds "groups" - the first is always "All Files" (equivalent of FolderTrackCatalogLoader). But it also reads `group_*.json` from the filesystem to *infer* "playlists" that users have built with DAM mods like Thunderdome. This is very best-effort. Anyway, that's all powered by `ModTrackCatalogLoader`.
 * Beefweb - most complex, but allows the user to use any player that supports the beefweb API (at the time of writing: just foobar2000 and DeaDBeeF) to pick the song they want to play. This is implemented by the `Watcher` class in the Beefweb namespace.
 
-BroadcastManager has a notion of the *active source* (which of those three is selected). Like everywhere, it has an actor loop that handles commands like "change the source" or "the source reported a change" (new song playing, for example) or "the source was disconnected, but now it's reconnected".
+BroadcastManager has a notion of the *selected provider*. Folder and mod playback share the Local provider (and its queue); Beefweb is the other provider. Like everywhere, it has an actor loop that handles commands like "select Beefweb", "go On Air", or "the source reported a change" (new song playing, for example).
+
+Installing a provider, selecting it, and going On Air are deliberately separate operations. Loading a new Beefweb watcher should not need a couple of boolean arguments that quietly say "also select this" or "also start broadcasting". The caller asks for those things directly. This sounds like a small distinction, but it keeps source setup from growing a bag of switches over time. Like a tumor.
 
 All sources implement `IMusicSource`, which is all BroadcastManager actually uses: (1) have a way to get the current source snapshot, (2) send an event when the source snapshot changes. The snapshot is "what are you playing, and where, and when did you tell me that".
 
@@ -103,9 +105,11 @@ BroadcastManager also integrates with SyncPrep, which lives at `Broadcast/Prepar
 
 (reminder, the actual *work* is done in the transcode host, out of the game process)
 
-So, BroadcastManager has a so-called "transcode gap": a period of time when it announces the *previous* song while it awaits prep finishing.
+So, BroadcastManager has a so-called "transcode gap": a period of time when it announces the *previous* song while it awaits prep finishing. It owns that whole handoff: which provider the DJ chose, whether On Air is enabled, what is actually broadcasting, and when to retry. Providers just report what they see.
 
-It also has an output queue where it publishes source changes. `ApplicationCoordinator` is responsible for taking broadcast changes and pushing them into the IPC, debug loopback, listening, and BGM-muting layers.
+The UI gets one phase from BroadcastManager: Off Air, Starting, Live, Switching, Retrying, or Failed.
+
+It also has an output queue where it publishes source changes. `ApplicationCoordinator` takes those changes and pushes them into the IPC, debug loopback, listening, and BGM-muting layers.
 
 #### Beefweb
 
@@ -123,6 +127,8 @@ So, our solution is:
 * a Discriminator that watches new "observations" from the feeds and *classifies* them as genuinely novel or something that can be ignored
   * this is done by using monotonic timestamps and checking how far the cursor has changed since the last observation: e.g., if our last observation was 10 seconds ago, and the playback cursor has advanced by 10 seconds, the user has *not* performed a seek
 * a `Watcher` that ties it all together
+
+The Watcher reports Beefweb facts, including transitions into a source we cannot sync. It does not know whether Beefweb is selected, whether the DJ is On Air, or whether warnings are enabled. BroadcastManager owns those decisions and is the place that decides whether to put a warning in chat.
 
 None of that machinery is necessary for the local playback source, since we are in the path of all user inputs.
 
@@ -157,6 +163,8 @@ Ultimately, this means Pulsar is "everyone hears the same thing - but possibly u
 BroadcastManager ships updates to the ApplicationCoordinator, which forwards them to the IPC layer, the listening layer, and the debug loopback layer.
 
 Debug loopback is simple: take the output of BroadcastManager, like a sync plugin would, and forward it into SetPlayerData for the listening layer. This exercises basically the whole plugin end-to-end, and is the easiest way to test it.
+
+`DebugLoopbackController` remembers the latest broadcast output even while loopback is disabled. Turning it on republishes that value. So the UI only says "enabled" or "disabled"; it does not have to find a current broadcast snapshot and pass it in at just the right time.
 
 An example may be easiest, and it's probably illustrative of data flow:
 

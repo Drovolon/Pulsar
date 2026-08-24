@@ -47,9 +47,12 @@ And yes, if the DJ seeks in the song, that seek is synced and everyone will hear
 
 Use `/pulsar` to open the UI.
 
+The **On Air** switch controls whether your playback is sent to nearby pairs. It starts off after every plugin reload, so you can build a queue and monitor it locally before broadcasting.
+
 * Play from folder: finds all sound files (recursively) in a folder.
 * Play from mod: same as play from folder, but uses Penumbra IPC to let you pick a mod instead of hunting for the folder on disk. For DAM-style mods, Pulsar **attempts** to detect option groups that act as genre playlists. "All Files" is always available if mod groups aren't detected properly.
-* Beefweb: Connects to foobar2000 or DeaDBeeF using the beefweb API. Requires installation of the beefweb component in foobar2000 or DeaDBeeF to function. Turn **On Air** on when you're ready to broadcast. **NOTE**: DSP effects like equalizers, etc., are NOT synced. Just the file you're playing and your position in the song.
+* Pulsar player: starting any library track plays its entire folder or mod group from that point. A manual queue can override what plays next, with duplicate, reorder, removal, and clear support; the compact **Up Next** view combines those queued overrides with the upcoming source tracks. **Shuffle Upcoming** changes only the source order and preserves the hand-built queue. Browsing another folder, mod, or group does not interrupt the active source.
+* Beefweb: Connects to foobar2000 or DeaDBeeF using the beefweb API. Requires installation of the beefweb component in foobar2000 or DeaDBeeF to function. Switching to Beefweb while On Air keeps the current Pulsar-queue broadcast live until Beefweb has a syncable track ready. **NOTE**: DSP effects like equalizers, etc., are NOT synced. Just the file you're playing and your position in the song.
 
 <img src="./screenshots/play-from-folder.png" alt="listening" width="250"/>
 <img src="./screenshots/play-from-mod.png" alt="listening" width="250"/>

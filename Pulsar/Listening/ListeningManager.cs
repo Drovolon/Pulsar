@@ -14,14 +14,13 @@ public record PairData(
     TimeSpan Position,
     bool IsPlaying,
     DateTimeOffset ObservedAt,
-    int CursorEpoch,
-    TrackMeta? Meta
-);
+    long CursorEpoch,
+    TrackMeta? Meta);
 
 internal class PairState(PairData data)
 {
     internal PairData Data = data;
-    internal string? DisplayName;         // resolved character name; null if the address couldn't be resolved
+    internal string? DisplayName; // resolved character name; null if the address couldn't be resolved
     internal float Volume = 1f;
     internal bool Muted;
     internal int FailCount; // consecutive load failures for Data
@@ -43,13 +42,18 @@ public readonly record struct PairView(
     public string NameOrFallback => DisplayName ?? $"{Ident:X}";
 }
 
-public enum ListenerPlaybackStatus { Idle, Loading, Playing, Paused, Ended, Failed }
+public enum ListenerPlaybackStatus
+{
+    Idle,
+    Loading,
+    Playing,
+    Paused,
+    Ended,
+    Failed,
+}
 
 /// <summary>Atomic UI-facing state of the one listening playback engine.</summary>
-public sealed record ListenerPlaybackView(
-    ListenerPlaybackStatus Status,
-    string? TargetPath,
-    PlaybackPosition? Position);
+public sealed record ListenerPlaybackView(ListenerPlaybackStatus Status, string? TargetPath, PlaybackPosition? Position);
 
 /// <summary>
 /// ListeningManager coordinates listening to songs streamed from other players, via IPC.
@@ -70,34 +74,49 @@ public class ListeningManager : IAsyncDisposable
     private const int MaxLoadRetries = 3;
 
     private abstract record Message;
-    private sealed record PairUpdated(ulong Ident, string? DisplayName, PairData Data) : Message;
-    private sealed record PairCleared(ulong Ident) : Message;
-    private sealed record ActiveSet(ulong Ident) : Message;
-    private sealed record Unpinned : Message;
-    private sealed record AutoPlaySet(bool Value) : Message;
-    private sealed record BroadcastingSet(bool Value) : Message;
-    private sealed record MasterVolumeSet(float Value) : Message;
-    private sealed record MasterMutedSet(bool Value) : Message;
-    private sealed record PairVolumeSet(ulong Ident, float Value) : Message;
-    private sealed record PairMutedSet(ulong Ident, bool Value) : Message;
-    private sealed record PlaybackEndedMessage(EngineSessionEnded Ended) : Message;
-    private sealed record EngineObserved(EngineObservation Observation) : Message;
-    private sealed record EngineReconnected : Message;
-    private sealed record PlaybackTarget(ulong SourceId, int CursorEpoch, string Path);
 
-    private sealed record PublishedState(
-        IReadOnlyList<PairView> View,
-        bool AutoPlay,
-        bool HasPin);
+    private sealed record PairUpdated(ulong Ident, string? DisplayName, PairData Data) : Message;
+
+    private sealed record PairCleared(ulong Ident) : Message;
+
+    private sealed record ActiveSet(ulong Ident) : Message;
+
+    private sealed record Unpinned : Message;
+
+    private sealed record AutoPlaySet(bool Value) : Message;
+
+    private sealed record BroadcastingSet(bool Value) : Message;
+
+    private sealed record MasterVolumeSet(float Value) : Message;
+
+    private sealed record MasterMutedSet(bool Value) : Message;
+
+    private sealed record PairVolumeSet(ulong Ident, float Value) : Message;
+
+    private sealed record PairMutedSet(ulong Ident, bool Value) : Message;
+
+    private sealed record PlaybackEndedMessage(EngineSessionEnded Ended) : Message;
+
+    private sealed record EngineObserved(EngineObservation Observation) : Message;
+
+    private sealed record EngineReconnected : Message;
+
+    private sealed record PlaybackTarget(ulong SourceId, long CursorEpoch, string Path);
+
+    private sealed record PublishedState(IReadOnlyList<PairView> View, bool AutoPlay, bool HasPin);
 
     private readonly Dictionary<ulong, PairState> pairs = [];
+
     private readonly EngineSession engineSession;
+
     // This is the manager's synchronization boundary: callers and engine callbacks only post
     // messages; the single reader below is the sole owner of all non-published state.
     private readonly Channel<Message> mailbox = Channel.CreateUnbounded<Message>(
         new UnboundedChannelOptions { SingleReader = true });
-    private readonly Channel<ListeningOutput> outputs = Channel.CreateUnbounded<ListeningOutput>(
-        new UnboundedChannelOptions { SingleReader = true });
+
+    private readonly Channel<ListeningOutput> outputs =
+        Channel.CreateUnbounded<ListeningOutput>(new UnboundedChannelOptions { SingleReader = true });
+
     internal ChannelReader<ListeningOutput> Outputs => outputs.Reader;
 
     private float masterVolume;
@@ -123,6 +142,7 @@ public class ListeningManager : IAsyncDisposable
     private readonly Dictionary<string, float> preferredVolumes;
 
     private volatile PublishedState published;
+
     /// <summary>View for UI code, so it doesn't need to take locks.</summary>
     public IReadOnlyList<PairView> View => published.View;
 
@@ -139,33 +159,26 @@ public class ListeningManager : IAsyncDisposable
     /// autoplay. A pin overrides all this.
     /// </summary>
     public bool AutoPlay => published.AutoPlay;
+
     private bool autoPlay;
 
     /// <summary>Whether anyone is pinned.</summary>
     public bool HasPin => published.HasPin;
 
     private readonly Task messageLoop;
-    private readonly CancellationTokenSource asyncCts  = new();
+    private readonly CancellationTokenSource asyncCts = new();
 
-    public ListeningManager(IRemoteEngine engine, Configuration config)
-        : this(engine, config.ListeningMasterVolume, config.ListeningPairVolumes,
-               config.ListeningAutoPlay,
-               updatePoll: TimeSpan.FromMilliseconds(250),
-               errorBackoff: TimeSpan.FromSeconds(1),
-               lostBackoff: TimeSpan.FromSeconds(10)) { }
+    public ListeningManager(IRemoteEngine engine, Configuration config) : this(
+        engine, config.ListeningMasterVolume, config.ListeningPairVolumes, config.ListeningAutoPlay,
+        TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10)) { }
 
     // for unit tests only
-    internal ListeningManager(IRemoteEngine engine, float masterVolume,
-                              IReadOnlyDictionary<string, float>? savedPairVolumes, bool autoPlay,
-                              TimeSpan updatePoll, TimeSpan errorBackoff, TimeSpan lostBackoff)
+    internal ListeningManager(
+        IRemoteEngine engine, float masterVolume, IReadOnlyDictionary<string, float>? savedPairVolumes, bool autoPlay,
+        TimeSpan updatePoll, TimeSpan errorBackoff, TimeSpan lostBackoff)
     {
         engineSession = new EngineSession(
-            engine,
-            pollPlaying: updatePoll,
-            pollIdle: updatePoll,
-            errorBackoff: errorBackoff,
-            disposeTimeout: TimeSpan.FromSeconds(2),
-            lostBackoff: lostBackoff);
+            engine, updatePoll, updatePoll, errorBackoff, TimeSpan.FromSeconds(2), lostBackoff);
         this.masterVolume = masterVolume;
         preferredVolumes = savedPairVolumes is null ? [] : new Dictionary<string, float>(savedPairVolumes);
         this.autoPlay = autoPlay;
@@ -196,8 +209,8 @@ public class ListeningManager : IAsyncDisposable
     /// </summary>
     public void OnEngineReconnected() => engineSession.OnEngineReconnected();
 
-    public void AddOrUpdatePair(ulong ident, string? displayName, PairData data)
-        => Post(new PairUpdated(ident, displayName, data));
+    public void AddOrUpdatePair(ulong ident, string? displayName, PairData data) =>
+        Post(new PairUpdated(ident, displayName, data));
 
     public void ClearPair(ulong ident) => Post(new PairCleared(ident));
 
@@ -231,29 +244,17 @@ public class ListeningManager : IAsyncDisposable
         var list = new List<PairView>(pairs.Count);
         foreach (var (ident, p) in pairs)
         {
-            // A newer cursor may be pending while the applied track finishes its outro.
-            // Keep the active row on what the listener is actually hearing until the
-            // pending cursor is committed.
-            var data = ident == selectedSourceId && ident == appliedSourceId
-                ? appliedData ?? p.Data
-                : p.Data;
-            list.Add(new PairView(
-                         ident,
-                         p.DisplayName,
-                         data.Meta,
-                         data.FilePath,
-                         p.Volume,
-                         p.Muted,
-                         ident == selectedSourceId,
-                         pinnedName is not null && p.DisplayName == pinnedName));
+            // Keep showing the track being heard while its replacement loads.
+            var data = ident == selectedSourceId && ident == appliedSourceId ? appliedData ?? p.Data : p.Data;
+            list.Add(new PairView(ident, p.DisplayName, data.Meta, data.FilePath, p.Volume, p.Muted,
+                                  ident == selectedSourceId, pinnedName is not null && p.DisplayName == pinnedName));
         }
+
         published = new PublishedState(list, autoPlay, pinnedName is not null);
     }
 
-    private void OnPlaybackEnded(EngineSessionEnded ended)
-        => Post(new PlaybackEndedMessage(ended));
-    private void OnEngineObserved(EngineObservation observation)
-        => Post(new EngineObserved(observation));
+    private void OnPlaybackEnded(EngineSessionEnded ended) => Post(new PlaybackEndedMessage(ended));
+    private void OnEngineObserved(EngineObservation observation) => Post(new EngineObserved(observation));
     private void OnSessionReconnected() => Post(new EngineReconnected());
 
     private void Apply(Message message)
@@ -275,22 +276,27 @@ public class ListeningManager : IAsyncDisposable
                     pairs[ident] = new PairState(data)
                     {
                         DisplayName = displayName,
-                        Volume = displayName is not null
-                            ? preferredVolumes.GetValueOrDefault(displayName, 1f)
-                            : 1f,
+                        Volume = displayName is not null ? preferredVolumes.GetValueOrDefault(displayName, 1f) : 1f,
                     };
                 }
+
                 break;
 
             case PairCleared(var ident):
                 pairs.Remove(ident);
                 newPairNotifications.Remove(ident);
                 playbackStartedNotifications.Remove(ident);
+                if (appliedSourceId == ident)
+                {
+                    appliedSourceId = null;
+                    appliedData = null;
+                    playbackTarget = null;
+                }
+
                 break;
 
             case ActiveSet(var ident):
-                if (pairs.TryGetValue(ident, out var toPin)
-                    && toPin.DisplayName is { } name)
+                if (pairs.TryGetValue(ident, out var toPin) && toPin.DisplayName is { } name)
                     pinnedName = name;
                 break;
 
@@ -356,6 +362,7 @@ public class ListeningManager : IAsyncDisposable
                         MarkPlayback(ListenerPlaybackStatus.Ended);
                         break;
                 }
+
                 break;
 
             case EngineReconnected:
@@ -371,19 +378,16 @@ public class ListeningManager : IAsyncDisposable
     private async Task MessageLoop(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
-        {
             try
             {
                 if (!await mailbox.Reader.WaitToReadAsync(token)) break;
                 var reconcile = false;
                 while (mailbox.Reader.TryRead(out var message))
-                {
                     switch (message)
                     {
                         case EngineObserved(var observation):
-                            if (engineTarget?.Revision == observation.Revision
-                                || (engineTarget is null
-                                    && observation.Snapshot.State == PlaybackState.Stopped))
+                            if (engineTarget?.Revision == observation.Revision ||
+                                (engineTarget is null && observation.Snapshot.State == PlaybackState.Stopped))
                                 PublishEngineSnapshot(observation.Snapshot);
                             break;
                         default:
@@ -391,7 +395,7 @@ public class ListeningManager : IAsyncDisposable
                             reconcile = true;
                             break;
                     }
-                }
+
                 if (reconcile)
                 {
                     await ReconcileActive(token);
@@ -405,12 +409,10 @@ public class ListeningManager : IAsyncDisposable
             catch (Exception ex)
             {
                 Plugin.Log.Error(ex, "Error in ListeningManager message loop");
-            }
-            finally
+            } finally
             {
                 PublishState();
             }
-        }
     }
 
     private ulong? appliedSourceId;
@@ -463,12 +465,12 @@ public class ListeningManager : IAsyncDisposable
 
         foreach (var ident in playbackStartedNotifications)
         {
-            if (newPairNotifications.Contains(ident) || ident != selectedSourceId
-                || !pairs.TryGetValue(ident, out var pair)
-                || SilenceReason(pair) is not { } reason)
+            if (newPairNotifications.Contains(ident) ||
+                ident != selectedSourceId ||
+                !pairs.TryGetValue(ident, out var pair) ||
+                SilenceReason(pair) is not { } reason)
                 continue;
-            outputs.Writer.TryWrite(new ListeningOutput.SilentPlaybackStarted(
-                PairName(ident, pair), reason));
+            outputs.Writer.TryWrite(new ListeningOutput.SilentPlaybackStarted(PairName(ident, pair), reason));
         }
 
         newPairNotifications.Clear();
@@ -486,7 +488,7 @@ public class ListeningManager : IAsyncDisposable
         }
 
         outputs.Writer.TryWrite(new ListeningOutput.NearbyBroadcastDetected(
-            Track(name, pair.Data), ClassifyNearbyBroadcast(ident)));
+                                    Track(name, pair.Data), ClassifyNearbyBroadcast(ident)));
     }
 
     private NearbyBroadcastContext ClassifyNearbyBroadcast(ulong ident)
@@ -501,16 +503,15 @@ public class ListeningManager : IAsyncDisposable
 
     private void MaybeNotifyTrackChanged(ulong? previousSourceId, PairData? previousData)
     {
-        if (previousSourceId is not { } sourceId
-            || sourceId != appliedSourceId
-            || previousData is null
-            || appliedData is null
-            || previousData.FilePath == appliedData.FilePath
-            || !pairs.TryGetValue(sourceId, out var pair))
+        if (previousSourceId is not { } sourceId ||
+            sourceId != appliedSourceId ||
+            previousData is null ||
+            appliedData is null ||
+            previousData.FilePath == appliedData.FilePath ||
+            !pairs.TryGetValue(sourceId, out var pair))
             return;
 
-        outputs.Writer.TryWrite(new ListeningOutput.TrackChanged(
-            Track(PairName(sourceId, pair), appliedData)));
+        outputs.Writer.TryWrite(new ListeningOutput.TrackChanged(Track(PairName(sourceId, pair), appliedData)));
     }
 
     private ListeningSilenceReason? SilenceReason(PairState pair)
@@ -522,11 +523,9 @@ public class ListeningManager : IAsyncDisposable
         return null;
     }
 
-    private static string PairName(ulong ident, PairState pair)
-        => pair.DisplayName ?? $"{ident:X}";
+    private static string PairName(ulong ident, PairState pair) => pair.DisplayName ?? $"{ident:X}";
 
-    private static ListeningTrack Track(string sourceName, PairData data)
-        => new(sourceName, data.FilePath, data.Meta);
+    private static ListeningTrack Track(string sourceName, PairData data) => new(sourceName, data.FilePath, data.Meta);
 
     private void SetPlaybackTarget(ulong? activeId, PairState? active)
     {
@@ -551,9 +550,9 @@ public class ListeningManager : IAsyncDisposable
     private void PublishEngineSnapshot(EngineSnapshot snapshot)
     {
         var current = playback;
-        var isListening = current.TargetPath is not null
-                          && snapshot.Path == current.TargetPath
-                          && snapshot.State == PlaybackState.Playing;
+        var isListening = current.TargetPath is not null &&
+                          snapshot.Path == current.TargetPath &&
+                          snapshot.State == PlaybackState.Playing;
         if (lastListening != isListening)
         {
             lastListening = isListening;
@@ -562,14 +561,12 @@ public class ListeningManager : IAsyncDisposable
 
         ListenerPlaybackView next;
         if (current.TargetPath is null)
-        {
             next = new ListenerPlaybackView(ListenerPlaybackStatus.Idle, null, null);
-        }
         else if (snapshot.Path != current.TargetPath)
         {
             next = current.Status is ListenerPlaybackStatus.Ended or ListenerPlaybackStatus.Failed
-                ? current
-                : current with { Status = ListenerPlaybackStatus.Loading, Position = null };
+                       ? current
+                       : current with { Status = ListenerPlaybackStatus.Loading, Position = null };
         }
         else
         {
@@ -592,8 +589,7 @@ public class ListeningManager : IAsyncDisposable
         PublishPlayback(next);
     }
 
-    private void PublishPlayback(ListenerPlaybackView value)
-        => Volatile.Write(ref playback, value);
+    private void PublishPlayback(ListenerPlaybackView value) => Volatile.Write(ref playback, value);
 
     /// <summary>
     /// Contains the "which source should actually be playing" logic.
@@ -607,6 +603,7 @@ public class ListeningManager : IAsyncDisposable
             autoplaySourceId = null;
             return null;
         }
+
         // If the current pick still exists, keep it
         if (PeekActive() is { } current) return current;
         autoplaySourceId = PickNextAutoplay();
@@ -618,9 +615,11 @@ public class ListeningManager : IAsyncDisposable
         if (pinnedName is { } name)
         {
             foreach (var (id, p) in pairs)
-                if (p.DisplayName == name) return id;
+                if (p.DisplayName == name)
+                    return id;
             return null;
         }
+
         if (broadcasting || !autoPlay) return null;
         return autoplaySourceId is { } current && pairs.ContainsKey(current) ? current : null;
     }
@@ -641,23 +640,23 @@ public class ListeningManager : IAsyncDisposable
     {
         ulong? best = null;
         foreach (var id in pairs.Keys)
-            if (best is null || id < best) best = id;
+            if (best is null || id < best)
+                best = id;
         return best;
     }
 
     private static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);
 
     private float lastVolumeSet = -1f;
+
     private void ApplyActiveVolume(PairState pair, PairData track)
     {
         var rawRg = track.Meta?.ReplayGainDb ?? 0.0;
         // Stop a peer from sending ridiculous gain values.
         // (Note, though: we clamp our total gain stage to 1.0 anyway.)
         var rgDb = double.IsFinite(rawRg) ? Math.Clamp(rawRg, -20.0, 20.0) : 0.0;
-        var effective = masterMuted || pair.Muted
-            ? 0f
-            : masterVolume * pair.Volume * DbToLinear(rgDb);
-        
+        var effective = masterMuted || pair.Muted ? 0f : masterVolume * pair.Volume * DbToLinear(rgDb);
+
         if (float.IsFinite(effective) && effective == lastVolumeSet) return; // make method idempotent
         engineSession.SetVolume(effective);
         lastVolumeSet = effective;
@@ -668,11 +667,8 @@ public class ListeningManager : IAsyncDisposable
         switch (action)
         {
             case EngineAction.Load l:
-                engineTarget = new EngineTarget(
-                    ++nextEngineRevision,
-                    l.Path,
-                    l.Playing ? PlaybackState.Playing : PlaybackState.Paused,
-                    l.Position);
+                engineTarget = new EngineTarget(++nextEngineRevision, l.Path,
+                                                l.Playing ? PlaybackState.Playing : PlaybackState.Paused, l.Position);
                 engineSession.SetTarget(engineTarget);
                 break;
             case EngineAction.Seek s:
@@ -684,6 +680,7 @@ public class ListeningManager : IAsyncDisposable
                     engineTarget = engineTarget with { State = PlaybackState.Paused };
                     engineSession.SetTarget(engineTarget);
                 }
+
                 break;
             case EngineAction.Resume:
                 if (engineTarget is not null)
@@ -691,6 +688,7 @@ public class ListeningManager : IAsyncDisposable
                     engineTarget = engineTarget with { State = PlaybackState.Playing };
                     engineSession.SetTarget(engineTarget);
                 }
+
                 break;
             case EngineAction.Stop:
                 engineTarget = null;

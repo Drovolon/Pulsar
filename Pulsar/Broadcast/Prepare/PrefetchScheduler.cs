@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,17 +13,15 @@ internal sealed class PrefetchTiming
 }
 
 /// <summary>
-/// Owns best-effort next-track preparation. Source observations arm the lead/final
-/// checkpoints; checkpoints sample the live source because NextFilePath may change
-/// without a source event.
+/// Schedules next-track preparation from source frames without retaining source objects.
 /// </summary>
 internal sealed class PrefetchScheduler : IAsyncDisposable
 {
     private abstract record Message;
-    private sealed record SourceObserved(IMusicSource? Source, SourceSnapshot? Snapshot) : Message;
+    private sealed record SourceObserved(SourceFrame? Frame) : Message;
     private sealed record Tick(ScheduledTick Schedule) : Message;
     private sealed record PreparationCompleted(
-        IMusicSource Source,
+        SourceCursor Cursor,
         string CurrentPath,
         string NextPath,
         PrepResult Result) : Message;
@@ -33,24 +30,21 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     private sealed class ScheduledTick
     {
         internal CancellationTokenSource Cts { get; } = new();
-        internal Task Task { get; set; } = Task.CompletedTask;
     }
 
     private readonly SyncPrep prep;
     private readonly PrefetchTiming timing;
-    private readonly Action<IMusicSource, string, string, PrepResult.Successful> onPrepared;
+    private readonly Action<SourceCursor, string, string, PrepResult.Successful> onPrepared;
     private readonly SerializedMailbox<Message> mailbox;
 
-    private IMusicSource? source;
-    private string? currentPath;
+    private SourceFrame? frame;
     private bool finalPending;
     private ScheduledTick? scheduledTick;
-    private readonly List<Task> retiredDelayTasks = [];
 
     internal PrefetchScheduler(
         SyncPrep prep,
         PrefetchTiming timing,
-        Action<IMusicSource, string, string, PrepResult.Successful> onPrepared)
+        Action<SourceCursor, string, string, PrepResult.Successful> onPrepared)
     {
         this.prep = prep;
         this.timing = timing;
@@ -58,8 +52,8 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError, OnCompleted);
     }
 
-    internal void Observe(IMusicSource? activeSource, SourceSnapshot? snapshot)
-        => mailbox.TryPost(new SourceObserved(activeSource, snapshot));
+    internal void Observe(SourceFrame? value)
+        => mailbox.TryPost(new SourceObserved(value));
 
     /// <summary>
     /// Detaches from the live source before its owner disposes it. Once this completes,
@@ -76,8 +70,8 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     {
         switch (message)
         {
-            case SourceObserved(var activeSource, var snapshot):
-                ObserveSource(activeSource, snapshot);
+            case SourceObserved(var value):
+                ObserveSource(value);
                 break;
             case Tick(var schedule):
                 if (ReferenceEquals(scheduledTick, schedule))
@@ -88,12 +82,12 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
                 }
                 break;
             case PreparationCompleted(
-                var prepSource,
+                var prepCursor,
                 var prepCurrent,
                 var prepNext,
                 var result):
                 HandlePreparationCompleted(
-                    prepSource, prepCurrent, prepNext, result);
+                    prepCursor, prepCurrent, prepNext, result);
                 break;
             case Cleared(var completion):
                 Clear();
@@ -110,18 +104,28 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         if (message is Cleared(var completion)) completion.TrySetResult();
     }
 
-    private async ValueTask OnCompleted()
+    private ValueTask OnCompleted()
     {
         Clear();
-        if (retiredDelayTasks.Count > 0) await Task.WhenAll(retiredDelayTasks);
+        return ValueTask.CompletedTask;
     }
 
-    private void ObserveSource(IMusicSource? activeSource, SourceSnapshot? snapshot)
+    private void ObserveSource(SourceFrame? value)
     {
+        if (value is not null && ReferenceEquals(frame?.Cursor, value.Cursor))
+        {
+            var nextChanged = frame.Snapshot.NextFilePath != value.Snapshot.NextFilePath;
+            frame = value;
+            if (nextChanged && scheduledTick is null && value.Snapshot.IsPlaying)
+                HandleTick();
+            return;
+        }
+
         CancelDelay();
-        source = activeSource;
-        currentPath = snapshot?.FilePath;
+        frame = value;
         finalPending = false;
+
+        var snapshot = value?.Snapshot;
 
         if (snapshot is null || !snapshot.IsPlaying)
         {
@@ -136,7 +140,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
             return;
         }
 
-        var remainingMs = durationMs - (long)snapshot.Position.TotalMilliseconds;
+        var remainingMs = RemainingMs(snapshot);
         var untilLead = remainingMs - timing.LeadMs;
         if (untilLead > 0)
         {
@@ -156,29 +160,38 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
 
     private void HandleTick()
     {
-        var snapshot = source?.Current;
+        var current = frame;
+        var snapshot = current?.Snapshot;
         var next = snapshot?.NextFilePath;
         Plugin.Log.Debug($"prefetch tick fired: next={(next is null ? "(null)" : Path.GetFileName(next))}");
-        if (source is { } activeSource
+        if (current is { } active
             && snapshot is { IsPlaying: true }
             && next is not null)
         {
             Plugin.Log.Debug($"start-prefetch next: {Path.GetFileName(next)}");
             _ = ReportPreparation(
-                prep.PreparePrefetch(next), activeSource, snapshot.FilePath, next);
+                prep.PreparePrefetch(next), active.Cursor, snapshot.FilePath, next);
         }
 
         if (!finalPending && snapshot is { IsPlaying: true, Meta.DurationMs: > 0 } live)
         {
             finalPending = true;
-            var remainingMs = live.Meta.DurationMs - (long)live.Position.TotalMilliseconds;
+            var remainingMs = RemainingMs(live);
             ScheduleFinal(remainingMs);
         }
     }
 
+    private static long RemainingMs(SourceSnapshot snapshot)
+    {
+        var elapsed = snapshot.IsPlaying ? DateTimeOffset.UtcNow - snapshot.AsOf : TimeSpan.Zero;
+        return snapshot.Meta.DurationMs
+               - (long)snapshot.Position.TotalMilliseconds
+               - (long)Math.Max(0, elapsed.TotalMilliseconds);
+    }
+
     private async Task ReportPreparation(
         Task<PrepResult> task,
-        IMusicSource prepSource,
+        SourceCursor prepCursor,
         string prepCurrent,
         string prepNext)
     {
@@ -193,25 +206,24 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         }
 
         mailbox.TryPost(new PreparationCompleted(
-            prepSource, prepCurrent, prepNext, result));
+            prepCursor, prepCurrent, prepNext, result));
     }
 
     private void HandlePreparationCompleted(
-        IMusicSource prepSource,
+        SourceCursor prepCursor,
         string prepCurrent,
         string prepNext,
         PrepResult result)
     {
-        var live = prepSource.Current;
-        if (!ReferenceEquals(source, prepSource)
-            || currentPath != prepCurrent
-            || live?.FilePath != prepCurrent
-            || live.NextFilePath != prepNext
+        var live = frame;
+        if (!ReferenceEquals(live?.Cursor, prepCursor)
+            || live.Snapshot.FilePath != prepCurrent
+            || live.Snapshot.NextFilePath != prepNext
             || result is not PrepResult.Successful success
             || !File.Exists(success.PreparedFilePath))
             return;
 
-        onPrepared(prepSource, prepCurrent, prepNext, success);
+        onPrepared(prepCursor, prepCurrent, prepNext, success);
     }
 
     private void ScheduleFinal(long remainingMs)
@@ -222,7 +234,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         CancelDelay();
         var schedule = new ScheduledTick();
         scheduledTick = schedule;
-        schedule.Task = PostTickAfterDelay(
+        _ = PostTickAfterDelay(
             TimeSpan.FromMilliseconds(Math.Clamp(delayMs, 0, int.MaxValue)),
             schedule);
     }
@@ -241,8 +253,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     private void Clear()
     {
         CancelDelay();
-        source = null;
-        currentPath = null;
+        frame = null;
         finalPending = false;
     }
 
@@ -252,8 +263,6 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         {
             scheduledTick = null;
             schedule.Cts.Cancel();
-            if (!schedule.Task.IsCompleted) retiredDelayTasks.Add(schedule.Task);
-            retiredDelayTasks.RemoveAll(static task => task.IsCompleted);
             schedule.Cts.Dispose();
         }
     }

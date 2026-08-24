@@ -37,8 +37,7 @@ internal sealed class EngineSession : IAsyncDisposable
     private sealed record SnapshotRequested(
         TaskCompletionSource<EngineSnapshot> Done) : Message;
     private sealed record Reconnected : Message;
-    private sealed record Changed(EngineSnapshot Snapshot) : Message;
-    private sealed record Ended(PlaybackEnded Value) : Message;
+    private sealed record Updated(EngineSnapshot Value) : Message;
     private sealed record PollTick(long Generation) : Message;
     private sealed record PollCompleted(
         long Generation, EngineSnapshot? Snapshot, Exception? Error) : Message;
@@ -62,6 +61,7 @@ internal sealed class EngineSession : IAsyncDisposable
     private long nextPlaybackId;
     private long activePlaybackId;
     private long activeRevision;
+    private long activeSequence;
 
     private long pollGeneration;
     private CancellationTokenSource? pollDelayCts;
@@ -74,7 +74,8 @@ internal sealed class EngineSession : IAsyncDisposable
             pollPlaying: TimeSpan.FromMilliseconds(250),
             pollIdle: TimeSpan.FromMilliseconds(500),
             errorBackoff: TimeSpan.FromSeconds(1),
-            disposeTimeout: TimeSpan.FromSeconds(2)) { }
+            disposeTimeout: TimeSpan.FromSeconds(2))
+    { }
 
     internal EngineSession(
         IRemoteEngine engine,
@@ -92,8 +93,7 @@ internal sealed class EngineSession : IAsyncDisposable
         this.disposeTimeout = disposeTimeout;
         mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError, OnCompleted);
         disposeTask = new Lazy<Task>(FinishDispose, LazyThreadSafetyMode.ExecutionAndPublication);
-        engine.OnChanged += OnEngineChanged;
-        engine.OnPlaybackEnded += OnEngineEnded;
+        engine.OnUpdated += OnEngineUpdated;
         SchedulePoll(pollIdle);
     }
 
@@ -153,7 +153,7 @@ internal sealed class EngineSession : IAsyncDisposable
                 try
                 {
                     var snapshot = await engine.GetStateAsync(lifetimeCts.Token);
-                    ApplySnapshot(snapshot, discrete: false);
+                    ApplyUpdate(snapshot, discrete: false);
                     done.TrySetResult(confirmed);
                 }
                 catch (Exception e)
@@ -166,6 +166,7 @@ internal sealed class EngineSession : IAsyncDisposable
                 commanded = null;
                 activePlaybackId = 0;
                 activeRevision = 0;
+                activeSequence = 0;
                 confirmed = new EngineSnapshot(
                     PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow);
                 ReschedulePoll(TimeSpan.Zero);
@@ -173,11 +174,8 @@ internal sealed class EngineSession : IAsyncDisposable
                 if (latestVolume >= 0)
                     await engine.SetVolumeAsync(latestVolume, lifetimeCts.Token);
                 break;
-            case Changed(var snapshot):
-                ApplySnapshot(snapshot, discrete: true);
-                break;
-            case Ended(var ended):
-                ApplyEnded(ended);
+            case Updated(var update):
+                ApplyUpdate(update, discrete: true);
                 break;
             case PollTick(var generation):
                 HandlePollTick(generation);
@@ -210,6 +208,7 @@ internal sealed class EngineSession : IAsyncDisposable
             var playbackId = Interlocked.Increment(ref nextPlaybackId);
             activePlaybackId = playbackId;
             activeRevision = target.Revision;
+            activeSequence = 0;
             try
             {
                 await engine.LoadFileAsync(
@@ -246,58 +245,67 @@ internal sealed class EngineSession : IAsyncDisposable
     private void HandleDispatchFailure(EngineTarget target, long playbackId, Exception error)
     {
         if (activePlaybackId != playbackId) return;
-        activePlaybackId = 0;
-        activeRevision = 0;
-        commanded = null;
-        confirmed = new EngineSnapshot(
-            PlaybackState.Stopped, null, error.Message, null,
-            DateTimeOffset.UtcNow, playbackId);
         var reason = error is ConnectionLostException
             ? EndReason.Disconnected
             : EndReason.Failed;
+        activePlaybackId = 0;
+        activeRevision = 0;
+        activeSequence = 0;
+        commanded = null;
+        confirmed = new EngineSnapshot(
+            PlaybackState.Stopped, null, error.Message, null,
+            DateTimeOffset.UtcNow, playbackId, TerminalReason: reason);
         if (reason == EndReason.Disconnected) available = false;
         Plugin.Log.Error(error, "Engine load dispatch failed for {path}", target.Path);
         OnPlaybackEnded?.Invoke(new EngineSessionEnded(target.Revision, reason));
     }
 
-    private void ApplySnapshot(EngineSnapshot snapshot, bool discrete)
+    private void ApplyUpdate(EngineSnapshot update, bool discrete)
     {
-        if (snapshot.PlaybackId != activePlaybackId) return;
-        if (snapshot.State != PlaybackState.Stopped
+        if (update.PlaybackId != activePlaybackId) return;
+        if (update.TerminalReason is not null && update.State != PlaybackState.Stopped)
+        {
+            Plugin.Log.Warning(
+                "Engine emitted a non-stopped terminal update for playback {playbackId}",
+                update.PlaybackId);
+            return;
+        }
+        if (update.Sequence <= activeSequence) return;
+        if (update.State != PlaybackState.Stopped
             && commanded is not null
-            && !string.Equals(snapshot.Path, commanded.Path, StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(update.Path, commanded.Path, StringComparison.OrdinalIgnoreCase))
             return;
 
         var revision = activeRevision;
-        confirmed = snapshot;
-        if (commanded is not null
-            && snapshot.State != PlaybackState.Stopped
-            && string.Equals(snapshot.Path, commanded.Path, StringComparison.OrdinalIgnoreCase))
-        {
-            // Confirmations, including polls after a failed device operation, are authoritative.
-            commanded = commanded with { State = snapshot.State };
-        }
-        if (snapshot.State == PlaybackState.Stopped)
+        activeSequence = update.Sequence;
+        confirmed = update;
+
+        if (update.TerminalReason is { } terminalReason)
         {
             activePlaybackId = 0;
             activeRevision = 0;
+            activeSequence = 0;
+            commanded = null;
+            if (terminalReason == EndReason.Disconnected) available = false;
+            OnPlaybackEnded?.Invoke(new EngineSessionEnded(revision, terminalReason));
+            return;
+        }
+
+        if (commanded is not null
+            && update.State != PlaybackState.Stopped
+            && string.Equals(update.Path, commanded.Path, StringComparison.OrdinalIgnoreCase))
+        {
+            // Polls can correct the state after a failed device operation.
+            commanded = commanded with { State = update.State };
+        }
+        if (update.State == PlaybackState.Stopped && desired is null)
+        {
+            activePlaybackId = 0;
+            activeRevision = 0;
+            activeSequence = 0;
             commanded = null;
         }
-        OnObserved?.Invoke(new EngineObservation(revision, snapshot, discrete));
-    }
-
-    private void ApplyEnded(PlaybackEnded ended)
-    {
-        if (ended.PlaybackId != activePlaybackId) return;
-        var revision = activeRevision;
-        activePlaybackId = 0;
-        activeRevision = 0;
-        commanded = null;
-        confirmed = new EngineSnapshot(
-            PlaybackState.Stopped, null, confirmed.LastError, null,
-            DateTimeOffset.UtcNow, ended.PlaybackId);
-        if (ended.Reason == EndReason.Disconnected) available = false;
-        OnPlaybackEnded?.Invoke(new EngineSessionEnded(revision, ended.Reason));
+        OnObserved?.Invoke(new EngineObservation(revision, update, discrete));
     }
 
     private void HandlePollTick(long generation)
@@ -345,7 +353,7 @@ internal sealed class EngineSession : IAsyncDisposable
             SchedulePoll(error is ConnectionLostException ? lostBackoff : errorBackoff);
             return;
         }
-        if (snapshot is not null) ApplySnapshot(snapshot, discrete: false);
+        if (snapshot is not null) ApplyUpdate(snapshot, discrete: false);
         SchedulePoll(confirmed.State == PlaybackState.Playing ? pollPlaying : pollIdle);
     }
 
@@ -376,11 +384,8 @@ internal sealed class EngineSession : IAsyncDisposable
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
 
-    private void OnEngineChanged(object? _, EngineSnapshot snapshot)
-        => mailbox.TryPost(new Changed(snapshot));
-
-    private void OnEngineEnded(object? _, PlaybackEnded ended)
-        => mailbox.TryPost(new Ended(ended));
+    private void OnEngineUpdated(object? _, EngineSnapshot update)
+        => mailbox.TryPost(new Updated(update));
 
     private void OnMessageError(Exception error, Message message)
     {
@@ -406,8 +411,7 @@ internal sealed class EngineSession : IAsyncDisposable
 
     private async Task FinishDispose()
     {
-        engine.OnChanged -= OnEngineChanged;
-        engine.OnPlaybackEnded -= OnEngineEnded;
+        engine.OnUpdated -= OnEngineUpdated;
         lifetimeCts.Cancel();
         var drain = mailbox.DisposeAsync().AsTask();
         try

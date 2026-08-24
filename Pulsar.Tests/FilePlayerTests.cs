@@ -154,30 +154,33 @@ public class FilePlayerTests : IDisposable
     }
 
     [Fact]
-    public async Task Natural_end_fires_playback_ended_but_not_changed()
+    public async Task Natural_end_is_one_atomic_terminal_update()
     {
-        // "Stop" vs "track ended" is load-bearing: local playback auto-advances on
-        // OnPlaybackEnded, so an explicit stop must not look like a track ending.
         var wav = CreateWav();
         var device = new FakeWavePlayer();
         var player = new FilePlayer(() => device);
-        var changed = 0;
-        var ended = new TaskCompletionSource<Pulsar.Common.Api.PlaybackEnded>(
+        var updates = 0;
+        var ended = new TaskCompletionSource<Pulsar.Common.Api.EngineSnapshot>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        player.OnChanged += (_, _) => Interlocked.Increment(ref changed);
-        player.OnPlaybackEnded += (_, e) => ended.TrySetResult(e);
+        player.OnUpdated += (_, update) =>
+        {
+            Interlocked.Increment(ref updates);
+            if (update.TerminalReason is not null) ended.TrySetResult(update);
+        };
 
         player.Load(wav, TimeSpan.Zero, playing: true, playbackId: 42);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "load reaches playing");
-        var changesBeforeEnd = changed;
+        await TestWait.Assert(() => Volatile.Read(ref updates) == 1, "load update fires");
+        var updatesBeforeEnd = updates;
 
         device.SimulateNaturalEnd();
 
-        var endedEvent = await TestWait.Within(ended.Task, "playback-ended event");
+        var endedEvent = await TestWait.Within(ended.Task, "terminal update");
         Assert.Equal(42, endedEvent.PlaybackId);
-        Assert.Equal(Pulsar.Common.Api.EndReason.Finished, endedEvent.Reason);
-        await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Stopped, "natural end stops the player");
-        Assert.Equal(changesBeforeEnd, changed); // natural end is not a user action
+        Assert.Equal(Pulsar.Common.Api.EndReason.Finished, endedEvent.TerminalReason);
+        Assert.Equal(PlaybackState.Stopped, endedEvent.State);
+        Assert.Equal(endedEvent, player.Snapshot);
+        Assert.Equal(updatesBeforeEnd + 1, updates);
 
         await player.DisposeAsync();
     }
@@ -188,7 +191,10 @@ public class FilePlayerTests : IDisposable
         var player = new FilePlayer(() => new FakeWavePlayer());
         var ended = new TaskCompletionSource<Pulsar.Common.Api.EndReason>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        player.OnPlaybackEnded += (_, e) => ended.TrySetResult(e.Reason);
+        player.OnUpdated += (_, update) =>
+        {
+            if (update.TerminalReason is { } reason) ended.TrySetResult(reason);
+        };
 
         player.Load(Path.Combine(dir.FullName, "missing.wav"), TimeSpan.Zero, playing: true);
 
@@ -277,7 +283,7 @@ public class FilePlayerTests : IDisposable
         var device = new FakeWavePlayer();
         var player = new FilePlayer(() => device);
         EndReason? ended = null;
-        player.OnPlaybackEnded += (_, e) => ended = e.Reason;
+        player.OnUpdated += (_, update) => ended = update.TerminalReason ?? ended;
 
         player.Load(wav, TimeSpan.Zero, playing: true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "playing");
@@ -350,10 +356,11 @@ public class FilePlayerTests : IDisposable
         var wav = CreateWav();
         var player = new FilePlayer(() => new FakeWavePlayer());
         var events = 0;
-        player.OnChanged += (_, _) => Interlocked.Increment(ref events);
+        player.OnUpdated += (_, _) => Interlocked.Increment(ref events);
 
         player.Load(wav, TimeSpan.Zero, playing: true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "playing");
+        await TestWait.Assert(() => Volatile.Read(ref events) == 1, "load update fires");
         var seen = events;
 
         player.Resume(); // already playing: no-op
@@ -362,6 +369,8 @@ public class FilePlayerTests : IDisposable
 
         player.Stop();
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Stopped, "stopped");
+        await TestWait.Assert(() => Volatile.Read(ref events) == seen + 1, "stop update fires");
+        Assert.Null(player.Snapshot.TerminalReason);
         seen = events;
 
         player.Pause(); // already stopped: no-op

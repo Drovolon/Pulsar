@@ -39,11 +39,19 @@ public class BroadcastFlowTests : IAsyncLifetime
         dir.Delete(recursive: true);
     }
 
-    private BroadcastManager Create(PrefetchTiming? prefetchTiming = null)
+    private BroadcastManager Create(
+        PrefetchTiming? prefetchTiming = null,
+        BroadcastRetryTiming? retryTiming = null,
+        long? cacheCapBytes = null,
+        TimeSpan? providerDisposeTimeout = null)
     {
-        prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service);
+        prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache"))
+        {
+            CacheCapBytes = cacheCapBytes ?? 1L << 26,
+        }, service);
         manager = new BroadcastManager(
-            new FakeRemoteEngine(), null!, prep, new Configuration(), prefetchTiming ?? new PrefetchTiming());
+            new FakeRemoteEngine(), null!, prep, new Configuration(),
+            prefetchTiming ?? new PrefetchTiming(), retryTiming, providerDisposeTimeout);
         outputPump = Task.Run(async () =>
         {
             await foreach (var output in manager.Outputs.ReadAllAsync())
@@ -51,9 +59,10 @@ public class BroadcastFlowTests : IAsyncLifetime
                 if (outputStall is { } stall) await stall;
                 switch (output)
                 {
-                    case BroadcastOutput.PlayerDataChanged(var data):
-                        outputProbe?.Invoke(data);
-                        lock (events) events.Add(data);
+                    case BroadcastOutput.PlayerDataChanged change:
+                        outputProbe?.Invoke(change.Data);
+                        lock (events) events.Add(change.Data);
+                        change.Dispose();
                         break;
                     case BroadcastOutput.BroadcastingChanged(var value):
                         lock (broadcastingEvents) broadcastingEvents.Add(value);
@@ -77,7 +86,7 @@ public class BroadcastFlowTests : IAsyncLifetime
     private async Task<FakeMusicSource> StartBroadcasting(BroadcastManager mgr, string track)
     {
         var source = new FakeMusicSource { Current = Snap(track) };
-        await mgr.SetSource(source);
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, source);
         await TestWait.Assert(() => Events.Any(e => e is not null), $"initial manifest for {track}");
         return source;
     }
@@ -219,11 +228,11 @@ public class BroadcastFlowTests : IAsyncLifetime
         await StartBroadcasting(mgr, CreateTrack("a.flac"));
         var seen = Events.Length;
 
-        await mgr.SetSource(null);
+        mgr.SetOnAir(false);
         await TestWait.Assert(() => Events.Length == seen + 1 && Events[^1] is null, "stop announced");
 
         // Stopping while already stopped must not send peers another null.
-        await mgr.SetSource(null);
+        mgr.SetOnAir(false);
         await Task.Delay(200);
         Assert.Equal(seen + 1, Events.Length);
     }
@@ -242,7 +251,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         var prepareStarted = false;
         try
         {
-            await mgr.SetSource(source);
+            await mgr.BroadcastFromForTests(BroadcastProvider.Local, source);
 
             var next = CreateTrack("b.flac");
             source.Current = Snap(next);
@@ -290,16 +299,52 @@ public class BroadcastFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Set_source_after_dispose_disposes_the_incoming_source()
+    public async Task Queued_publications_keep_their_artifacts_pinned_until_delivery()
+    {
+        service.ArtifactBytes = 600;
+        var mgr = Create(cacheCapBytes: 1000);
+        var releaseOutput = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        outputStall = releaseOutput.Task;
+        try
+        {
+            var first = CreateTrack("first.flac");
+            await mgr.BroadcastFromForTests(
+                BroadcastProvider.Local,
+                new FakeMusicSource { Current = Snap(first) });
+            await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == first, "first commits");
+            Assert.True(prep!.TryGet(first, out var firstResult));
+            var firstArtifact = Assert.IsType<PrepResult.Successful>(firstResult).PreparedFilePath;
+
+            var second = CreateTrack("second.flac");
+            await mgr.BroadcastFromForTests(
+                BroadcastProvider.Local,
+                new FakeMusicSource { Current = Snap(second) });
+            await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == second, "second commits");
+
+            var pressure = CreateTrack("pressure.flac");
+            Assert.IsType<PrepResult.Successful>(await prep.PreparePrefetch(pressure));
+            Assert.True(File.Exists(firstArtifact),
+                "the stalled first publication still owns its artifact");
+        }
+        finally
+        {
+            outputStall = null;
+            releaseOutput.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task Provider_replacement_after_dispose_disposes_the_incoming_source()
     {
         var mgr = Create();
-        await mgr.SetSource(new FakeMusicSource { Current = Snap(CreateTrack("a.flac")) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(CreateTrack("a.flac")) });
         await mgr.DisposeAsync();
 
         // A UI load that lost the race with plugin unload: installing it would leak
         // a live source with no owner left.
         var late = new FakeMusicSource { Current = Snap(CreateTrack("late.flac")) };
-        await mgr.SetSource(late);
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, late);
 
         Assert.True(late.Disposed, "the incoming source is torn down, not installed");
         Assert.Null(mgr.CurrentSnapshot);
@@ -312,7 +357,7 @@ public class BroadcastFlowTests : IAsyncLifetime
 
         var teardown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sourceA = new FakeMusicSource { Current = Snap(CreateTrack("a.flac")), DisposeGate = teardown };
-        await mgr.SetSource(sourceA);
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, sourceA);
         await TestWait.Assert(() => Events.Any(e => e is not null), "initial manifest");
         var seen = Events.Length;
 
@@ -324,13 +369,15 @@ public class BroadcastFlowTests : IAsyncLifetime
         // A delivery captured before the switch unsubscribed, still in flight mid-teardown.
         var lateEvent = sourceA.CapturedHandlers!;
 
-        var switching = mgr.SetSource(new FakeMusicSource { Current = Snap(trackB) });
+        var switching = mgr.BroadcastFromForTests(
+            BroadcastProvider.Local, new FakeMusicSource { Current = Snap(trackB) });
         try
         {
-            await TestWait.Assert(() => mgr.CurrentSnapshot is null && !switching.IsCompleted,
-                "the switch is parked in the old source's teardown");
-
-            lateEvent(sourceA.Current); // the in-flight delivery lands mid-teardown
+            await TestWait.Within(switching, "the replacement is installed");
+            await TestWait.Assert(
+                () => mgr.CurrentSnapshot?.FilePath == trackB,
+                "the prepared replacement commits");
+            lateEvent(null); // a delivery captured before unsubscribe lands after commit
         }
         finally
         {
@@ -345,32 +392,39 @@ public class BroadcastFlowTests : IAsyncLifetime
         Assert.All(Events.Skip(seen), e => Assert.NotNull(e)); // and no stop on the wire
     }
 
-    // Regression test: the transcode-gap HOLD bridged a source switch, so peers never
-    // saw the old broadcast stop.
     [Fact]
-    public async Task Switching_to_an_unprepared_source_announces_a_stop()
+    public async Task Switching_to_an_unprepared_source_holds_the_committed_broadcast()
     {
         var mgr = Create();
         var prepped = CreateTrack("a.mp3");
         Assert.IsType<PrepResult.Successful>(await prep!.PrepareActive(prepped));
 
-        await mgr.SetSource(new FakeMusicSource { Current = Snap(prepped) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(prepped) });
         await TestWait.Assert(() => Events is [not null, ..], "the prepped track's manifest");
 
-        await mgr.SetSource(new FakeMusicSource { Current = Snap(CreateTrack("b.mp3")) });
+        var next = CreateTrack("b.mp3");
+        var gate = service.GateFor(next);
+        var seen = Events.Length;
+        await mgr.BroadcastFromForTests(
+            BroadcastProvider.Local, new FakeMusicSource { Current = Snap(next) });
 
-        // The switch announces a stop immediately, then the new track once its
-        // (here: instant) prep lands.
+        Assert.True(await service.WaitForPrepare(next), "replacement preparation starts");
+        await Task.Delay(200);
+        Assert.Equal(seen, Events.Length);
+        Assert.Equal("a.mp3", Events[^1]!.Cursor.Meta!.OriginalFileName);
+
+        gate.Open();
         await TestWait.Assert(
-            () => Events is [_, null, not null, ..],
-            "the stop, then the new source's manifest");
+            () => Events[^1]?.Cursor.Meta?.OriginalFileName == "b.mp3",
+            "the prepared replacement commits without a stop");
+        Assert.All(Events, Assert.NotNull);
     }
 
     // Regression test: a switch between two already-prepped tracks reused the old cursor
     // epoch, and listeners short-circuit on equal epochs (SyncDecider). The ONLY test
     // protecting the epoch bump - the e2e loopback flow structurally masks epoch reuse.
     //
-    // The exact two-event count relies on both tracks being cache-served; if prep
+    // The two-event count relies on both tracks being cache-served; if prep
     // caching changes shape, loosen the count before touching the epoch assertion.
     [Fact]
     public async Task Switching_sources_bumps_the_cursor_epoch()
@@ -381,8 +435,8 @@ public class BroadcastFlowTests : IAsyncLifetime
         Assert.IsType<PrepResult.Successful>(await prep!.PrepareActive(trackA));
         Assert.IsType<PrepResult.Successful>(await prep.PrepareActive(trackB));
 
-        await mgr.SetSource(new FakeMusicSource { Current = Snap(trackA) });
-        await mgr.SetSource(new FakeMusicSource { Current = Snap(trackB) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(trackA) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(trackB) });
 
         // Wait for both async deliveries, then let the queue settle to prove no third follows.
         await TestWait.Assert(() => Events.Length >= 2, "both manifests delivered");
@@ -395,7 +449,40 @@ public class BroadcastFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Switching_sources_during_a_slow_prepare_stops_then_starts_clean()
+    public async Task Returning_to_the_same_local_provider_after_beefweb_is_a_new_activation()
+    {
+        var mgr = Create();
+        var localTrack = CreateTrack("local.flac");
+        var beefwebTrack = CreateTrack("beefweb.flac");
+        var local = new FakeMusicSource { Current = Snap(localTrack) };
+        var beefweb = new FakeMusicSource { Current = Snap(beefwebTrack) };
+
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, local);
+        await TestWait.Assert(() => Events.LastOrDefault()?.Cursor.Meta?.OriginalFileName == "local.flac",
+            "local activation commits");
+        var firstLocal = Events[^1]!;
+
+        await mgr.InstallProviderForTests(BroadcastProvider.Beefweb, beefweb);
+        mgr.SetProvider(BroadcastProvider.Beefweb);
+        await TestWait.Assert(() => Events.LastOrDefault()?.Cursor.Meta?.OriginalFileName == "beefweb.flac",
+            "beefweb activation commits");
+        var beefwebManifest = Events[^1]!;
+
+        mgr.SetProvider(BroadcastProvider.Local);
+        await TestWait.Assert(
+            () => Events.LastOrDefault() is { } latest
+                  && latest.Cursor.Meta?.OriginalFileName == "local.flac"
+                  && latest.Cursor.CursorEpoch != firstLocal.Cursor.CursorEpoch,
+            "the unchanged local cursor is activated again");
+
+        var secondLocal = Events[^1]!;
+        Assert.NotEqual(beefwebManifest.Cursor.CursorEpoch, secondLocal.Cursor.CursorEpoch);
+        Assert.Equal(firstLocal.CurrentPath, secondLocal.CurrentPath);
+        Assert.DoesNotContain(Events, static value => value is null);
+    }
+
+    [Fact]
+    public async Task Switching_sources_during_a_slow_prepare_keeps_the_old_source_live()
     {
         var mgr = Create();
         var sourceA = await StartBroadcasting(mgr, CreateTrack("a.flac"));
@@ -405,21 +492,246 @@ public class BroadcastFlowTests : IAsyncLifetime
         var gate = service.GateFor(slow);
         var sourceB = new FakeMusicSource { Current = Snap(slow) };
 
-        await mgr.SetSource(sourceB);
-        Assert.True(sourceA.Disposed, "old source is disposed on switch");
-        await TestWait.Assert(() => Events[^1] is null, "switch announces a stop while nothing is ready");
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, sourceB);
         var seen = Events.Length;
 
         // The new source reports its state; prep is still running.
         sourceB.RaiseChanged();
         Assert.True(await service.WaitForPrepare(slow), "prep started for the new source");
         await Task.Delay(300);
-        Assert.Equal(seen, Events.Length); // still stopped, no stale manifest
+        Assert.Equal(seen, Events.Length);
+        Assert.False(sourceA.Disposed, "the current provider stays alive during handoff");
 
         gate.Open();
 
         await TestWait.Assert(
             () => Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "slow.flac",
             "the new source's manifest goes out once prepared");
+        await TestWait.Assert(() => sourceA.Disposed, "the old provider retires after commit");
+        Assert.All(Events, Assert.NotNull);
+    }
+
+    [Fact]
+    public async Task Live_provider_advance_preempts_a_pending_handoff_then_handoff_resumes()
+    {
+        var mgr = Create();
+        var first = CreateTrack("first.flac");
+        var sourceA = await StartBroadcasting(mgr, first);
+
+        var replacementTrack = CreateTrack("replacement.flac");
+        var replacementGate = service.GateFor(replacementTrack);
+        var sourceB = new FakeMusicSource { Current = Snap(replacementTrack) };
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, sourceB);
+        Assert.True(await service.WaitForPrepare(replacementTrack), "handoff preparation starts");
+
+        Assert.Equal(first, mgr.CurrentSnapshot?.FilePath);
+        Assert.Equal("first.flac", mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName);
+
+        var advanced = CreateTrack("advanced.flac");
+        sourceA.Current = Snap(advanced);
+        sourceA.RaiseChanged();
+
+        await TestWait.Assert(
+            () => mgr.CurrentSnapshot?.FilePath == advanced
+                  && mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "advanced.flac",
+            "the current provider remains live while handoff is pending");
+        Assert.False(sourceA.Disposed);
+
+        replacementGate.Open();
+        await TestWait.Assert(
+            () => mgr.CurrentSnapshot?.FilePath == replacementTrack
+                  && mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "replacement.flac",
+            "the desired-provider handoff resumes after the live update commits");
+        await TestWait.Assert(() => sourceA.Disposed, "the old provider retires after handoff");
+        Assert.All(Events, Assert.NotNull);
+    }
+
+    [Fact]
+    public async Task A_fresh_same_path_observation_retries_a_failed_handoff()
+    {
+        var mgr = Create();
+        await StartBroadcasting(mgr, CreateTrack("live.flac"));
+        var candidatePath = CreateTrack("candidate.flac");
+        service.GateFor(candidatePath).Fail(new IOException("temporary failure"));
+        var candidateSource = new FakeMusicSource { Current = Snap(candidatePath) };
+
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, candidateSource);
+        await TestWait.Assert(() => mgr.BroadcastStatus.Phase == BroadcastPhase.Retrying,
+            "failure is surfaced");
+        Assert.Equal("live.flac", mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName);
+
+        service.Regate(candidatePath).Open();
+        candidateSource.RaiseChanged();
+
+        await TestWait.Assert(
+            () => mgr.CurrentSnapshot?.FilePath == candidatePath
+                  && mgr.BroadcastStatus.Phase == BroadcastPhase.Live,
+            "a new observation revision retries the same path");
+        Assert.True(service.PrepareCalls.Count(path => path == candidatePath) >= 2);
+    }
+
+    [Fact]
+    public async Task Failed_handoff_has_a_bounded_retry_budget_and_explicit_restart()
+    {
+        var mgr = Create(retryTiming: new BroadcastRetryTiming
+        {
+            Delays = [TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20),
+                      TimeSpan.FromMilliseconds(30)],
+        });
+        await StartBroadcasting(mgr, CreateTrack("live.flac"));
+        var broken = CreateTrack("broken.flac");
+        service.GateFor(broken).Fail(new IOException("still broken"));
+
+        await mgr.BroadcastFromForTests(
+            BroadcastProvider.Local,
+            new FakeMusicSource { Current = Snap(broken) });
+        await TestWait.Assert(
+            () => service.PrepareCalls.Count(path => path == broken) == 4,
+            "initial attempt plus the 1/2/5 retry budget");
+        await Task.Delay(100);
+        Assert.Equal(4, service.PrepareCalls.Count(path => path == broken));
+        Assert.Equal(BroadcastPhase.Failed, mgr.BroadcastStatus.Phase);
+        Assert.Equal("live.flac", mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName);
+
+        service.Regate(broken).Open();
+        mgr.RetryHandoff();
+        await TestWait.Assert(
+            () => mgr.CurrentSnapshot?.FilePath == broken
+                  && mgr.BroadcastStatus.Phase == BroadcastPhase.Live,
+            "explicit retry creates a fresh bounded retry session");
+    }
+
+    [Fact]
+    public async Task Cursor_change_retargets_the_running_retry_without_resetting_its_budget()
+    {
+        var mgr = Create(retryTiming: new BroadcastRetryTiming
+        {
+            Delays = [TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1)],
+        });
+        await StartBroadcasting(mgr, CreateTrack("live.flac"));
+        var candidatePath = CreateTrack("candidate.flac");
+        service.GateFor(candidatePath).Fail(new IOException("first attempt"));
+        var candidate = new FakeMusicSource { Current = Snap(candidatePath) };
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, candidate);
+        await TestWait.Assert(
+            () => service.PrepareCalls.Count(path => path == candidatePath) >= 1,
+            "first attempt fails");
+
+        var retryGate = service.Regate(candidatePath);
+        await TestWait.Assert(
+            () => service.PrepareCalls.Count(path => path == candidatePath) >= 2,
+            "bounded retry is running");
+        candidate.Current = Snap(candidatePath, playing: false);
+        candidate.RaiseChanged();
+        retryGate.Open();
+
+        await TestWait.Assert(
+            () => mgr.CurrentSnapshot is { FilePath: var path, IsPlaying: false }
+                  && path == candidatePath,
+            "the retry result commits the latest cursor");
+        Assert.Equal(2, service.PrepareCalls.Count(path => path == candidatePath));
+    }
+
+    [Fact]
+    public async Task Missing_input_exhausts_instead_of_retrying_forever()
+    {
+        var mgr = Create(retryTiming: new BroadcastRetryTiming
+        {
+            Delays = [TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20),
+                      TimeSpan.FromMilliseconds(30)],
+        });
+        await StartBroadcasting(mgr, CreateTrack("live.flac"));
+        var missing = Path.Combine(dir.FullName, "missing.flac");
+
+        await mgr.BroadcastFromForTests(
+            BroadcastProvider.Local,
+            new FakeMusicSource { Current = Snap(missing) });
+        await TestWait.Assert(() => mgr.BroadcastStatus.Phase == BroadcastPhase.Failed,
+            "retry budget exhausts");
+        await Task.Delay(100);
+
+        Assert.Equal(BroadcastPhase.Failed, mgr.BroadcastStatus.Phase);
+        Assert.DoesNotContain(missing, service.PrepareCalls);
+        Assert.Equal("live.flac", mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName);
+    }
+
+    [Fact]
+    public async Task Failed_live_refresh_does_not_abandon_the_pending_handoff()
+    {
+        var mgr = Create(retryTiming: new BroadcastRetryTiming
+        {
+            Delays = [TimeSpan.FromMilliseconds(10)],
+        });
+        var live = await StartBroadcasting(mgr, CreateTrack("live.flac"));
+        var desiredPath = CreateTrack("desired.flac");
+        var desiredGate = service.GateFor(desiredPath);
+        await mgr.InstallProviderForTests(
+            BroadcastProvider.Beefweb,
+            new FakeMusicSource { Current = Snap(desiredPath) });
+        mgr.SetProvider(BroadcastProvider.Beefweb);
+        Assert.True(await service.WaitForPrepare(desiredPath), "handoff prep starts");
+
+        var brokenLive = CreateTrack("broken-live.flac");
+        service.GateFor(brokenLive).Fail(new IOException("live refresh failed"));
+        live.Current = Snap(brokenLive);
+        live.RaiseChanged();
+        await TestWait.Assert(() => mgr.CurrentPlayerData() is null, "stale live assertion stops");
+
+        desiredGate.Open();
+        await TestWait.Assert(
+            () => mgr.CurrentSnapshot?.FilePath == desiredPath,
+            "desired handoff resumes without another provider event");
+    }
+
+    [Fact]
+    public async Task Disposal_awaits_providers_retired_by_a_handoff()
+    {
+        var mgr = Create();
+        var retirementGate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var old = new FakeMusicSource
+        {
+            Current = Snap(CreateTrack("old.flac")),
+            DisposeGate = retirementGate,
+        };
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, old);
+        await TestWait.Assert(() => mgr.CurrentPlayerData() is not null, "old provider commits");
+
+        var replacement = CreateTrack("replacement.flac");
+        await mgr.BroadcastFromForTests(
+            BroadcastProvider.Local,
+            new FakeMusicSource { Current = Snap(replacement) });
+        await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == replacement, "replacement commits");
+
+        var disposing = mgr.DisposeAsync().AsTask();
+        await Task.Delay(100);
+        Assert.False(disposing.IsCompleted, "shutdown drains retired provider disposal");
+
+        retirementGate.TrySetResult();
+        await TestWait.Within(disposing, "manager disposal");
+        Assert.True(old.Disposed);
+    }
+
+    [Fact]
+    public async Task Hung_provider_retirement_does_not_block_manager_shutdown_forever()
+    {
+        var mgr = Create(providerDisposeTimeout: TimeSpan.FromMilliseconds(50));
+        var retirementGate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var old = new FakeMusicSource
+        {
+            Current = Snap(CreateTrack("old.flac")),
+            DisposeGate = retirementGate,
+        };
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, old);
+        await mgr.BroadcastFromForTests(
+            BroadcastProvider.Local,
+            new FakeMusicSource { Current = Snap(CreateTrack("replacement.flac")) });
+
+        await TestWait.Within(mgr.DisposeAsync().AsTask(), "bounded provider retirement");
+        Assert.False(old.Disposed);
+
+        retirementGate.TrySetResult();
+        await TestWait.Assert(() => old.Disposed, "late physical disposal is still observed");
     }
 }

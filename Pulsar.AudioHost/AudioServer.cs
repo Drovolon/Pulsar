@@ -15,15 +15,13 @@ namespace Pulsar.AudioHost;
 public class AudioServer : IRemoteEngine, IAsyncDisposable
 {
     private readonly FilePlayer filePlayer = new();
-    
+
     public AudioServer()
     {
-        // Load-bearing lambdas: `+= OnChanged` captures the value of OnChanged in the ctor (null).
-        // Re-reading OnChanged on every invocation means later-set handlers are correctly invoked.
-        filePlayer.OnChanged += (_, snapshot) => OnChanged?.Invoke(this, snapshot);
-        filePlayer.OnPlaybackEnded += (_, reason) => OnPlaybackEnded?.Invoke(this, reason);
+        // Forward through a lambda so handlers added to AudioServer later are used.
+        filePlayer.OnUpdated += (_, snapshot) => OnUpdated?.Invoke(this, snapshot);
     }
-    
+
     public Task LoadAsync(
         string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
@@ -77,8 +75,7 @@ public class AudioServer : IRemoteEngine, IAsyncDisposable
         });
     }
 
-    public event EventHandler<PlaybackEnded>? OnPlaybackEnded;
-    public event EventHandler<EngineSnapshot>? OnChanged;
+    public event EventHandler<EngineSnapshot>? OnUpdated;
 
     public async ValueTask DisposeAsync()
     {

@@ -18,7 +18,6 @@ namespace Pulsar.Tests;
 /// server. Only syncable, actually-playing sources produce snapshots, and SnapshotChanged
 /// fires only for real cursor events.
 /// </summary>
-[Collection(ChatNotificationCollection.Name)]
 public class BeefwebWatcherTests : IAsyncLifetime
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-watcher-test-");
@@ -26,8 +25,7 @@ public class BeefwebWatcherTests : IAsyncLifetime
     private readonly ControllableFeed feed = new();
     private Watcher? watcher;
     private int changes;
-
-    public BeefwebWatcherTests() => TestBootstrap.Chat.Clear();
+    private int unsyncableNotices;
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -37,12 +35,12 @@ public class BeefwebWatcherTests : IAsyncLifetime
         dir.Delete(recursive: true);
     }
 
-    private Watcher Create(TimeSpan? giveUpDelay = null, Configuration? config = null, bool onAir = true)
+    private Watcher Create(TimeSpan? giveUpDelay = null)
     {
         // The watcher takes ownership of the client (disposes it); the server outlives it.
-        watcher = new Watcher(feed, server.CreateClient(), isWine: false,
-            config ?? new Configuration(), giveUpDelay, onAir);
+        watcher = new Watcher(feed, server.CreateClient(), isWine: false, giveUpDelay);
         watcher.OnSnapshotChanged += _ => Interlocked.Increment(ref changes);
+        watcher.OnUnsyncable += _ => Interlocked.Increment(ref unsyncableNotices);
         return watcher;
     }
 
@@ -74,41 +72,13 @@ public class BeefwebWatcherTests : IAsyncLifetime
         Assert.Equal(track, s.FilePath);
         Assert.True(s.IsPlaying);
         Assert.Equal(TimeSpan.FromSeconds(12), s.Position);
-        Assert.Equal("Song", s.Meta.Title);
-        Assert.Equal("Band", s.Meta.Artist);
+        Assert.Equal("Band - Song", s.Meta.DisplayName);
         Assert.Equal(240_000, s.Meta.DurationMs);
         Assert.Equal("song.flac", s.Meta.OriginalFileName);
 
         Assert.True(w.Status.Connected);
         Assert.Null(w.Status.Unsyncable);
         await AwaitWake(1, "the track change wakes the pipeline");
-    }
-
-    [Fact]
-    public async Task Off_air_observes_the_player_but_publishes_nothing_until_enabled()
-    {
-        var w = Create(onAir: false);
-        var track = CreateTrack("paused.flac");
-
-        feed.Push(Obs(track, state: PulsarState.Paused));
-
-        await TestWait.Assert(() => w.Observed is not null, "the local player is observed");
-        Assert.False(w.OnAir);
-        Assert.Null(w.Current);
-        Assert.Equal(0, Changes);
-
-        w.SetOnAir(true);
-
-        Assert.True(w.OnAir);
-        Assert.Equal(track, w.Current!.FilePath);
-        Assert.False(w.Current.IsPlaying);
-        Assert.Equal(1, Changes);
-
-        w.SetOnAir(false);
-
-        Assert.False(w.OnAir);
-        Assert.Null(w.Current);
-        Assert.Equal(2, Changes);
     }
 
     [Fact]
@@ -172,39 +142,21 @@ public class BeefwebWatcherTests : IAsyncLifetime
         Assert.Equal(UnsyncableReason.InternetRadio, w.Status.Unsyncable!.Reason);
         Assert.Equal("ChillFM", w.Status.Unsyncable.Track);
 
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "DJ warned in chat");
-        Assert.Contains("internet radio stream", TestBootstrap.Chat.Messages[0]);
+        await TestWait.Assert(() => Volatile.Read(ref unsyncableNotices) == 1,
+            "the unsyncable transition is reported");
 
         // The player re-reports the stream every second; the DJ must be nagged only once.
         feed.Push(Obs("https://radio.example/stream", positionSeconds: 6, title: "ChillFM"));
         var track = CreateTrack("song.flac");
         feed.Push(Obs(track)); // sentinel proves the repeat was processed
         await TestWait.Assert(() => w.Current is not null, "back to a syncable track");
-        Assert.Single(TestBootstrap.Chat.Messages);
+        Assert.Equal(1, Volatile.Read(ref unsyncableNotices));
         Assert.Null(w.Status.Unsyncable);
 
         // ...but a fresh transition into unsyncable territory warns again.
         feed.Push(Obs("https://radio.example/other", title: "JazzFM"));
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 2, "second warning");
-    }
-
-    [Fact]
-    public async Task Unsyncable_warning_observes_live_configuration()
-    {
-        var config = new Configuration { NotifyUnsyncableBroadcast = false };
-        var w = Create(config: config);
-        feed.Push(Obs("https://radio.example/stream", title: "ChillFM"));
-        await TestWait.Assert(() => w.Status.Unsyncable is not null, "unsyncable status");
-        Assert.Empty(TestBootstrap.Chat.Messages);
-
-        var track = CreateTrack("song.flac");
-        feed.Push(Obs(track));
-        await TestWait.Assert(() => w.Current is not null, "syncable transition resets the warning edge");
-
-        config.NotifyUnsyncableBroadcast = true;
-        feed.Push(Obs("https://radio.example/other", title: "JazzFM"));
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "enabled setting is observed without rebuilding the watcher");
+        await TestWait.Assert(() => Volatile.Read(ref unsyncableNotices) == 2,
+            "a later unsyncable transition is reported");
     }
 
     [Fact]
@@ -225,11 +177,30 @@ public class BeefwebWatcherTests : IAsyncLifetime
         var queued = CreateTrack("queued.flac");
         server.SetPlayQueue(queued);
 
-        feed.Push(Obs(current));
+        feed.Push(Obs(current, positionSeconds: 5.1));
 
         // "What plays next" resolves before the announce, so it can be transcoded ahead.
         await AwaitWake(1, "track change announced");
         Assert.Equal(queued, w.Current!.NextFilePath);
+    }
+
+    [Fact]
+    public async Task Play_queue_edit_refreshes_next_without_minting_a_playback_cursor()
+    {
+        var w = Create();
+        var current = CreateTrack("current.flac");
+        var first = CreateTrack("first.flac");
+        var second = CreateTrack("second.flac");
+        server.SetPlayQueue(first);
+        feed.Push(Obs(current));
+        await TestWait.Assert(() => w.Current?.NextFilePath == first, "initial queue head");
+        var cursor = w.Frame!.Cursor;
+
+        server.SetPlayQueue(second);
+        feed.Push(Obs(current, positionSeconds: 5.1));
+
+        await TestWait.Assert(() => w.Current?.NextFilePath == second, "edited queue head");
+        Assert.Same(cursor, w.Frame!.Cursor);
     }
 
     [Fact]
@@ -289,7 +260,6 @@ public class BeefwebWatcherTests : IAsyncLifetime
         feed.Push(Obs(track));
         await AwaitWake(1, "initial track change");
         var seen = Changes;
-
         // beefweb restarting (or a hiccup) must not stop the broadcast for everyone.
         feed.SetConnected(false);
         await Task.Delay(200);
@@ -307,7 +277,6 @@ public class BeefwebWatcherTests : IAsyncLifetime
         feed.Push(Obs(track));
         await AwaitWake(1, "initial track change");
         var seen = Changes;
-
         feed.SetConnected(false);
 
         // A player gone for good must release listeners, not freeze them on the last cursor.
@@ -327,6 +296,8 @@ public class BeefwebWatcherTests : IAsyncLifetime
         feed.Push(Obs(track));
         await AwaitWake(1, "initial track change");
         var seen = Changes;
+        var reconciles = 0;
+        w.OnChanged += () => Interlocked.Increment(ref reconciles);
 
         feed.SetConnected(false);
         await Task.Delay(50);
@@ -336,6 +307,7 @@ public class BeefwebWatcherTests : IAsyncLifetime
         Assert.NotNull(w.Current);
         Assert.True(w.Status.Connected);
         Assert.Equal(seen, Changes); // nobody was woken up for a non-event
+        Assert.Equal(1, Volatile.Read(ref reconciles));
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using NAudio.Wave;
 using Pulsar.Common.Api;
 using StreamJsonRpc;
 
@@ -14,11 +15,11 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
 {
     private readonly HostConnection<IRemoteEngine> connection;
 
-    // Last loaded playback ID (that hasn't been stopped/ended)
+    private readonly Lock updateLock = new();
     private long activePlaybackId;
+    private long activeSequence;
 
-    public event EventHandler<PlaybackEnded>? OnPlaybackEnded;
-    public event EventHandler<EngineSnapshot>? OnChanged;
+    public event EventHandler<EngineSnapshot>? OnUpdated;
 
     public event Action? OnReconnected;
 
@@ -35,19 +36,34 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
 
     private void WireProxy(IRemoteEngine fresh)
     {
-        fresh.OnChanged += (_, snapshot) => OnChanged?.Invoke(this, snapshot);
-        fresh.OnPlaybackEnded += (_, ended) =>
+        fresh.OnUpdated += (_, update) =>
         {
-            Interlocked.CompareExchange(ref activePlaybackId, 0, ended.PlaybackId);
-            OnPlaybackEnded?.Invoke(this, ended);
+            TrackUpdate(update);
+            OnUpdated?.Invoke(this, update);
         };
     }
 
     private void HandleDisconnected()
     {
-        var playbackId = Interlocked.Exchange(ref activePlaybackId, 0);
+        long playbackId;
+        long sequence;
+        lock (updateLock)
+        {
+            playbackId = activePlaybackId;
+            sequence = activeSequence + 1;
+            activePlaybackId = 0;
+            activeSequence = 0;
+        }
         if (playbackId == 0) return;
-        OnPlaybackEnded?.Invoke(this, new PlaybackEnded(playbackId, EndReason.Disconnected));
+        OnUpdated?.Invoke(this, new EngineSnapshot(
+            PlaybackState.Stopped,
+            null,
+            null,
+            null,
+            DateTimeOffset.UtcNow,
+            playbackId,
+            sequence,
+            EndReason.Disconnected));
     }
 
     private IRemoteEngine Live => connection.Proxy
@@ -56,14 +72,14 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
     public async Task LoadAsync(
         string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
-        Interlocked.Exchange(ref activePlaybackId, playbackId);
+        BeginPlayback(playbackId);
         try
         {
             await Live.LoadAsync(path, position, startPlaying, playbackId, ct);
         }
         catch
         {
-            Interlocked.CompareExchange(ref activePlaybackId, 0, playbackId);
+            RetirePlayback(playbackId);
             throw;
         }
     }
@@ -72,7 +88,7 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
         string displayPath, byte[] audioData, TimeSpan position,
         bool startPlaying, long playbackId, CancellationToken ct)
     {
-        Interlocked.Exchange(ref activePlaybackId, playbackId);
+        BeginPlayback(playbackId);
         try
         {
             await Live.LoadBytesAsync(
@@ -80,7 +96,7 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
         }
         catch
         {
-            Interlocked.CompareExchange(ref activePlaybackId, 0, playbackId);
+            RetirePlayback(playbackId);
             throw;
         }
     }
@@ -88,12 +104,52 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
     public async Task StopAsync(CancellationToken ct)
     {
         await Live.StopAsync(ct);
-        Interlocked.Exchange(ref activePlaybackId, 0);
+        lock (updateLock)
+        {
+            activePlaybackId = 0;
+            activeSequence = 0;
+        }
     }
 
     public Task PauseAsync(CancellationToken ct) => Live.PauseAsync(ct);
     public Task ResumeAsync(CancellationToken ct) => Live.ResumeAsync(ct);
     public Task SetVolumeAsync(float volume, CancellationToken ct) => Live.SetVolumeAsync(volume, ct);
     public Task SeekAsync(TimeSpan position, CancellationToken ct) => Live.SeekAsync(position, ct);
-    public Task<EngineSnapshot> GetStateAsync(CancellationToken ct) => Live.GetStateAsync(ct);
+    public async Task<EngineSnapshot> GetStateAsync(CancellationToken ct)
+    {
+        var update = await Live.GetStateAsync(ct);
+        TrackUpdate(update);
+        return update;
+    }
+
+    private void TrackUpdate(EngineSnapshot update)
+    {
+        lock (updateLock)
+        {
+            if (activePlaybackId != update.PlaybackId) return;
+            activeSequence = Math.Max(activeSequence, update.Sequence);
+            if (update.State != PlaybackState.Stopped) return;
+            activePlaybackId = 0;
+            activeSequence = 0;
+        }
+    }
+
+    private void BeginPlayback(long playbackId)
+    {
+        lock (updateLock)
+        {
+            activePlaybackId = playbackId;
+            activeSequence = 0;
+        }
+    }
+
+    private void RetirePlayback(long playbackId)
+    {
+        lock (updateLock)
+        {
+            if (activePlaybackId != playbackId) return;
+            activePlaybackId = 0;
+            activeSequence = 0;
+        }
+    }
 }

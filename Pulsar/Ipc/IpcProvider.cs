@@ -1,5 +1,6 @@
 using System;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using Pulsar.Api;
@@ -16,7 +17,7 @@ public sealed record PulsarCursor
     public long PositionMs { get; init; }
     public bool IsPlaying { get; init; }
     public long AsOfUnixMs { get; init; }
-    public int CursorEpoch { get; init; }
+    public long CursorEpoch { get; init; }
     public TrackMeta? Meta { get; init; }
 }
 
@@ -28,8 +29,9 @@ public sealed record PulsarCursor
 internal sealed class IpcProvider : IDisposable
 {
     private const ulong DebugLoopbackIdent = ulong.MaxValue;
-    private static readonly JsonSerializerOptions JsonOpts =
-        new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+        { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     // swapped out for fakes during unit tests
     internal sealed record Gates(
@@ -42,15 +44,15 @@ internal sealed class IpcProvider : IDisposable
         ICallGateProvider<ulong, string, string?, string, object?> SetPlayerData,
         ICallGateProvider<ulong, object?> ClearPlayerData)
     {
-        public static Gates From(IDalamudPluginInterface pi) => new(
-            pi.GetIpcProvider<object?>(PulsarIpcEndpoints.Ready),
-            pi.GetIpcProvider<object?>(PulsarIpcEndpoints.Disposing),
-            pi.GetIpcProvider<PulsarPlayerData?, object?>(PulsarIpcEndpoints.PlayerDataChanged),
-            pi.GetIpcProvider<bool>(PulsarIpcEndpoints.IsEnabled),
-            pi.GetIpcProvider<PulsarApiVersion>(PulsarIpcEndpoints.ApiVersion),
-            pi.GetIpcProvider<PulsarPlayerData?>(PulsarIpcEndpoints.GetPlayerData),
-            pi.GetIpcProvider<ulong, string, string?, string, object?>(PulsarIpcEndpoints.SetPlayerData),
-            pi.GetIpcProvider<ulong, object?>(PulsarIpcEndpoints.ClearPlayerData));
+        public static Gates From(IDalamudPluginInterface pi) =>
+            new(pi.GetIpcProvider<object?>(PulsarIpcEndpoints.Ready),
+                pi.GetIpcProvider<object?>(PulsarIpcEndpoints.Disposing),
+                pi.GetIpcProvider<PulsarPlayerData?, object?>(PulsarIpcEndpoints.PlayerDataChanged),
+                pi.GetIpcProvider<bool>(PulsarIpcEndpoints.IsEnabled),
+                pi.GetIpcProvider<PulsarApiVersion>(PulsarIpcEndpoints.ApiVersion),
+                pi.GetIpcProvider<PulsarPlayerData?>(PulsarIpcEndpoints.GetPlayerData),
+                pi.GetIpcProvider<ulong, string, string?, string, object?>(PulsarIpcEndpoints.SetPlayerData),
+                pi.GetIpcProvider<ulong, object?>(PulsarIpcEndpoints.ClearPlayerData));
     }
 
     public bool Enabled { get; private set; }
@@ -67,8 +69,8 @@ internal sealed class IpcProvider : IDisposable
     private readonly ICallGateProvider<ulong, string, string?, string, object?> setPlayerData;
     private readonly ICallGateProvider<ulong, object?> clearPlayerData;
 
-    public IpcProvider(IDalamudPluginInterface pi, ListeningManager listening, BroadcastManager broadcast)
-        : this(Gates.From(pi), listening, broadcast) { }
+    public IpcProvider(IDalamudPluginInterface pi, ListeningManager listening, BroadcastManager broadcast) : this(
+        Gates.From(pi), listening, broadcast) { }
 
     // for unit tests only
     internal IpcProvider(Gates gates, ListeningManager listening, BroadcastManager broadcast)
@@ -105,8 +107,7 @@ internal sealed class IpcProvider : IDisposable
         if (Enabled) ready.SendMessage();
     }
 
-    private void OnSetPlayerData(
-        ulong ident, string currentFile, string? prefetchFile, string payload)
+    private void OnSetPlayerData(ulong ident, string currentFile, string? prefetchFile, string payload)
     {
         try
         {
@@ -125,13 +126,11 @@ internal sealed class IpcProvider : IDisposable
 
             Plugin.Log.Debug($"SetPlayerData[{ident:x}] updating to {currentFile}");
 
-            listening.AddOrUpdatePair(ident, ResolveDisplayName(ident), new PairData(
-                FilePath: currentFile,
-                Position: TimeSpan.FromMilliseconds(cursor.PositionMs),
-                IsPlaying: cursor.IsPlaying,
-                ObservedAt: DateTimeOffset.FromUnixTimeMilliseconds(cursor.AsOfUnixMs),
-                CursorEpoch: cursor.CursorEpoch,
-                Meta: cursor.Meta));
+            listening.AddOrUpdatePair(ident, ResolveDisplayName(ident),
+                                      new PairData(currentFile, TimeSpan.FromMilliseconds(cursor.PositionMs),
+                                                   cursor.IsPlaying,
+                                                   DateTimeOffset.FromUnixTimeMilliseconds(cursor.AsOfUnixMs),
+                                                   cursor.CursorEpoch, cursor.Meta));
         }
         catch (Exception e)
         {
@@ -146,15 +145,18 @@ internal sealed class IpcProvider : IDisposable
         try
         {
             return Plugin.Framework.RunOnFrameworkThread(() =>
-            {
-                foreach (var obj in Plugin.ObjectTable)
-                {
-                    if ((ulong)obj.Address != ident) continue;
-                    var name = obj.Name.TextValue;
-                    return string.IsNullOrEmpty(name) ? null : name;
-                }
-                return null;
-            }).GetAwaiter().GetResult();
+                         {
+                             foreach (var obj in Plugin.ObjectTable)
+                             {
+                                 if ((ulong)obj.Address != ident) continue;
+                                 var name = obj.Name.TextValue;
+                                 return string.IsNullOrEmpty(name) ? null : name;
+                             }
+
+                             return null;
+                         })
+                         .GetAwaiter()
+                         .GetResult();
         }
         catch (Exception e)
         {
@@ -192,9 +194,10 @@ internal sealed class IpcProvider : IDisposable
         }
     }
 
-    internal void PublishPlayerData(BroadcastPlayerData? data)
+    internal async Task PublishPlayerDataAsync(BroadcastPlayerData? data)
     {
-        _ = Plugin.Framework.RunOnFrameworkThread(() =>
+        if (!Enabled) return;
+        await Plugin.Framework.RunOnFrameworkThread(() =>
         {
             try
             {
@@ -204,22 +207,23 @@ internal sealed class IpcProvider : IDisposable
                     playerDataChanged.SendMessage(null);
                     return;
                 }
+
                 playerDataChanged.SendMessage(ToApiPlayerData(data));
             }
-            catch (Exception e) { Plugin.Log.Error(e, "OnPlayerDataChanged send failed"); }
+            catch (Exception e)
+            {
+                Plugin.Log.Error(e, "OnPlayerDataChanged send failed");
+            }
         });
     }
 
     private static PulsarPlayerData ToApiPlayerData(BroadcastPlayerData data)
     {
-        var current = new PulsarSyncFile(
-            data.CurrentPath, data.CurrentBlake3Hash, data.CurrentSha1Hash);
+        var current = new PulsarSyncFile(data.CurrentPath, data.CurrentBlake3Hash, data.CurrentSha1Hash);
         var prefetch = string.IsNullOrEmpty(data.PrefetchPath)
-            ? null
-            : new PulsarSyncFile(
-                data.PrefetchPath, data.PrefetchBlake3Hash, data.PrefetchSha1Hash);
-        return new PulsarPlayerData(
-            current, prefetch, JsonSerializer.Serialize(data.Cursor, JsonOpts));
+                           ? null
+                           : new PulsarSyncFile(data.PrefetchPath, data.PrefetchBlake3Hash, data.PrefetchSha1Hash);
+        return new PulsarPlayerData(current, prefetch, JsonSerializer.Serialize(data.Cursor, JsonOpts));
     }
 
     /// <summary>
@@ -234,16 +238,16 @@ internal sealed class IpcProvider : IDisposable
             return;
         }
 
-        OnSetPlayerData(
-            DebugLoopbackIdent,
-            data.CurrentPath,
-            string.IsNullOrEmpty(data.PrefetchPath) ? null : data.PrefetchPath,
-            JsonSerializer.Serialize(data.Cursor, JsonOpts));
+        OnSetPlayerData(DebugLoopbackIdent, data.CurrentPath,
+                        string.IsNullOrEmpty(data.PrefetchPath) ? null : data.PrefetchPath,
+                        JsonSerializer.Serialize(data.Cursor, JsonOpts));
     }
 
     public void Dispose()
     {
         if (!Enabled) return;
+
+        Enabled = false;
 
         disposing.SendMessage();
 
@@ -252,7 +256,5 @@ internal sealed class IpcProvider : IDisposable
         getPlayerData.UnregisterFunc();
         setPlayerData.UnregisterAction();
         clearPlayerData.UnregisterAction();
-
-        Enabled = false;
     }
 }

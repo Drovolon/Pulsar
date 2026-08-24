@@ -44,9 +44,9 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
     }
 
     private static PairData Track(string path, bool playing = true, int epoch = 1,
-                                  string title = "Song")
+                                  string displayName = "Artist - Song")
         => new(path, TimeSpan.FromSeconds(60), playing, DateTimeOffset.UtcNow, epoch,
-               new TrackMeta { Artist = "Artist", Title = title });
+               new TrackMeta { DisplayName = displayName });
 
     [Fact]
     public void Notification_defaults_match_the_intended_noise_level()
@@ -132,11 +132,11 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
     {
         config.NotifyListeningTrackChanged = true;
         var listening = Create();
-        listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack, title: "First"));
+        listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack, displayName: "Artist - First"));
         await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "first track is applied");
         TestBootstrap.Chat.Clear();
 
-        listening.AddOrUpdatePair(1, "Alice", Track(NextTrack, epoch: 2, title: "Second"));
+        listening.AddOrUpdatePair(1, "Alice", Track(NextTrack, epoch: 2, displayName: "Artist - Second"));
 
         await TestWait.Assert(() => engine.Snapshot.Path == NextTrack, "next track is applied");
         await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
@@ -157,5 +157,31 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
             "loopback notification");
         Assert.Contains("Nearby Broadcast: Debug Loopback is playing Artist - Song",
             TestBootstrap.Chat.Messages[0]);
+    }
+
+    [Fact]
+    public async Task Catalog_display_name_is_used_when_structured_tags_are_absent()
+    {
+        config.NotifyNearbyBroadcaster = true;
+        var listening = Create();
+        var track = new PairData(
+            AliceTrack,
+            TimeSpan.Zero,
+            true,
+            DateTimeOffset.UtcNow,
+            1,
+            new TrackMeta
+            {
+                DisplayName = "DeathbyRomy - Vicious Bliss",
+                OriginalFileName = "2826_DeathbyRomy - Vicious Bliss_2842.scd",
+            });
+
+        listening.AddOrUpdatePair(ulong.MaxValue, "Debug Loopback", track);
+
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
+            "display name notification");
+        Assert.Contains("Debug Loopback is playing DeathbyRomy - Vicious Bliss",
+            TestBootstrap.Chat.Messages[0]);
+        Assert.DoesNotContain("2826_", TestBootstrap.Chat.Messages[0]);
     }
 }

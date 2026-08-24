@@ -70,10 +70,13 @@ public class ReconnectingEngineTests
     {
         await using var engine = new ReconnectingEngine(LiveSpec);
         var connections = 0;
-        var ended = new TaskCompletionSource<Pulsar.Common.Api.PlaybackEnded>(
+        var ended = new TaskCompletionSource<Pulsar.Common.Api.EngineSnapshot>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         engine.OnReconnected += () => Interlocked.Increment(ref connections);
-        engine.OnPlaybackEnded += (_, value) => ended.TrySetResult(value);
+        engine.OnUpdated += (_, value) =>
+        {
+            if (value.TerminalReason is not null) ended.TrySetResult(value);
+        };
         engine.Start();
         await TestWait.Assert(() => Volatile.Read(ref connections) == 1, "initial engine connection");
 
@@ -86,7 +89,8 @@ public class ReconnectingEngineTests
 
         var disconnected = await TestWait.Within(ended.Task, "disconnect event");
         Assert.Equal(42, disconnected.PlaybackId);
-        Assert.Equal(Pulsar.Common.Api.EndReason.Disconnected, disconnected.Reason);
+        Assert.Equal(Pulsar.Common.Api.EndReason.Disconnected, disconnected.TerminalReason);
+        Assert.Equal(NAudio.Wave.PlaybackState.Stopped, disconnected.State);
         await TestWait.Assert(() => Volatile.Read(ref connections) == 2, "engine reconnects");
     }
 }

@@ -34,15 +34,21 @@ public sealed class Watcher : IMusicSource
         TaskCompletionSource Completion) : Message;
     private sealed record ConnectionChanged(bool Connected) : Message;
     private sealed record GiveUpExpired : Message;
+    private sealed record NextRefreshDue(NextRefresh Refresh) : Message;
 
-    private sealed record PublishedState(SourceSnapshot? Current, BeefwebStatus Status);
+    private sealed class NextRefresh(SourceCursor cursor)
+    {
+        internal SourceCursor Cursor { get; } = cursor;
+        internal CancellationTokenSource Cancellation { get; } = new();
+    }
+
+    private sealed record PublishedState(SourceFrame? Frame, BeefwebStatus Status);
 
     private static readonly TimeSpan DefaultGiveUpDelay = TimeSpan.FromSeconds(10);
 
     private readonly IFeed feed;
     private readonly PlayerClient client;
     private readonly bool isWine;
-    private readonly Configuration config;
     private readonly TimeSpan giveUpDelay;
     private readonly Discriminator discriminator = new();
     private readonly CancellationTokenSource cts = new();
@@ -57,25 +63,23 @@ public sealed class Watcher : IMusicSource
     private bool everConnected;
     private bool gaveUp;
     private bool wasUnsyncable;
-    private volatile bool onAir;
 
     private string? nextLocalPath;
+    private NextRefresh? nextRefresh;
     private volatile PublishedState published = new(null, new BeefwebStatus(false, null));
 
     // giveUpDelay is for tests
-    public Watcher(IFeed feed, PlayerClient client, bool isWine, Configuration config,
-                   TimeSpan? giveUpDelay = null, bool onAir = true)
+    public Watcher(IFeed feed, PlayerClient client, bool isWine,
+                   TimeSpan? giveUpDelay = null)
     {
         this.feed = feed;
         this.client = client;
         this.isWine = isWine;
-        this.config = config;
         this.giveUpDelay = giveUpDelay ?? DefaultGiveUpDelay;
-        this.onAir = onAir;
         connected = feed.Connected;
         everConnected = connected;
         PublishState();
-        mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError);
+        mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError, OnCompleted);
         giveUpTimer = new Timer(
             _ => mailbox.TryPost(new GiveUpExpired()),
             null,
@@ -86,19 +90,25 @@ public sealed class Watcher : IMusicSource
         pump = PumpAsync();
     }
 
-    public static Watcher Create(int port, string? user, string? pass, bool useSse, Configuration config)
+    public static Watcher Create(
+        int port,
+        string? user,
+        string? pass,
+        BeefwebTransport transport)
     {
         var baseUri = new Uri($"http://localhost:{port}");
         var creds = string.IsNullOrEmpty(user) ? null : new ApiCredentials(user, pass ?? "");
         var client = new PlayerClient(baseUri, creds);
-        IFeed feed = useSse ? new SseFeed(client) : new PollingFeed(client);
-        return new Watcher(feed, client, Dalamud.Utility.Util.IsWine(), config, onAir: false);
+        IFeed feed = transport == BeefwebTransport.Sse
+            ? new SseFeed(client)
+            : new PollingFeed(client);
+        return new Watcher(feed, client, Dalamud.Utility.Util.IsWine());
     }
 
-    public void TogglePlay()   => commands.TryPost(PlayerCommand.TogglePlay);
+    public void TogglePlay() => commands.TryPost(PlayerCommand.TogglePlay);
     public void StopPlayback() => commands.TryPost(PlayerCommand.Stop);
-    public void Next()         => commands.TryPost(PlayerCommand.Next);
-    public void Previous()     => commands.TryPost(PlayerCommand.Previous);
+    public void Next() => commands.TryPost(PlayerCommand.Next);
+    public void Previous() => commands.TryPost(PlayerCommand.Previous);
 
     private ValueTask DispatchCommand(PlayerCommand command)
         => command switch
@@ -117,19 +127,11 @@ public sealed class Watcher : IMusicSource
     }
 
     public event Action<SourceSnapshot?>? OnSnapshotChanged;
+    public event Action? OnChanged;
+    public event Action<UnsyncableSource>? OnUnsyncable;
 
-    public SourceSnapshot? Current => onAir ? published.Current : null;
-
-    public SourceSnapshot? Observed => published.Current;
-
-    public bool OnAir => onAir;
-
-    internal void SetOnAir(bool value)
-    {
-        if (onAir == value) return;
-        onAir = value;
-        OnSnapshotChanged?.Invoke(Current);
-    }
+    public SourceSnapshot? Current => published.Frame?.Snapshot;
+    public SourceFrame? Frame => published.Frame;
 
     public BeefwebStatus Status => published.Status;
 
@@ -146,8 +148,7 @@ public sealed class Watcher : IMusicSource
             o.AsOf,
             new TrackMeta
             {
-                Title = o.Title,
-                Artist = o.Artist,
+                DisplayName = Label(o),
                 DurationMs = (long)o.Duration.TotalMilliseconds,
                 OriginalFileName = Path.GetFileName(v.LocalPath!),
             });
@@ -295,6 +296,9 @@ public sealed class Watcher : IMusicSource
             case GiveUpExpired:
                 HandleGiveUp();
                 break;
+            case NextRefreshDue(var refresh):
+                await HandleNextRefresh(refresh);
+                break;
         }
     }
 
@@ -320,22 +324,31 @@ public sealed class Watcher : IMusicSource
         if (unsyncable && !wasUnsyncable)
             warnUnsyncable = new UnsyncableSource(Label(observation), currentVerdict.Reason);
         wasUnsyncable = unsyncable;
-        
+
         // Prevent a prefetch resolution race by forcing prefetch resolution here, before we inform upstream
         // TODO: this is sort of a hack, figure out a better architecture
         // Technically, this only affects prefetch-on-load, not the prefetch-near-finish...
-        if (trackChanged) await ResolveNextAsync();
+        if (trackChanged)
+        {
+            CancelNextRefresh();
+            await ResolveNextAsync();
+        }
 
-        PublishState();
-        if (warnUnsyncable is { } n && onAir && config.NotifyUnsyncableBroadcast)
-            NotifyUnsyncable(n, isWine);
-        if (triggerEvent && onAir) OnSnapshotChanged?.Invoke(Current);
+        PublishState(triggerEvent);
+        if (!trackChanged && published.Frame is { } frame) ScheduleNextRefresh(frame.Cursor);
+        if (warnUnsyncable is { } n) OnUnsyncable?.Invoke(n);
+        if (triggerEvent)
+        {
+            OnSnapshotChanged?.Invoke(Current);
+            OnChanged?.Invoke();
+        }
     }
 
     private void OnConnectedChanged(bool value) => mailbox.TryPost(new ConnectionChanged(value));
 
     private void HandleConnectionChanged(bool value)
     {
+        var reconnected = value && !connected;
         connected = value;
         if (value)
         {
@@ -346,7 +359,9 @@ public sealed class Watcher : IMusicSource
         {
             giveUpTimer.Change(giveUpDelay, Timeout.InfiniteTimeSpan);
         }
-        PublishState();
+        PublishState(cursorChanged: false);
+        // Retry the current state after reconnect without treating it as a playback change.
+        if (reconnected) OnChanged?.Invoke();
     }
 
     private void HandleGiveUp()
@@ -354,11 +369,63 @@ public sealed class Watcher : IMusicSource
         if (connected) return;
         var fire = !gaveUp && currentObs is { State: not PulsarState.Stopped };
         gaveUp = true;
-        PublishState();
-        if (fire && onAir) OnSnapshotChanged?.Invoke(Current);
+        PublishState(cursorChanged: fire);
+        if (fire)
+        {
+            OnSnapshotChanged?.Invoke(Current);
+            OnChanged?.Invoke();
+        }
     }
 
-    private void PublishState()
+    private void ScheduleNextRefresh(SourceCursor cursor)
+    {
+        if (ReferenceEquals(nextRefresh?.Cursor, cursor)) return;
+        CancelNextRefresh();
+        var refresh = new NextRefresh(cursor);
+        nextRefresh = refresh;
+        _ = PostNextRefresh(refresh);
+    }
+
+    private async Task PostNextRefresh(NextRefresh refresh)
+    {
+        var token = refresh.Cancellation.Token;
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500), token);
+            mailbox.TryPost(new NextRefreshDue(refresh));
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+
+    private async Task HandleNextRefresh(NextRefresh refresh)
+    {
+        if (!ReferenceEquals(nextRefresh, refresh)) return;
+        nextRefresh = null;
+        refresh.Cancellation.Dispose();
+        if (!ReferenceEquals(published.Frame?.Cursor, refresh.Cursor)) return;
+        var previous = nextLocalPath;
+        await ResolveNextAsync();
+        if (!ReferenceEquals(published.Frame?.Cursor, refresh.Cursor)) return;
+        if (previous == nextLocalPath) return;
+        PublishState(cursorChanged: false);
+        OnChanged?.Invoke();
+    }
+
+    private void CancelNextRefresh()
+    {
+        if (nextRefresh is not { } refresh) return;
+        nextRefresh = null;
+        refresh.Cancellation.Cancel();
+        refresh.Cancellation.Dispose();
+    }
+
+    private ValueTask OnCompleted()
+    {
+        CancelNextRefresh();
+        return ValueTask.CompletedTask;
+    }
+
+    private void PublishState(bool cursorChanged = false)
     {
         var green = connected || (everConnected && !gaveUp);
         UnsyncableSource? unsyncable = null;
@@ -366,38 +433,21 @@ public sealed class Watcher : IMusicSource
             && !currentVerdict.Syncable)
             unsyncable = new UnsyncableSource(Label(observation), currentVerdict.Reason);
 
-        published = new PublishedState(
-            BuildSnapshot(),
-            new BeefwebStatus(green, unsyncable));
+        var snapshot = BuildSnapshot();
+        var frame = snapshot is null
+            ? null
+            : new SourceFrame(
+                cursorChanged || published.Frame is null
+                    ? new SourceCursor()
+                    : published.Frame.Cursor,
+                snapshot);
+        published = new PublishedState(frame, new BeefwebStatus(green, unsyncable));
     }
 
     private static string Label(Observation o)
         => !string.IsNullOrEmpty(o.Artist) && !string.IsNullOrEmpty(o.Title) ? $"{o.Artist} - {o.Title}"
          : !string.IsNullOrEmpty(o.Title) ? o.Title
          : o.RawPath is { } p ? Path.GetFileName(p) : "(unknown)";
-
-    private static void NotifyUnsyncable(UnsyncableSource u, bool isWine)
-    {
-        var reason = u.Reason switch
-        {
-            UnsyncableReason.InternetRadio => "is an internet radio stream",
-            UnsyncableReason.CdAudio => "is CD audio",
-            UnsyncableReason.Archive => "is inside an archive",
-            UnsyncableReason.NotLocalFile => "is not a local file",
-            UnsyncableReason.FileDoesNotExist => "had file existence check fail",
-            _ => "had an unknown error",
-        };
-
-        if (u.Reason == UnsyncableReason.FileDoesNotExist && isWine)
-        {
-            reason =
-                "had file existence check failed on Linux - recommend enabling 'Hack: Force locale to C.utf8' in XIVLauncher settings if this file contains non-Latin characters";
-        }
-        
-        ChatNotifier.Warning(
-            "Can't broadcast: ",
-            $"'{u.Track}' {reason}. We can't sync this. Your listeners won't hear it.");
-    }
 
     public async ValueTask DisposeAsync()
     {

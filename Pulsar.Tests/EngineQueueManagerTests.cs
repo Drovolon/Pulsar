@@ -168,4 +168,87 @@ public class EngineSessionTests
         await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.7f) < 0.001f,
             "the session is alive after the failure");
     }
+
+    [Fact]
+    public async Task A_terminal_update_atomically_stops_and_ends_its_generation()
+    {
+        var engine = new FakeRemoteEngine();
+        await using var session = new EngineSession(engine);
+        EngineSessionEnded? ended = null;
+        session.OnPlaybackEnded += value => ended = value;
+        var path = @"C:\music\track.mp3";
+
+        session.SetTarget(Target(7, path, PlaybackState.Playing));
+        await TestWait.Assert(() => engine.Snapshot.Path == path, "the target loads");
+        var playbackId = engine.Snapshot.PlaybackId;
+
+        var sequence = engine.Snapshot.Sequence + 1;
+        engine.RaiseUpdated(new EngineSnapshot(
+            PlaybackState.Stopped,
+            null,
+            null,
+            null,
+            DateTimeOffset.UtcNow,
+            playbackId,
+            sequence,
+            EndReason.Finished));
+
+        await TestWait.Assert(() => ended is not null, "the terminal update is attributed");
+        Assert.Equal(new EngineSessionEnded(7, EndReason.Finished), ended);
+        Assert.Equal(EndReason.Finished, session.Snapshot.TerminalReason);
+    }
+
+    [Fact]
+    public async Task Polling_recovers_the_same_terminal_fact_when_its_event_is_missed()
+    {
+        var engine = new FakeRemoteEngine { SuppressUpdatedEvents = true };
+        await using var session = new EngineSession(engine);
+        EngineSessionEnded? ended = null;
+        session.OnPlaybackEnded += value => ended = value;
+        var path = @"C:\music\track.mp3";
+
+        session.SetTarget(Target(9, path, PlaybackState.Playing));
+        await TestWait.Assert(() => engine.Snapshot.Path == path, "the target loads");
+        engine.FinishTrack();
+
+        var terminal = await session.RefreshAsync(default);
+
+        Assert.Equal(PlaybackState.Stopped, terminal.State);
+        Assert.Equal(EndReason.Finished, terminal.TerminalReason);
+        Assert.Equal(new EngineSessionEnded(9, EndReason.Finished), ended);
+    }
+
+    [Fact]
+    public async Task Older_updates_cannot_overwrite_newer_state_for_the_same_playback()
+    {
+        var engine = new FakeRemoteEngine();
+        await using var session = new EngineSession(engine);
+        var path = @"C:\music\track.mp3";
+
+        session.SetTarget(Target(7, path, PlaybackState.Playing));
+        await TestWait.Assert(() => engine.Snapshot.Path == path, "the target loads");
+        var playbackId = engine.Snapshot.PlaybackId;
+        var baseline = engine.Snapshot.Sequence;
+
+        engine.RaiseUpdated(engine.Snapshot with
+        {
+            State = PlaybackState.Paused,
+            Sequence = baseline + 2,
+            ObservedAt = DateTimeOffset.UtcNow,
+        });
+        await TestWait.Assert(() => session.Snapshot.State == PlaybackState.Paused,
+            "the newer update is accepted");
+        engine.RaiseUpdated(engine.Snapshot with
+        {
+            State = PlaybackState.Playing,
+            PlaybackId = playbackId,
+            Sequence = baseline + 1,
+            ObservedAt = DateTimeOffset.UtcNow,
+        });
+        session.SetVolume(0.4f);
+        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.4f) < 0.001f,
+            "the stale event has drained");
+
+        Assert.Equal(PlaybackState.Paused, session.Snapshot.State);
+    }
 }

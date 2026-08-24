@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using NAudio.Wave;
 using Pulsar.Broadcast;
 using Pulsar.Broadcast.Local;
+using Pulsar.Common.Api;
 using Pulsar.Playback;
 using Pulsar.Tests.Fakes;
 using Xunit;
@@ -48,6 +49,22 @@ public class PlaylistTests : IAsyncLifetime
     }
 
     private Task<LocalSource> CreateFastPlayer() => CreatePlayer();
+
+    private static LocalTrack[] QueueTracks(LocalSource player)
+        => [.. player.Queue.Select(entry => entry.Track)];
+
+    private static string[] UpNextFiles(LocalSource player)
+        => [.. player.UpNext.Select(item => Path.GetFileName(item.Track.FilePath))];
+
+    private static int CurrentLibraryIndex(LocalSource player)
+        => player.CurrentTrack is { } current
+            ? Enumerable.Range(0, player.Library.Count).FirstOrDefault(
+                index => string.Equals(
+                    player.Library[index].FilePath,
+                    current.FilePath,
+                    StringComparison.OrdinalIgnoreCase),
+                -1)
+            : -1;
 
     private string[] LoadedFiles => [.. engine.Calls
         .Where(c => c.Op == "Load")
@@ -156,16 +173,16 @@ public class PlaylistTests : IAsyncLifetime
             var staleEventWasPublished = false;
             replacement.OnPlaybackChanged += view =>
             {
-                if (view.State == PlaybackState.Playing) staleEventWasPublished = true;
+                if (view.Queue.State == PlaybackState.Playing) staleEventWasPublished = true;
             };
             replacement.Play();
-            await replacement.ReplacePlaylistAsync(replacement.Tracks);
+            await replacement.DrainForTests();
 
             releaseOldLoad.TrySetResult();
             await WaitForLoads(2);
             // The old load and following stop have both emitted their events; the new load
-            // is dispatched but cannot emit yet. This is a barrier on the exact risky window.
-            await replacement.ReplacePlaylistAsync(replacement.Tracks);
+            // is dispatched but cannot emit yet. This blocks the risky window.
+            await replacement.DrainForTests();
             Assert.Equal(["Load", "Stop", "Load"], engine.Ops.Take(3));
             Assert.False(staleEventWasPublished,
                 "the replacement player must ignore the old session's engine event");
@@ -204,6 +221,30 @@ public class PlaylistTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_terminal_engine_update_advances_the_source()
+    {
+        CreateTracks("01.mp3", "02.mp3");
+        var player = await CreatePlayer();
+        player.Play();
+        await WaitForLoads(1);
+        var playbackId = engine.Snapshot.PlaybackId;
+
+        engine.RaiseUpdated(new EngineSnapshot(
+            PlaybackState.Stopped,
+            null,
+            null,
+            null,
+            DateTimeOffset.UtcNow,
+            playbackId,
+            engine.Snapshot.Sequence + 1,
+            EndReason.Finished));
+
+        await WaitForLoads(2);
+        Assert.Equal(["01.mp3", "02.mp3"], LoadedFiles);
+        await player.DisposeAsync();
+    }
+
+    [Fact]
     public async Task A_playlist_where_everything_fails_stops_instead_of_spinning()
     {
         CreateTracks("01.mp3", "02.mp3");
@@ -234,7 +275,7 @@ public class PlaylistTests : IAsyncLifetime
         player.Play();
 
         await TestWait.Assert(() => LoadedFiles.Length == 2, "each track is attempted once");
-        await player.ReplacePlaylistAsync(player.Tracks); // local-playback mailbox barrier
+        await player.DrainForTests(); // local-playback mailbox barrier
         Assert.Equal(PlaybackState.Stopped, player.State);
         Assert.Equal(["01.mp3", "02.mp3"], LoadedFiles);
         await player.DisposeAsync();
@@ -283,41 +324,136 @@ public class PlaylistTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Toggling_shuffle_keeps_the_current_track_and_the_library()
+    public async Task Playing_a_library_track_activates_the_entire_source_at_that_track()
     {
-        CreateTracks("01.mp3", "02.mp3", "03.mp3", "04.mp3", "05.mp3");
+        CreateTracks("01.mp3", "02.mp3", "03.mp3", "04.mp3");
         var player = await CreatePlayer();
 
-        player.PlayIndex(2);
+        player.PlayNow(player.Library[2]);
         await WaitForLoads(1);
-        var current = player.CurrentTrack;
+        Assert.Empty(player.Queue);
+        Assert.Equal(["04.mp3", "01.mp3", "02.mp3"], UpNextFiles(player));
 
-        player.SetShuffle(true);
-        await TestWait.Assert(() => player.Shuffle, "shuffle turns on");
+        engine.FinishTrack();
+        await WaitForLoads(2);
+        engine.FinishTrack();
+        await WaitForLoads(3);
 
-        Assert.Equal(current, player.CurrentTrack); // shuffling mustn't change what's playing
-        Assert.Equal(
-            new DirectoryInfo(dir.FullName).GetFiles("*.mp3").Select(f => f.FullName).OrderBy(x => x),
-            player.Tracks.Select(t => t.FilePath).OrderBy(x => x)); // same library, different order
-
-        player.SetShuffle(false);
-        await TestWait.Assert(() => !player.Shuffle, "shuffle turns off");
-        Assert.Equal(current, player.CurrentTrack);
+        Assert.Equal(["03.mp3", "04.mp3", "01.mp3"], LoadedFiles);
         await player.DisposeAsync();
     }
 
     [Fact]
-    public async Task Shuffle_selected_while_empty_applies_when_tracks_are_added()
+    public async Task Manual_queue_allows_duplicates_and_prefixes_the_virtual_source_order()
     {
+        CreateTracks("01.mp3", "02.mp3", "03.mp3");
         var player = await CreatePlayer();
+        player.PlayNow(player.Library[0]);
+        await WaitForLoads(1);
 
-        player.SetShuffle(true);
-        CreateTracks("01.mp3", "02.mp3");
-        var catalog = await new FolderTrackCatalogLoader(dir.FullName).LoadAsync();
-        await player.ReplacePlaylistAsync(catalog.AllFiles.Tracks);
+        player.AddToEnd(player.Library[2]);
+        player.AddNext(player.Library[2]);
+        await player.DrainForTests();
 
-        Assert.True(player.Shuffle);
-        Assert.Equal(2, player.Tracks.Count);
+        Assert.Equal(2, player.Queue.Count);
+        Assert.NotEqual(player.Queue[0].Id, player.Queue[1].Id);
+        Assert.Equal(
+            ["03.mp3", "03.mp3", "02.mp3", "03.mp3"],
+            UpNextFiles(player));
+        Assert.True(player.UpNext[0].IsQueued);
+        Assert.True(player.UpNext[1].IsQueued);
+        Assert.False(player.UpNext[2].IsQueued);
+        await player.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Manual_entries_are_consumed_then_playback_resumes_the_interrupted_source()
+    {
+        CreateTracks("01.mp3", "02.mp3", "override.mp3");
+        var player = await CreatePlayer();
+        player.PlayNow(player.Library[0]);
+        await WaitForLoads(1);
+        player.AddNext(player.Library[2]);
+        await player.DrainForTests();
+
+        engine.FinishTrack();
+        await WaitForLoads(2);
+        Assert.Empty(player.Queue);
+        Assert.Equal(["02.mp3", "override.mp3"], UpNextFiles(player));
+
+        engine.FinishTrack();
+        await WaitForLoads(3);
+        Assert.Equal(["01.mp3", "override.mp3", "02.mp3"], LoadedFiles);
+        await player.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Queue_edits_use_occurrence_identity_without_touching_the_source()
+    {
+        CreateTracks("01.mp3", "02.mp3", "03.mp3");
+        var player = await CreatePlayer();
+        player.PlayNow(player.Library[0]);
+        await WaitForLoads(1);
+        player.AddToEnd(player.Library[2]);
+        player.AddToEnd(player.Library[2]);
+        await player.DrainForTests();
+        var first = player.Queue[0].Id;
+        var duplicate = player.Queue[1].Id;
+
+        player.Move(duplicate, -1);
+        player.Remove(first);
+        await player.DrainForTests();
+
+        Assert.Single(player.Queue);
+        Assert.Equal(duplicate, player.Queue[0].Id);
+        Assert.Equal(["03.mp3", "02.mp3", "03.mp3"], UpNextFiles(player));
+        await player.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Clearing_the_manual_queue_leaves_source_playback_running()
+    {
+        CreateTracks("01.mp3", "02.mp3", "03.mp3");
+        var player = await CreatePlayer();
+        player.Play();
+        await WaitForLoads(1);
+        player.AddNext(player.Library[2]);
+        await player.DrainForTests();
+
+        player.ClearQueue();
+        await player.DrainForTests();
+        Assert.Empty(player.Queue);
+        Assert.Equal(PlaybackState.Playing, player.State);
+        Assert.Equal(["02.mp3", "03.mp3"], UpNextFiles(player));
+        engine.FinishTrack();
+        await WaitForLoads(2);
+
+        Assert.EndsWith("02.mp3", player.CurrentTrack!.FilePath);
+        await player.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Shuffle_upcoming_keeps_current_and_preserves_queue_and_source_members()
+    {
+        CreateTracks("01.mp3", "02.mp3", "03.mp3", "04.mp3", "05.mp3");
+        var player = await CreatePlayer();
+        player.PlayNow(player.Library[2]);
+        await WaitForLoads(1);
+        player.AddToEnd(player.Library[0]);
+        player.AddToEnd(player.Library[1]);
+        await player.DrainForTests();
+        var current = player.CurrentTrack;
+        var queueEntries = player.Queue.ToArray();
+        var sourceMembers = player.UpNext.Where(item => !item.IsQueued)
+            .Select(item => item.Track.FilePath).OrderBy(path => path).ToArray();
+
+        player.ShuffleUpcoming();
+        await player.DrainForTests();
+
+        Assert.Equal(current, player.CurrentTrack);
+        Assert.Equal(queueEntries, player.Queue);
+        Assert.Equal(sourceMembers, player.UpNext.Where(item => !item.IsQueued)
+            .Select(item => item.Track.FilePath).OrderBy(path => path));
         await player.DisposeAsync();
     }
 
@@ -325,118 +461,20 @@ public class PlaylistTests : IAsyncLifetime
     public async Task Next_on_an_empty_playlist_does_not_create_playback_intent()
     {
         var player = await CreatePlayer();
-        var first = new LocalTrack(Path.Combine(dir.FullName, "01.mp3"), "01.mp3", "01.mp3");
         var second = new LocalTrack(Path.Combine(dir.FullName, "02.mp3"), "02.mp3", "02.mp3");
 
         player.Next();
-        await player.ReplacePlaylistAsync([first]);
-        await player.ReplacePlaylistAsync([second]);
+        player.AddToEnd(second);
+        await player.DrainForTests();
         player.Volume(0.5f); // engine-queue barrier for any stop emitted by replacement
         Assert.True(await engine.WaitForCall("SetVolume"), "engine queue did not drain");
 
         Assert.DoesNotContain("Stop", engine.Ops);
         Assert.Equal(PlaybackState.Stopped, player.State);
-        Assert.Equal(second, player.CurrentTrack);
+        Assert.Null(player.CurrentTrack);
+        Assert.Equal(second, Assert.Single(player.Queue).Track);
         await player.DisposeAsync();
     }
-
-    // ---- rescan ---------------------------------------------------------------
-
-    [Fact]
-    public async Task Rescan_follows_the_current_track_to_its_new_index()
-    {
-        CreateTracks("01.mp3", "03.mp3");
-        var player = await CreatePlayer();
-        player.PlayIndex(1); // 03
-        await WaitForLoads(1);
-
-        TestData.CreateTrack(dir, "02.mp3"); // lands between them
-        var rescanned = await new FolderTrackCatalogLoader(dir.FullName).LoadAsync();
-        await player.ReplacePlaylistAsync(rescanned.AllFiles.Tracks);
-
-        Assert.Equal(3, player.Tracks.Count);
-        Assert.Equal(2, player.Index); // 03 moved from index 1 to 2
-        Assert.EndsWith("03.mp3", player.CurrentTrack!.FilePath);
-        await player.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Rescan_resets_to_the_start_when_the_current_track_vanished()
-    {
-        CreateTracks("01.mp3", "02.mp3");
-        var player = await CreatePlayer();
-        player.PlayIndex(1); // 02
-        await WaitForLoads(1);
-
-        File.Delete(Path.Combine(dir.FullName, "02.mp3"));
-        var rescanned = await new FolderTrackCatalogLoader(dir.FullName).LoadAsync();
-        await player.ReplacePlaylistAsync(rescanned.AllFiles.Tracks);
-
-        Assert.Equal(0, player.Index);
-        await TestWait.Assert(() => player.State == PlaybackState.Stopped, "removed track stops");
-        Assert.EndsWith("01.mp3", player.CurrentTrack!.FilePath);
-        await player.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Rescan_preserves_shuffle_and_includes_new_files()
-    {
-        CreateTracks("01.mp3", "02.mp3", "03.mp3");
-        var player = await CreatePlayer();
-        player.SetShuffle(true);
-        await TestWait.Assert(() => player.Shuffle, "shuffle turns on");
-
-        TestData.CreateTrack(dir, "04.mp3");
-        var rescanned = await new FolderTrackCatalogLoader(dir.FullName).LoadAsync();
-        await player.ReplacePlaylistAsync(rescanned.AllFiles.Tracks);
-
-        Assert.True(player.Shuffle, "rescan must not silently unshuffle");
-        Assert.Equal(4, player.Tracks.Count);
-        Assert.Contains(player.Tracks, t => t.FilePath.EndsWith("04.mp3"));
-        await player.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Replacing_playlist_preserves_a_shared_playing_track_and_updates_next()
-    {
-        CreateTracks("01.mp3", "02.mp3", "03.mp3");
-        var player = await CreatePlayer();
-        player.PlayIndex(1);
-        await WaitForLoads(1);
-        await TestWait.Assert(() => player.State == PlaybackState.Playing, "02 starts playing");
-        var replacement = player.Tracks.Where(track => !track.FilePath.EndsWith("01.mp3")).ToArray();
-        var changes = 0;
-        player.OnQueueChanged += () => changes++;
-
-        await player.ReplacePlaylistAsync(replacement);
-
-        Assert.Equal(PlaybackState.Playing, player.State);
-        Assert.EndsWith("02.mp3", player.CurrentTrack!.FilePath);
-        Assert.EndsWith("03.mp3", player.NextTrack!.FilePath);
-        Assert.DoesNotContain("Stop", engine.Ops);
-        Assert.True(changes > 0, "queue-only changes must notify the source for next-track prefetch");
-        await player.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Replacing_playlist_refreshes_metadata_for_the_shared_playing_track()
-    {
-        CreateTracks("01.mp3", "02.mp3");
-        var player = await CreatePlayer();
-        player.Play();
-        await WaitForLoads(1);
-        await TestWait.Assert(() => player.State == PlaybackState.Playing, "01 starts playing");
-        var replacement = player.Tracks
-            .Select(track => track with { DisplayName = $"Group: {track.DisplayName}" })
-            .ToArray();
-
-        await player.ReplacePlaylistAsync(replacement);
-
-        Assert.Equal("Group: 01.mp3", player.CurrentTrack!.DisplayName);
-        Assert.Equal("Group: 02.mp3", player.NextTrack!.DisplayName);
-        await player.DisposeAsync();
-    }
-
     [Fact]
     public async Task Reconnect_reloads_the_selected_track_and_preserves_pause_intent()
     {
@@ -470,61 +508,13 @@ public class PlaylistTests : IAsyncLifetime
         engine.DisconnectTrack();
         await TestWait.Assert(() => player.State == PlaybackState.Stopped, "disconnect is observed");
         player.Pause();
-        await player.ReplacePlaylistAsync(player.Tracks); // player-mailbox barrier
+        await player.DrainForTests();
         Assert.Single(LoadedFiles);
 
         engineSession.OnEngineReconnected();
 
         await WaitForLoads(2);
         await TestWait.Assert(() => player.State == PlaybackState.Paused, "latest intent is restored");
-        await player.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Replacing_playlist_stops_when_the_playing_track_is_absent()
-    {
-        CreateTracks("01.mp3", "02.mp3");
-        var player = await CreatePlayer();
-        player.PlayIndex(1);
-        await WaitForLoads(1);
-        await TestWait.Assert(() => player.State == PlaybackState.Playing, "02 starts playing");
-
-        await player.ReplacePlaylistAsync([player.Tracks[0]]);
-
-        await TestWait.Assert(() => player.State == PlaybackState.Stopped, "removed track stops");
-        Assert.Equal(0, player.Index);
-        Assert.EndsWith("01.mp3", player.CurrentTrack!.FilePath);
-        await TestWait.Assert(() => engine.Ops.Contains("Stop"), "removed current track stops the host");
-        await player.DisposeAsync();
-    }
-
-    [Fact]
-    public async Task Replacing_playlist_stops_a_removed_track_whose_load_is_still_in_flight()
-    {
-        CreateTracks("01.mp3", "02.mp3");
-        var player = await CreatePlayer();
-        var replacement = new[] { player.Tracks[0] };
-        var releaseLoad = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        engine.Stall = op => op == "Load" ? releaseLoad.Task : null;
-        var relabeledAsPlaying = false;
-        player.OnPlaybackChanged += view =>
-        {
-            if (view.State == PlaybackState.Playing) relabeledAsPlaying = true;
-        };
-
-        player.PlayIndex(1);
-        await WaitForLoads(1);
-        await player.ReplacePlaylistAsync(replacement);
-
-        releaseLoad.TrySetResult();
-        await TestWait.Assert(() => engine.Ops.Contains("Stop"), "the queued load is followed by stop");
-        await TestWait.Assert(() => engine.Snapshot.State == PlaybackState.Stopped, "the host stops");
-        // A completed replacement is also a mailbox barrier for the preceding engine events.
-        await player.ReplacePlaylistAsync(player.Tracks);
-
-        Assert.False(relabeledAsPlaying, "the removed file must not be published as the replacement track");
-        Assert.Equal(PlaybackState.Stopped, player.State);
-        Assert.EndsWith("01.mp3", player.CurrentTrack!.FilePath);
         await player.DisposeAsync();
     }
 
@@ -545,8 +535,8 @@ public class PlaylistTests : IAsyncLifetime
         player.OnPlaybackChanged += view =>
         {
             var actual = engine.Snapshot.Path;
-            var attributed = view.CurrentTrack?.FilePath;
-            if (view.State == PlaybackState.Playing
+            var attributed = view.Queue.CurrentTrack?.FilePath;
+            if (view.Queue.State == PlaybackState.Playing
                 && actual is not null
                 && !string.Equals(actual, attributed, StringComparison.OrdinalIgnoreCase))
             {
@@ -557,17 +547,17 @@ public class PlaylistTests : IAsyncLifetime
 
         try
         {
-            player.PlayIndex(0);
+            player.PlayNow(player.Library[0]);
             await WaitForLoads(1);
-            player.PlayIndex(1);
-            await TestWait.Assert(() => player.Index == 1, "the newer selection is accepted");
+            player.PlayNow(player.Library[1]);
+            await TestWait.Assert(() => CurrentLibraryIndex(player) == 1, "the newer selection is accepted");
 
             releaseFirst.TrySetResult();
             await WaitForLoads(2); // the second load is now dispatched but deliberately stalled
 
             // The first engine event was posted before this mailbox barrier. A correct player
             // may publish track 01 or ignore that stale event, but must never call it track 02.
-            await player.ReplacePlaylistAsync(player.Tracks);
+            await player.DrainForTests();
         }
         finally
         {
@@ -584,7 +574,7 @@ public class PlaylistTests : IAsyncLifetime
     {
         CreateTracks("01.mp3", "02.mp3", "03.mp3");
         var player = await CreatePlayer();
-        player.PlayIndex(0);
+        player.PlayNow(player.Library[0]);
         await WaitForLoads(1);
 
         var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -592,14 +582,16 @@ public class PlaylistTests : IAsyncLifetime
 
         try
         {
-            player.PlayIndex(1);
+            player.PlayNow(player.Library[1]);
             await WaitForLoads(2);
-            await TestWait.Assert(() => player.Index == 1, "the newer selection is accepted");
+            await TestWait.Assert(
+                () => UpNextFiles(player).FirstOrDefault() == "03.mp3",
+                "the newer source cursor is accepted");
 
             engine.FinishTrack(); // physical track 01 ends while load 02 is still queued
-            await player.ReplacePlaylistAsync(player.Tracks); // mailbox barrier for the end event
+            await player.DrainForTests(); // mailbox barrier for the end event
 
-            Assert.Equal(1, player.Index);
+            Assert.Equal("03.mp3", UpNextFiles(player).First());
             Assert.Equal(2, LoadedFiles.Length); // no spurious load of track 03
         }
         finally
@@ -616,7 +608,7 @@ public class PlaylistTests : IAsyncLifetime
     {
         CreateTracks("01.mp3", "02.mp3");
         var player = await CreatePlayer();
-        player.PlayIndex(1);
+        player.PlayNow(player.Library[1]);
         await WaitForLoads(1);
         await TestWait.Assert(() => player.Position is not null, "load committed position 0");
 
@@ -631,7 +623,7 @@ public class PlaylistTests : IAsyncLifetime
     {
         CreateTracks("01.mp3", "02.mp3");
         var player = await CreatePlayer();
-        player.PlayIndex(1);
+        player.PlayNow(player.Library[1]);
         await WaitForLoads(1);
 
         player.Seek(TimeSpan.FromSeconds(10)); // commits position via the engine event
@@ -655,7 +647,7 @@ public class PlaylistTests : IAsyncLifetime
         player.Prev(); // Index-- would go to -1: clamps back to 0
         await WaitForLoads(2);
         Assert.EndsWith("01.mp3", player.CurrentTrack!.FilePath);
-        Assert.Equal(0, player.Index);
+        Assert.Equal(0, CurrentLibraryIndex(player));
         await player.DisposeAsync();
     }
 
@@ -682,9 +674,9 @@ public class PlaylistTests : IAsyncLifetime
         releaseLoads.TrySetResult();
 
         await WaitForLoads(3);
-        await TestWait.Assert(() => engine.Snapshot.Path == player.Tracks[0].FilePath, "previous returns to 01");
+        await TestWait.Assert(() => engine.Snapshot.Path == player.Library[0].FilePath, "previous returns to 01");
         Assert.Equal(["01.mp3", "02.mp3", "01.mp3"], LoadedFiles);
-        Assert.Equal(0, player.Index);
+        Assert.Equal(0, CurrentLibraryIndex(player));
         await player.DisposeAsync();
     }
 
@@ -700,7 +692,7 @@ public class PlaylistTests : IAsyncLifetime
 
         var player = await CreatePlayer();
 
-        string[] names = [.. player.Tracks.Select(t => Path.GetFileName(t.FilePath))];
+        string[] names = [.. player.Library.Select(t => Path.GetFileName(t.FilePath))];
         Assert.Equal(4, names.Length);
         Assert.Contains("nested.flac", names);            // recursion
         Assert.DoesNotContain("notes.txt", names);        // filter

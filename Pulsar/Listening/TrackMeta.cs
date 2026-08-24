@@ -6,9 +6,8 @@ namespace Pulsar.Listening;
 /// </summary>
 public sealed record TrackMeta
 {
-    public string Title { get; init; } = "";
-    public string Artist { get; init; } = "";
     public string Album { get; init; } = "";
+    public string DisplayName { get; init; } = "";
     public long DurationMs { get; init; }
     public string OriginalFileName { get; init; } = "";
     public double ReplayGainDb { get; init; }

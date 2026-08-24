@@ -43,17 +43,14 @@ public sealed class Plugin : IAsyncDalamudPlugin
     private ApplicationCoordinator? Coordinator { get; set; }
     private DebugLoopbackController? DebugLoopback { get; set; }
 
-    internal BroadcastPlayerData? CurrentBroadcastPlayerData
-        => Coordinator?.CurrentPlayerData ?? Broadcast?.CurrentPlayerData();
-
     internal void SetDebugLoopback(bool enabled)
-        => DebugLoopback?.SetEnabled(enabled, CurrentBroadcastPlayerData);
+        => DebugLoopback?.SetEnabled(enabled);
 
     internal void RefreshBgmMute() => Coordinator?.RefreshBgmMute();
 
     public readonly WindowSystem WindowSystem = new("Pulsar");
     private MainWindow MainWindow { get; init; }
-    
+
     private ReconnectingEngine? ListenEngine { get; set; }
     private ReconnectingEngine? BroadcastEngine { get; set; }
     private ReconnectingPrepareService? Prepare { get; set; }
@@ -61,7 +58,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        
+
         MainWindow = new MainWindow(this);
         WindowSystem.AddWindow(MainWindow);
 
@@ -116,7 +113,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
             DebugLoopback,
             new ListeningNotifier(Configuration),
             new BgmMuter(Configuration, new GameBgmControl(GameConfig)));
-        DebugLoopback.SetEnabled(Configuration.DebugLoopbackEnabled, CurrentBroadcastPlayerData);
+        DebugLoopback.SetEnabled(Configuration.DebugLoopbackEnabled);
 
         ListenEngine.Start();
         BroadcastEngine.Start();
@@ -144,7 +141,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
                     break;
                 case BroadcastMode.Beefweb:
                     await Broadcast.LoadBeefweb(Configuration.BeefwebPort, Configuration.BeefwebUsername,
-                        Configuration.BeefwebPassword, Configuration.BeefwebTransport == BeefwebTransport.Sse);
+                        Configuration.BeefwebPassword, Configuration.BeefwebTransport);
                     break;
             }
         }
@@ -179,6 +176,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
     {
         try
         {
+            // Stop UI callbacks before tearing down the state they read.
+            await Framework.RunOnFrameworkThread(FrameworkDispose);
+
             if (Coordinator is not null) await Coordinator.DisposeAsync();
             else
             {
@@ -186,7 +186,6 @@ public sealed class Plugin : IAsyncDalamudPlugin
                 if (Listening is not null) await Listening.DisposeAsync();
             }
             Ipc?.Dispose();
-            await Framework.RunOnFrameworkThread(FrameworkDispose);
             if (SyncPrep is not null) await SyncPrep.DisposeAsync();
         }
         finally

@@ -12,8 +12,20 @@ public sealed record SourceSnapshot(
     DateTimeOffset AsOf,
     TrackMeta Meta);
 
+/// <summary>
+/// Identifies one playback state. A source creates a new instance after a load,
+/// seek, pause, resume, or start. Queue edits keep the current instance.
+/// </summary>
+public sealed class SourceCursor
+{ }
+
+/// <summary>
+/// Groups a playback identity with its snapshot. Events tell consumers to reread it.
+/// </summary>
+public sealed record SourceFrame(SourceCursor Cursor, SourceSnapshot Snapshot);
+
 public interface IMusicSource : IAsyncDisposable
 {
-    SourceSnapshot? Current { get; }
-    event Action<SourceSnapshot?>? OnSnapshotChanged;
+    SourceFrame? Frame { get; }
+    event Action? OnChanged;
 }

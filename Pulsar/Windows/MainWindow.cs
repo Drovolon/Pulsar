@@ -99,7 +99,11 @@ public class MainWindow : Window, IDisposable
         return isDirty ? displayVersion + "*" : displayVersion;
     }
 
-    public void Dispose() => theme.Dispose();
+    public void Dispose()
+    {
+        fileDialogManager.Reset();
+        theme.Dispose();
+    }
 
     public Task WaitFontsReadyAsync(CancellationToken ct) => theme.WaitFontsReadyAsync(ct);
 
@@ -125,9 +129,13 @@ public class MainWindow : Window, IDisposable
         bool open;
         using (theme.IconTextFont.Push())
             open = ImGui.BeginTabItem(label);
-        if (open)
+        if (!open) return;
+        try
         {
             draw();
+        }
+        finally
+        {
             ImGui.EndTabItem();
         }
     }

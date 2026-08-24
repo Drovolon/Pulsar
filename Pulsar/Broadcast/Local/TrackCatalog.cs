@@ -10,7 +10,11 @@ using Pulsar.Playback;
 namespace Pulsar.Broadcast.Local;
 
 /// <summary>A local audio file together with catalog-only presentation data.</summary>
-public sealed record LocalTrack(string FilePath, string RelativePath, string DisplayName);
+public sealed record LocalTrack(
+    string FilePath,
+    string RelativePath,
+    string DisplayName,
+    string? Origin = null);
 
 /// <summary>A playable subset of a local catalog.</summary>
 public sealed record TrackGroup(string Id, string Name, IReadOnlyList<LocalTrack> Tracks);
@@ -31,6 +35,12 @@ public sealed record TrackCatalog(IReadOnlyList<TrackGroup> Groups)
         => id is null
             ? AllFiles
             : Groups.FirstOrDefault(g => string.Equals(g.Id, id, StringComparison.Ordinal)) ?? AllFiles;
+
+    internal static LocalTrack[] SortTracksByFileName(IEnumerable<LocalTrack> tracks)
+        => tracks
+            .OrderBy(track => Path.GetFileName(track.FilePath), NaturalPathComparer.Instance)
+            .ThenBy(track => track.RelativePath, NaturalPathComparer.Instance)
+            .ToArray();
 }
 
 public interface ITrackCatalogLoader
@@ -56,17 +66,19 @@ public sealed class FolderTrackCatalogLoader(string rootDirectory) : ITrackCatal
 
     internal TrackCatalog Scan(CancellationToken cancellationToken)
     {
-        var tracks = Extensions
+        var tracks = TrackCatalog.SortTracksByFileName(Extensions
             .SelectMany(pattern => Directory.EnumerateFiles(RootDirectory, pattern, SearchOption.AllDirectories))
             .Select(path =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var full = Path.GetFullPath(path);
                 var relative = Path.GetRelativePath(RootDirectory, full).Replace('\\', '/');
-                return new LocalTrack(full, relative, Path.GetFileName(full));
-            })
-            .OrderBy(track => track.RelativePath, NaturalPathComparer.Instance)
-            .ToArray();
+                return new LocalTrack(
+                    full,
+                    relative,
+                    Path.GetFileName(full),
+                    Path.GetFileName(RootDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+            }));
 
         return new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, tracks)]);
     }

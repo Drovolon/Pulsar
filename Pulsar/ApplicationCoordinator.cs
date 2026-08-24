@@ -17,8 +17,6 @@ namespace Pulsar;
 /// </summary>
 internal sealed class ApplicationCoordinator : IAsyncDisposable
 {
-    private sealed record PublishedState(BroadcastPlayerData? PlayerData);
-
     private readonly BroadcastManager broadcast;
     private readonly ListeningManager listening;
     private readonly IpcProvider ipc;
@@ -27,9 +25,7 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
     private readonly BgmMuter bgmMuter;
     private readonly Task broadcastOutputLoop;
     private readonly Task listeningOutputLoop;
-    private volatile PublishedState published = new(null);
-
-    internal BroadcastPlayerData? CurrentPlayerData => published.PlayerData;
+    private BroadcastOutput.PlayerDataChanged? currentPublication;
 
     internal ApplicationCoordinator(
         BroadcastManager broadcast,
@@ -53,27 +49,40 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
 
     private async Task RouteBroadcastOutputs()
     {
-        await foreach (var output in broadcast.Outputs.ReadAllAsync())
+        try
         {
-            try
+            await foreach (var output in broadcast.Outputs.ReadAllAsync())
             {
-                switch (output)
+                try
                 {
-                    case BroadcastOutput.PlayerDataChanged(var data):
-                        published = new PublishedState(data);
-                        ipc.PublishPlayerData(data);
-                        debugLoopback.OnPlayerDataChanged(data);
-                        break;
-                    case BroadcastOutput.BroadcastingChanged(var value):
-                        listening.SetBroadcasting(value);
-                        await bgmMuter.SetBroadcasting(value);
-                        break;
+                    switch (output)
+                    {
+                        case BroadcastOutput.PlayerDataChanged change:
+                            var previous = currentPublication;
+                            currentPublication = change;
+                            try
+                            {
+                                await ipc.PublishPlayerDataAsync(change.Data);
+                                await debugLoopback.OnPlayerDataChangedAsync(change.Data);
+                            }
+                            finally { previous?.Dispose(); }
+                            break;
+                        case BroadcastOutput.BroadcastingChanged(var value):
+                            listening.SetBroadcasting(value);
+                            await bgmMuter.SetBroadcasting(value);
+                            break;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Plugin.Log.Error(e, "failed to route broadcast output: {output}", output);
                 }
             }
-            catch (Exception e)
-            {
-                Plugin.Log.Error(e, "failed to route broadcast output: {output}", output);
-            }
+        }
+        finally
+        {
+            currentPublication?.Dispose();
+            currentPublication = null;
         }
     }
 
@@ -111,7 +120,7 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
             }
             finally
             {
-                debugLoopback.SetEnabled(false, null);
+                debugLoopback.SetEnabled(false);
                 await debugLoopback.DisposeAsync();
             }
         }

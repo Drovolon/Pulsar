@@ -21,17 +21,13 @@ public class ListeningManagerTests : IAsyncLifetime
     private readonly Configuration config = TestData.QuietConfiguration();
     private ListeningManager? manager;
 
-    private ListeningManager Create(float masterVolume = 1f, bool autoPlay = true)
-        => manager = new ListeningManager(engine, masterVolume, null, autoPlay,
-            updatePoll: TimeSpan.FromMilliseconds(250),
-            errorBackoff: TimeSpan.FromSeconds(1),
-            lostBackoff: TimeSpan.FromSeconds(10));
+    private ListeningManager Create(float masterVolume = 1f, bool autoPlay = true) =>
+        manager = new ListeningManager(engine, masterVolume, null, autoPlay, TimeSpan.FromMilliseconds(250),
+                                       TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10));
 
-    private ListeningManager CreateFast(TimeSpan? lostBackoff = null)
-        => manager = new ListeningManager(engine, 1f, null, true,
-            updatePoll: TimeSpan.FromMilliseconds(25),
-            errorBackoff: TimeSpan.FromMilliseconds(50),
-            lostBackoff: lostBackoff ?? TimeSpan.FromMilliseconds(50));
+    private ListeningManager CreateFast(TimeSpan? lostBackoff = null) =>
+        manager = new ListeningManager(engine, 1f, null, true, TimeSpan.FromMilliseconds(25), TimeSpan.FromMilliseconds(50),
+                                       lostBackoff ?? TimeSpan.FromMilliseconds(50));
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -40,9 +36,9 @@ public class ListeningManagerTests : IAsyncLifetime
         if (manager is not null) await manager.DisposeAsync();
     }
 
-    private static PairData Playing(string file, int epoch = 1, double rgDb = 0)
-        => new(file, TimeSpan.FromSeconds(60), true, DateTimeOffset.UtcNow, epoch,
-               rgDb == 0 ? null : new TrackMeta { ReplayGainDb = rgDb });
+    private static PairData Playing(string file, int epoch = 1, double rgDb = 0) =>
+        new(file, TimeSpan.FromSeconds(60), true, DateTimeOffset.UtcNow, epoch,
+            rgDb == 0 ? null : new TrackMeta { ReplayGainDb = rgDb });
 
     private int LoadCount => engine.Ops.Count(o => o == "Load");
 
@@ -70,16 +66,14 @@ public class ListeningManagerTests : IAsyncLifetime
                 lm.ClearPair(2);
             });
             await TestWait.Within(mutations, "mutators while the loop is parked");
-        }
-        finally
+        } finally
         {
             wedge.TrySetResult(); // always unwedge, or teardown hangs with the test
         }
 
         // Once the host recovers, the queued mutations apply in order.
-        await TestWait.Assert(
-            () => lm.View is [{ Ident: 1, Volume: 0.5f }],
-            "queued mutations land after the host recovers");
+        await TestWait.Assert(() => lm.View is [{ Ident: 1, Volume: 0.5f }],
+                              "queued mutations land after the host recovers");
     }
 
     // ---- source selection -----------------------------------------------------------
@@ -92,7 +86,36 @@ public class ListeningManagerTests : IAsyncLifetime
 
         await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "engine loads Alice's track");
         await TestWait.Assert(() => lm.View.Any(p => p is { Active: true, DisplayName: "Alice" }),
-            "view marks Alice active");
+                              "view marks Alice active");
+    }
+
+    [Fact]
+    public async Task Later_updates_win_even_when_the_epoch_restarts()
+    {
+        var lm = Create();
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack, 99));
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "the first update starts");
+
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, 1));
+        await TestWait.Assert(() => engine.Snapshot.Path == BobTrack, "the later update replaces it");
+        Assert.Equal(BobTrack, engine.Snapshot.Path);
+        Assert.Equal(BobTrack, Assert.Single(lm.View).FilePath);
+    }
+
+    [Fact]
+    public async Task Clearing_a_pair_allows_it_to_return_with_the_same_epoch()
+    {
+        var lm = Create();
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "the pair starts");
+
+        lm.ClearPair(1);
+        await TestWait.Assert(() => engine.Snapshot.Path is null, "clear removes it");
+
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack));
+        await TestWait.Assert(() => engine.Snapshot.Path == BobTrack, "the pair returns");
+        Assert.Equal(BobTrack, engine.Snapshot.Path);
+        Assert.Equal(BobTrack, Assert.Single(lm.View).FilePath);
     }
 
     [Fact]
@@ -120,8 +143,7 @@ public class ListeningManagerTests : IAsyncLifetime
         lm.ClearPair(1);
 
         await TestWait.Assert(() => engine.Snapshot.Path == BobTrack, "Bob takes over after Alice leaves");
-        await TestWait.Assert(() => lm.View.Any(p => p is { Active: true, DisplayName: "Bob" }),
-            "view marks Bob active");
+        await TestWait.Assert(() => lm.View.Any(p => p is { Active: true, DisplayName: "Bob" }), "view marks Bob active");
     }
 
     [Fact]
@@ -191,8 +213,7 @@ public class ListeningManagerTests : IAsyncLifetime
         // Alice has not sent another cursor: changing the selected source alone must
         // still restore her track in the single shared playback engine.
         lm.SetActive(1);
-        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack,
-            "pinning Alice again switches back to Alice");
+        await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "pinning Alice again switches back to Alice");
     }
 
     [Fact]
@@ -234,16 +255,13 @@ public class ListeningManagerTests : IAsyncLifetime
     [Fact]
     public async Task Load_dispatch_failures_use_the_same_bounded_retry_policy()
     {
-        engine.Intercept = op => op == "Load"
-            ? new InvalidOperationException("host rejected the load")
-            : null;
+        engine.Intercept = op => op == "Load" ? new InvalidOperationException("host rejected the load") : null;
         var lm = Create();
 
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
 
-        await TestWait.Assert(
-            () => LoadCount == 4 && lm.Playback.Status == ListenerPlaybackStatus.Failed,
-            "the initial dispatch and three retries exhaust the load budget");
+        await TestWait.Assert(() => LoadCount == 4 && lm.Playback.Status == ListenerPlaybackStatus.Failed,
+                              "the initial dispatch and three retries exhaust the load budget");
         await Task.Delay(100);
         Assert.Equal(4, LoadCount);
     }
@@ -256,18 +274,18 @@ public class ListeningManagerTests : IAsyncLifetime
         await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "Alice starts");
         var stalePlaybackId = engine.Snapshot.PlaybackId;
 
-        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, epoch: 2));
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, 2));
         await TestWait.Assert(() => engine.Snapshot.Path == BobTrack, "Bob replaces Alice");
         var loads = LoadCount;
 
-        engine.RaiseChanged(new Pulsar.Common.Api.EngineSnapshot(
-            NAudio.Wave.PlaybackState.Playing,
-            AliceTrack,
-            null,
-            new Pulsar.Common.Api.PlaybackPosition(TimeSpan.Zero, TimeSpan.FromMinutes(3)),
-            DateTimeOffset.UtcNow,
-            stalePlaybackId));
-        engine.RaisePlaybackEnded(stalePlaybackId, Pulsar.Common.Api.EndReason.Failed);
+        var staleSequence = engine.Snapshot.Sequence + 1;
+        engine.RaiseUpdated(new Pulsar.Common.Api.EngineSnapshot(NAudio.Wave.PlaybackState.Playing, AliceTrack, null,
+                                                                 new Pulsar.Common.Api.PlaybackPosition(
+                                                                     TimeSpan.Zero, TimeSpan.FromMinutes(3)),
+                                                                 DateTimeOffset.UtcNow, stalePlaybackId, staleSequence));
+        engine.RaiseUpdated(new Pulsar.Common.Api.EngineSnapshot(NAudio.Wave.PlaybackState.Stopped, null, null, null,
+                                                                 DateTimeOffset.UtcNow, stalePlaybackId, staleSequence + 1,
+                                                                 Common.Api.EndReason.Failed));
         lm.SetPairVolume(1, 0.5f); // mailbox barrier after both stale events
         await TestWait.Assert(() => engine.LastVolume == 0.5f, "stale events are processed");
 
@@ -292,13 +310,14 @@ public class ListeningManagerTests : IAsyncLifetime
             var expected = attempt + 1;
             await TestWait.Assert(() => LoadCount == expected, $"retry #{attempt}");
         }
+
         engine.FailTrack(); // budget gone
         await Task.Delay(300);
         var exhausted = LoadCount;
         Assert.Equal(4, exhausted);
 
         // DJ moves to the next song: retries start over for the new cursor.
-        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, epoch: 2));
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, 2));
         await TestWait.Assert(() => LoadCount == exhausted + 1, "new track loads after budget reset");
         Assert.Equal(BobTrack, engine.Snapshot.Path);
     }
@@ -308,7 +327,7 @@ public class ListeningManagerTests : IAsyncLifetime
     [Fact]
     public async Task Volume_stacks_master_pair_and_replaygain()
     {
-        var lm = Create(masterVolume: 0.5f);
+        var lm = Create(0.5f);
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack, rgDb: -6));
         await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "Alice starts");
 
@@ -316,7 +335,7 @@ public class ListeningManagerTests : IAsyncLifetime
 
         var expected = 0.5f * 0.5f * TestData.DbToLinear(-6);
         await TestWait.Assert(() => Math.Abs(engine.LastVolume - expected) < 0.001f,
-            $"volume converges to master*pair*rg = {expected}");
+                              $"volume converges to master*pair*rg = {expected}");
     }
 
     [Fact]
@@ -327,8 +346,7 @@ public class ListeningManagerTests : IAsyncLifetime
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack, rgDb: 40));
 
         var clamped = TestData.DbToLinear(20); // 10x, not 100x
-        await TestWait.Assert(() => Math.Abs(engine.LastVolume - clamped) < 0.01f,
-            "gain clamped to +20 dB");
+        await TestWait.Assert(() => Math.Abs(engine.LastVolume - clamped) < 0.01f, "gain clamped to +20 dB");
     }
 
     [Fact]
@@ -338,13 +356,13 @@ public class ListeningManagerTests : IAsyncLifetime
         var flyleafGain = TestData.DbToLinear(-12);
         var onokenGain = TestData.DbToLinear(-1);
 
-        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack, epoch: 1, rgDb: -12));
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack, 1, -12));
         await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "Flyleaf starts");
         await engine.SeekAsync(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(55), default);
 
         // The DJ has advanced, but the listener deliberately gives the old track its
         // final five seconds. The pending cursor must not become the applied identity yet.
-        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, epoch: 2, rgDb: -1));
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, 2, -1));
         await Task.Delay(200);
 
         Assert.Equal(AliceTrack, engine.Snapshot.Path);
@@ -378,22 +396,21 @@ public class ListeningManagerTests : IAsyncLifetime
     {
         // A restarted host resets to volume=1: the real value must be re-pushed even
         // though nothing changed plugin-side.
-        var lm = Create(masterVolume: 0.3f);
+        var lm = Create(0.3f);
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
         await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.3f) < 0.001f, "initial volume");
         var volumeSends = engine.Ops.Count(o => o == "SetVolume");
 
         lm.OnEngineReconnected();
 
-        await TestWait.Assert(() => engine.Ops.Count(o => o == "SetVolume") > volumeSends,
-            "volume re-sent after reconnect");
+        await TestWait.Assert(() => engine.Ops.Count(o => o == "SetVolume") > volumeSends, "volume re-sent after reconnect");
         Assert.Equal(0.3f, engine.LastVolume, 3);
     }
 
     [Fact]
     public async Task Repeated_engine_crashes_reload_and_reapply_volume_every_time()
     {
-        var lm = Create(masterVolume: 0.3f);
+        var lm = Create(0.3f);
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
         await TestWait.Assert(() => engine.Snapshot.Path == AliceTrack, "initial track loads");
         await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.3f) < 0.001f, "initial volume lands");
@@ -407,12 +424,9 @@ public class ListeningManagerTests : IAsyncLifetime
             lm.OnEngineReconnected();
 
             await TestWait.Assert(
-                () => LoadCount > loads
-                      && engine.Snapshot is { Path: AliceTrack, State: NAudio.Wave.PlaybackState.Playing },
+                () => LoadCount > loads && engine.Snapshot is { Path: AliceTrack, State: NAudio.Wave.PlaybackState.Playing },
                 $"track reload #{cycle}");
-            await TestWait.Assert(
-                () => engine.Ops.Count(o => o == "SetVolume") > volumeSends,
-                $"volume resend #{cycle}");
+            await TestWait.Assert(() => engine.Ops.Count(o => o == "SetVolume") > volumeSends, $"volume resend #{cycle}");
             Assert.Equal(0.3f, engine.LastVolume, 3);
         }
     }
@@ -427,24 +441,22 @@ public class ListeningManagerTests : IAsyncLifetime
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
 
         await TestWait.Assert(
-            () => lm.View.Any(p => p.Active)
-                  && lm.Playback is { Status: ListenerPlaybackStatus.Loading, TargetPath: AliceTrack },
+            () => lm.View.Any(p => p.Active) &&
+                  lm.Playback is { Status: ListenerPlaybackStatus.Loading, TargetPath: AliceTrack },
             "the selected source is shown as loading while the host opens it");
 
         await engine.WaitForCall("Load");
         engine.CompleteDeferredLoad();
-        await TestWait.Assert(
-            () => lm.Playback is
-            {
-                Status: ListenerPlaybackStatus.Playing,
-                TargetPath: AliceTrack,
-                Position.Total.TotalMinutes: 3,
-            },
-            "the engine event confirms playing immediately");
+        await TestWait.Assert(() => lm.Playback is
+        {
+            Status: ListenerPlaybackStatus.Playing,
+            TargetPath: AliceTrack,
+            Position.Total.TotalMinutes: 3,
+        }, "the engine event confirms playing immediately");
 
         engine.FinishTrack();
         await TestWait.Assert(() => lm.Playback.Status == ListenerPlaybackStatus.Ended,
-            "a natural end is distinct from loading");
+                              "a natural end is distinct from loading");
     }
 
     [Fact]
@@ -455,7 +467,7 @@ public class ListeningManagerTests : IAsyncLifetime
 
         await TestWait.Assert(() => lm.ActiveNowPlaying, "playing state surfaces");
         await TestWait.Assert(() => lm.ActivePosition is { Total.TotalMinutes: 3 },
-            "position (with the fake's 3min duration) surfaces");
+                              "position (with the fake's 3min duration) surfaces");
     }
 
     [Fact]
@@ -465,23 +477,21 @@ public class ListeningManagerTests : IAsyncLifetime
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
         await TestWait.Assert(() => lm.ActiveNowPlaying, "playing before the outage");
 
-        engine.Intercept = op => op == "GetState"
-            ? new StreamJsonRpc.ConnectionLostException("host down") : null;
+        engine.Intercept = op => op == "GetState" ? new StreamJsonRpc.ConnectionLostException("host down") : null;
         await Task.Delay(150); // let the loop hit the outage and enter (tiny) backoff
         engine.Intercept = null;
 
         // Only the poll loop can observe a duration change (no event fires for it).
         engine.TrackDuration = TimeSpan.FromMinutes(5);
         await TestWait.Assert(() => lm.ActivePosition is { Total.TotalMinutes: 5 },
-            "poll loop resumed after the connection loss");
+                              "poll loop resumed after the connection loss");
     }
 
     [Fact]
     public async Task Reconnect_interrupts_the_update_loops_connection_loss_backoff()
     {
-        engine.Intercept = op => op == "GetState"
-            ? new StreamJsonRpc.ConnectionLostException("host down") : null;
-        var lm = CreateFast(lostBackoff: TimeSpan.FromSeconds(30));
+        engine.Intercept = op => op == "GetState" ? new StreamJsonRpc.ConnectionLostException("host down") : null;
+        var lm = CreateFast(TimeSpan.FromSeconds(30));
         await Task.Delay(150); // startup poll enters its long production-style backoff
 
         engine.Intercept = null;
@@ -492,22 +502,19 @@ public class ListeningManagerTests : IAsyncLifetime
         await TestWait.Assert(() => lm.ActiveNowPlaying, "the first track loads");
         engine.TrackDuration = TimeSpan.FromMinutes(5); // only the poll can observe this
 
-        await TestWait.Assert(
-            () => lm.ActivePosition is { Total.TotalMinutes: 5 },
-            "reconnect wakes the poll immediately",
-            timeout: TimeSpan.FromSeconds(1));
+        await TestWait.Assert(() => lm.ActivePosition is { Total.TotalMinutes: 5 }, "reconnect wakes the poll immediately",
+                              TimeSpan.FromSeconds(1));
     }
 
     [Fact]
     public async Task Dispose_is_prompt_even_mid_connection_loss_backoff()
     {
         // Production-scale backoff: dispose must cancel the wait, not sit it out.
-        var lm = CreateFast(lostBackoff: TimeSpan.FromSeconds(30));
+        var lm = CreateFast(TimeSpan.FromSeconds(30));
         lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
         await TestWait.Assert(() => lm.ActiveNowPlaying, "playing before the outage");
 
-        engine.Intercept = op => op == "GetState"
-            ? new StreamJsonRpc.ConnectionLostException("host down") : null;
+        engine.Intercept = op => op == "GetState" ? new StreamJsonRpc.ConnectionLostException("host down") : null;
         await Task.Delay(150); // loop is now parked in the 30s backoff
 
         await TestWait.Within(lm.DisposeAsync().AsTask(), "dispose cancels the backoff");

@@ -6,14 +6,30 @@ using System.Text;
 
 namespace Pulsar.Broadcast.Prepare;
 
-public class CacheManager
+internal readonly record struct PrepInput(string FilePath, long LastWriteTicks, long Length)
+{
+    internal static PrepInput Capture(string path)
+    {
+        var file = new FileInfo(path);
+        if (!file.Exists) throw new FileNotFoundException("Source file not found", path);
+        return new PrepInput(path, file.LastWriteTimeUtc.Ticks, file.Length);
+    }
+
+    internal bool IsCurrent()
+    {
+        var file = new FileInfo(FilePath);
+        return file.Exists && file.LastWriteTimeUtc.Ticks == LastWriteTicks && file.Length == Length;
+    }
+}
+
+internal sealed class CacheManager
 {
     // included in all cache keys. change to force global cache invalidation
     private const string PipelineVersion = "v1";
-    
+
     /// <summary>Max size of the cache on disk</summary>
     public long CacheCapBytes { get; init; } = 1L << 26; // 64 MiB
-    
+
     private readonly string cacheDirectory;
 
     public CacheManager(string cacheDirectory)
@@ -24,8 +40,14 @@ public class CacheManager
 
     public string CachePathFor(string path)
     {
-        return Path.Combine(cacheDirectory, KeyFor(path));
+        return CachePathFor(PrepInput.Capture(path));
     }
+
+    internal string CachePathFor(PrepInput input)
+        => Path.Combine(cacheDirectory, KeyFor(input));
+
+    internal string AttemptPathFor(PrepInput input)
+        => $"{CachePathFor(input)}.attempt-{Guid.NewGuid():N}";
 
     /// <summary>
     /// Best-effort access-time bump for a served artifact, so LRU eviction sees it as
@@ -40,7 +62,7 @@ public class CacheManager
         }
         catch (Exception ex)
         {
-             Plugin.Log.Info(ex, "Failed to touch cache path {path}", path);
+            Plugin.Log.Info(ex, "Failed to touch cache path {path}", path);
         }
     }
 
@@ -51,6 +73,7 @@ public class CacheManager
             var files = new DirectoryInfo(cacheDirectory)
                         .GetFiles()
                         .Where(f => !f.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+                        .Where(f => !f.Name.Contains(".attempt-", StringComparison.OrdinalIgnoreCase))
                         .OrderBy(f => f.LastAccessTimeUtc).ToArray();
             var currentSize = files.Sum(f => f.Length);
 
@@ -78,12 +101,10 @@ public class CacheManager
             Plugin.Log.Warning(ex, "SyncPrep LRU eviction failed");
         }
     }
-    
-    private static string KeyFor(string path)
+
+    private static string KeyFor(PrepInput input)
     {
-        var fi = new FileInfo(path);
-        if (!fi.Exists) throw new FileNotFoundException("Cache file not found", path);
-        var raw = $"{PipelineVersion}|{path}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}";
+        var raw = $"{PipelineVersion}|{input.FilePath}|{input.LastWriteTicks}|{input.Length}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))[..32];
     }
 }

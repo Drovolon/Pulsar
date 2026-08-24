@@ -31,6 +31,20 @@ public sealed class TrackCatalogTests : IDisposable
     }
 
     [Fact]
+    public async Task Folder_catalog_sorts_naturally_by_filename_before_directory()
+    {
+        Track("a/10 - Outro.scd");
+        Track("z/2 - Verse.scd");
+        Track("m/1 - Intro.scd");
+
+        var catalog = await new FolderTrackCatalogLoader(dir.FullName).LoadAsync();
+
+        Assert.Equal(
+            ["1 - Intro.scd", "2 - Verse.scd", "10 - Outro.scd"],
+            catalog.AllFiles.Tracks.Select(track => Path.GetFileName(track.FilePath)));
+    }
+
+    [Fact]
     public async Task Mod_catalog_always_has_all_files_and_infers_a_shared_scd_redirect_group()
     {
         Track("soundy/songs/392_Spiritbox.scd");
@@ -61,6 +75,31 @@ public sealed class TrackCatalogTests : IDisposable
             ["Spiritbox - Circle With Me", "The Plot In You - Left Behind"],
             rock.Tracks.Select(track => track.DisplayName));
         Assert.All(rock.Tracks, track => Assert.True(File.Exists(track.FilePath)));
+    }
+
+    [Fact]
+    public async Task Inferred_mod_groups_preserve_penumbra_option_order()
+    {
+        Track("soundy/songs/100_Hundred.scd");
+        Track("soundy/songs/20_Twenty.scd");
+        Group("group_004_music.json", """
+            {
+              "Name": "MUSIC",
+              "Type": "Single",
+              "Options": [
+                { "Name": "Hundred", "Files": {
+                    "sound/dam.scd": "soundy/songs/100_Hundred.scd" } },
+                { "Name": "Twenty", "Files": {
+                    "sound/dam.scd": "soundy/songs/20_Twenty.scd" } }
+              ]
+            }
+            """);
+
+        var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
+
+        Assert.Equal(
+            ["Hundred", "Twenty"],
+            catalog.Groups[1].Tracks.Select(track => track.DisplayName));
     }
 
     [Fact]

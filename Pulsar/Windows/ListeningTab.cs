@@ -21,7 +21,7 @@ internal sealed class ListeningTab(Plugin plugin, UiTheme theme)
         var listening = plugin.Listening;
         if (listening is null) // this shouldn't happen unless something went horribly wrong during loading
             return;
-        
+
         var sources = listening.View ?? []; // lock-free snapshot
 
         PairView? active = null;
@@ -141,7 +141,7 @@ internal sealed class ListeningTab(Plugin plugin, UiTheme theme)
                 + (playback.Status == ListenerPlaybackStatus.Paused ? " (paused)" : "");
         return playback.Status switch
         {
-            ListenerPlaybackStatus.Loading => "(loading…)",
+            ListenerPlaybackStatus.Loading => "(loading...)",
             ListenerPlaybackStatus.Paused => "(paused)",
             ListenerPlaybackStatus.Ended => "(ended)",
             ListenerPlaybackStatus.Failed => "(failed)",
@@ -154,10 +154,8 @@ internal sealed class ListeningTab(Plugin plugin, UiTheme theme)
     /// </summary>
     private static string DescribeTrack(in PairView p)
     {
-        var artist = p.Meta?.Artist ?? "";
-        var title = p.Meta?.Title ?? "";
-        if (title.Length > 0)
-            return artist.Length > 0 ? $"{artist} - {title}" : title;
+        if (p.Meta?.DisplayName is { Length: > 0 } displayName)
+            return displayName;
         if (p.Meta?.OriginalFileName is { Length: > 0 } name)
             return name;
         return p.FilePath is { } fp ? Path.GetFileName(fp) : "(no track)";

@@ -19,6 +19,9 @@ internal sealed class UiTheme : IDisposable
     /// <summary>The current selection (Auto-play / a pinned source) and the "(autoplaying)" tag. Hunter green.</summary>
     public Vector4 Accent { get; } = new(0.30f, 0.62f, 0.37f, 1f);
 
+    /// <summary>Blue used for manual queue markers.</summary>
+    public Vector4 QueueAccent { get; } = new(0.30f, 0.443333f, 0.62f, 1f);
+
     /// <summary>"Off", a muted red.</summary>
     public Vector4 Silent { get; } = new(0.72f, 0.33f, 0.33f, 1f);
 
@@ -65,7 +68,10 @@ internal sealed class UiTheme : IDisposable
 
     /// <summary>Completes once every font handle has finished building.</summary>
     public Task WaitFontsReadyAsync(CancellationToken ct) =>
-        Task.WhenAll(HeaderFont.WaitAsync(ct), MediumFont.WaitAsync(ct), IconTextFont.WaitAsync(ct));
+        Task.WhenAll(
+            HeaderFont.WaitAsync(ct),
+            MediumFont.WaitAsync(ct),
+            IconTextFont.WaitAsync(ct));
 
     public void Dispose()
     {

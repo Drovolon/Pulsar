@@ -36,13 +36,13 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         server.SetPlaying(trackA, positionSeconds: 30, durationSeconds: 120,
                           artist: "Band", title: "First");
         var client = server.CreateClient();
-        watcher = new Watcher(new SseFeed(client), client, isWine: false, new Configuration());
+        watcher = new Watcher(new SseFeed(client), client, isWine: false);
 
         await TestWait.Assert(() => watcher.Current is not null, "initial state becomes a snapshot");
         var s = watcher.Current!;
         Assert.Equal(trackA, s.FilePath);
         Assert.True(s.IsPlaying);
-        Assert.Equal("First", s.Meta.Title);
+        Assert.Equal("Band - First", s.Meta.DisplayName);
         Assert.True(watcher.Status.Connected);
 
         // DJ pauses.
@@ -69,7 +69,7 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         var trackB = TestData.CreateTrack(dir, "b.flac");
         server.SetStopped();
         var client = server.CreateClient();
-        watcher = new Watcher(new SseFeed(client), client, isWine: false, new Configuration());
+        watcher = new Watcher(new SseFeed(client), client, isWine: false);
         await TestWait.Assert(() => watcher.Status.Connected, "the initial stopped frame arrives");
 
         var seen = new List<(string? Path, bool? Playing)>();

@@ -33,4 +33,12 @@ public class UiUtilTests
         for (var pos = 0f; pos <= 1f; pos += 0.01f)
             Assert.Equal(pos, UiUtil.AmplitudeToSlider(UiUtil.SliderToAmplitude(pos)), 3);
     }
+
+    [Fact]
+    public void Library_queue_positions_use_a_compact_label()
+    {
+        Assert.Equal("", BroadcastTab.QueuePositionsLabel(null));
+        Assert.Equal("[2]", BroadcastTab.QueuePositionsLabel([2]));
+        Assert.Equal("[2,5]", BroadcastTab.QueuePositionsLabel([2, 5]));
+    }
 }

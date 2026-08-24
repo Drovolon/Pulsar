@@ -14,17 +14,23 @@ internal abstract record EngineAction
     /// Do nothing, except set current = desired. (No engine change needed)
     /// </summary>
     internal sealed record None : EngineAction;
+
     /// <summary>
     /// Do nothing, but keep current != desired for later reevaluation.
     /// (In other words, a future Reevaluate call will result in a different
     /// EngineAction result.)
     /// </summary>
     internal sealed record Wait : EngineAction;
+
     /// <summary> Load a new song! if Playing, then also start playing it. </summary>
     internal sealed record Load(string Path, TimeSpan Position, bool Playing) : EngineAction;
+
     internal sealed record Seek(TimeSpan Position) : EngineAction;
+
     internal sealed record Pause : EngineAction;
+
     internal sealed record Resume : EngineAction;
+
     internal sealed record Stop : EngineAction;
 }
 
@@ -47,16 +53,14 @@ internal static class SyncDecider
     /// when the next song comes in.
     /// </summary>
     internal static readonly TimeSpan MaxLag = TimeSpan.FromSeconds(15); // internal for tests
+
     /// <summary>
     /// How far to target behind the DJ. This adds a little extra cushion onto MaxLag
     /// to allow the DJ to sync their song while we finish it up.
     /// </summary>
     internal static readonly TimeSpan TargetLag = TimeSpan.FromSeconds(5); // internal for tests
 
-    internal static EngineAction Decide(
-        PairData? current,
-        PairData? desired,
-        EngineSnapshot engine)
+    internal static EngineAction Decide(PairData? current, PairData? desired, EngineSnapshot engine)
     {
         var now = engine.ObservedAt;
 
@@ -65,7 +69,9 @@ internal static class SyncDecider
             return engine.Path is null ? new EngineAction.None() : new EngineAction.Stop();
 
         // If we're already on the same cursor epoch, there's nothing to do
-        if (current is not null && desired.CursorEpoch == current.CursorEpoch)
+        if (current is not null &&
+            desired.CursorEpoch == current.CursorEpoch &&
+            desired.FilePath == current.FilePath)
             return new EngineAction.None();
 
         // If desired is to play, calculate the position the DJ is at based on their observedAt timestamp
@@ -87,9 +93,9 @@ internal static class SyncDecider
 
         if (engine.Path != desired.FilePath) // not currently playing the desired song!
         {
-            if (current is not null
-                && engine.Path == current.FilePath
-                && engine is { State: PlaybackState.Playing, Position: { } prev })
+            if (current is not null &&
+                engine.Path == current.FilePath &&
+                engine is { State: PlaybackState.Playing, Position: { } prev })
             {
                 // We will wait up to MaxLag seconds for the current song to finish
                 // before going to the next one.
@@ -97,6 +103,7 @@ internal static class SyncDecider
                 if (remaining > TimeSpan.Zero && remaining <= MaxLag)
                     return new EngineAction.Wait();
             }
+
             return new EngineAction.Load(desired.FilePath, startPos, desired.IsPlaying);
         }
 
@@ -104,14 +111,14 @@ internal static class SyncDecider
         return (isPlaying: desired.IsPlaying, nowPlaying: engine.State == PlaybackState.Playing) switch
         {
             (true, true) => InSync(engine, startPos)
-                                    ? new EngineAction.None() // already in sync, do nothing
-                                    : new EngineAction.Seek(startPos),
+                                ? new EngineAction.None() // already in sync, do nothing
+                                : new EngineAction.Seek(startPos),
             (false, true) => new EngineAction.Pause(),
             (true, false) => new EngineAction.Resume(),
             (false, false) => new EngineAction.Seek(startPos),
         };
     }
 
-    private static bool InSync(EngineSnapshot engine, TimeSpan startPos)
-        => engine.Position is { } p && (p.Current - startPos).Duration() <= MaxLag;
+    private static bool InSync(EngineSnapshot engine, TimeSpan startPos) =>
+        engine.Position is { } p && (p.Current - startPos).Duration() <= MaxLag;
 }

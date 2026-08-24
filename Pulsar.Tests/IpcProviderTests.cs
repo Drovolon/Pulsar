@@ -113,7 +113,7 @@ public class IpcProviderTests : IAsyncLifetime
         Assert.Equal(PulsarApiVersions.Current, gates.ApiVersion.Func!());
 
         var track = TestData.CreateTrack(dir, "song.flac");
-        await broadcast.SetSource(new FakeMusicSource { Current = TestData.Snap(track) });
+        await broadcast.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = TestData.Snap(track) });
         await TestWait.Assert(() => gates.PlayerDataChanged.Sent.Count > 0, "manifest reaches the wire");
 
         // camelCase is OUR PropertyNamingPolicy choice - no compile error guards it,
@@ -133,7 +133,7 @@ public class IpcProviderTests : IAsyncLifetime
         Assert.Equal(ControllablePrepareService.Sha1Hash, queried.Current.Sha1Hash);
         Assert.Equal(cursorJson, queried.Payload);
 
-        await broadcast.SetSource(null);
+        broadcast.SetOnAir(false);
         await TestWait.Assert(() =>
             gates.PlayerDataChanged.Sent[^1] is [null],
             "a stop goes out as null player data");
@@ -148,7 +148,7 @@ public class IpcProviderTests : IAsyncLifetime
         var current = TestData.CreateTrack(dir, "current.flac");
         var next = TestData.CreateTrack(dir, "next.flac");
 
-        await broadcast.SetSource(new FakeMusicSource { Current = TestData.Snap(current, next: next) });
+        await broadcast.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = TestData.Snap(current, next: next) });
         await TestWait.Assert(
             () => gates.PlayerDataChanged.Sent.LastOrDefault() is [PulsarPlayerData { Prefetch: null }],
             "the current-only manifest reaches IPC");
