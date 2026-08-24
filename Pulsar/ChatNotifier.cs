@@ -7,17 +7,15 @@ namespace Pulsar;
 internal static class ChatNotifier
 {
     // from `/xldata` -> UIColor
-    private const ushort PulsarNameColor = 48; // purple
+    private const ushort PulsarNameColor = 48;   // purple
     private const ushort InformationColor = 504; // green
-    private const ushort WarningColor = 31; // yellow
+    private const ushort WarningColor = 31;      // yellow
 
-    public static void Information(string heading, string message) => Print(builder => builder
-        .AddUiForeground(heading, InformationColor)
-        .AddText(message));
+    public static void Information(string heading, string message) =>
+        Print(builder => builder.AddUiForeground(heading, InformationColor).AddText(message));
 
-    public static void Warning(string heading, string message) => Print(builder => builder
-        .AddUiForeground(heading, WarningColor)
-        .AddText(message));
+    public static void Warning(string heading, string message) =>
+        Print(builder => builder.AddUiForeground(heading, WarningColor).AddText(message));
 
     private static void Print(Action<SeStringBuilder> build)
     {

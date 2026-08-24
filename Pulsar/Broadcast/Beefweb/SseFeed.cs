@@ -52,13 +52,21 @@ public sealed class SseFeed(PlayerClient client, TimeSpan? backoff = null) : IFe
                     if (!moved) break; // stream ended -> try reconnect
                     if (st is not null) yield return BeefwebObservationMapper.Map(st);
                 }
+            } finally
+            {
+                await en.DisposeAsync();
             }
-            finally { await en.DisposeAsync(); }
 
             SetConnected(false);
             if (ct.IsCancellationRequested) yield break;
-            try { await Task.Delay(backoff, ct); }
-            catch (OperationCanceledException) { yield break; }
+            try
+            {
+                await Task.Delay(backoff, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                yield break;
+            }
         }
     }
 

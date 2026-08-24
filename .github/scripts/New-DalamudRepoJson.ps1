@@ -70,7 +70,14 @@ function Copy-Property($Target, $Source, [string] $Name)
 function ConvertTo-NormalizedVersion([string] $Value)
 {
     $parsed = [Version]::Parse($Value)
-    $revision = if ($parsed.Revision -lt 0) { 0 } else { $parsed.Revision }
+    $revision = if ($parsed.Revision -lt 0)
+    {
+        0
+    }
+    else
+    {
+        $parsed.Revision
+    }
     return [Version]::new($parsed.Major, $parsed.Minor, $parsed.Build, $revision)
 }
 
@@ -85,13 +92,13 @@ $releaseVersion = ConvertTo-NormalizedVersion $Version
 $builtVersion = ConvertTo-NormalizedVersion $pluginManifest.AssemblyVersion
 if ($builtVersion -ne $releaseVersion)
 {
-    throw "Built manifest version '$($pluginManifest.AssemblyVersion)' does not match release version '$Version'."
+    throw "Built manifest version '$( $pluginManifest.AssemblyVersion )' does not match release version '$Version'."
 }
 
 $normalizedVersion = $releaseVersion.ToString()
 
 $downloadUrl = "$RepositoryUrl/releases/download/$Tag/Pulsar.zip"
-$lastUpdate = if ([string]::IsNullOrWhiteSpace($ReleaseUpdatedAt))
+$lastUpdate = if ( [string]::IsNullOrWhiteSpace($ReleaseUpdatedAt))
 {
     [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 }
@@ -181,4 +188,4 @@ if (-not [string]::IsNullOrWhiteSpace($outputDirectory))
 }
 
 $json = ConvertTo-Json -InputObject @($manifest) -Depth 16
-[IO.File]::WriteAllText($OutputPath, "$json`n", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($OutputPath, "$json`n",[Text.UTF8Encoding]::new($false))

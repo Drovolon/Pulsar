@@ -15,8 +15,8 @@ namespace Pulsar.Tests;
 /// </summary>
 public class EngineSessionTests
 {
-    private static EngineTarget Target(long revision, string path, PlaybackState state)
-        => new(revision, path, state, TimeSpan.Zero);
+    private static EngineTarget Target(long revision, string path, PlaybackState state) =>
+        new(revision, path, state, TimeSpan.Zero);
 
     [Fact]
     public async Task A_volume_drag_converges_on_the_final_value()
@@ -26,8 +26,7 @@ public class EngineSessionTests
 
         for (var i = 0; i <= 9; i++) session.SetVolume(i / 10f);
 
-        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.9f) < 0.001f,
-            "final slider value reaches the engine");
+        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.9f) < 0.001f, "final slider value reaches the engine");
     }
 
     [Fact]
@@ -39,8 +38,7 @@ public class EngineSessionTests
         for (var s = 1; s <= 9; s++) session.Seek(TimeSpan.FromSeconds(s));
 
         await TestWait.Assert(
-            () => engine.Calls.LastOrDefault(c => c.Op == "Seek")?.Arg is TimeSpan t
-                  && t == TimeSpan.FromSeconds(9),
+            () => engine.Calls.LastOrDefault(c => c.Op == "Seek")?.Arg is TimeSpan t && t == TimeSpan.FromSeconds(9),
             "final scrub position reaches the engine");
     }
 
@@ -51,9 +49,8 @@ public class EngineSessionTests
         await using var session = new EngineSession(engine);
 
         session.SetTarget(Target(1, @"C:\music\track.mp3", PlaybackState.Playing));
-        await TestWait.Assert(
-            () => engine.Snapshot is { State: PlaybackState.Playing, Path: @"C:\music\track.mp3" },
-            "load lands");
+        await TestWait.Assert(() => engine.Snapshot is { State: PlaybackState.Playing, Path: @"C:\music\track.mp3" },
+                              "load lands");
 
         await session.StopAsync();
         await TestWait.Assert(() => engine.Snapshot.State == PlaybackState.Stopped, "stop lands");
@@ -94,12 +91,9 @@ public class EngineSessionTests
         session.SetTarget(Target(2, b, PlaybackState.Playing));
         releaseLoad.TrySetResult();
 
-        await TestWait.Assert(
-            () => engine.Snapshot is { State: PlaybackState.Playing, Path: @"C:\music\b.mp3" },
-            "the final target wins");
-        Assert.Equal(
-            ["Load", "Pause", "Resume", "Pause", "Seek", "Stop", "Load"],
-            engine.Ops.Take(7));
+        await TestWait.Assert(() => engine.Snapshot is { State: PlaybackState.Playing, Path: @"C:\music\b.mp3" },
+                              "the final target wins");
+        Assert.Equal(["Load", "Pause", "Resume", "Pause", "Seek", "Stop", "Load"], engine.Ops.Take(7));
     }
 
     [Fact]
@@ -129,23 +123,20 @@ public class EngineSessionTests
         var b = @"C:\music\b.mp3";
         EngineSessionEnded? ended = null;
         session.OnPlaybackEnded += value => ended = value;
-        session.OnReconnected += () =>
-            session.SetTarget(Target(2, b, PlaybackState.Playing));
+        session.OnReconnected += () => session.SetTarget(Target(2, b, PlaybackState.Playing));
 
         session.SetTarget(Target(1, a, PlaybackState.Playing));
         await TestWait.Assert(() => engine.Snapshot.Path == a, "the original target loads");
         engine.DisconnectTrack();
-        await TestWait.Assert(() => ended?.Reason == EndReason.Disconnected,
-            "the disconnect reaches the session");
+        await TestWait.Assert(() => ended?.Reason == EndReason.Disconnected, "the disconnect reaches the session");
 
         session.OnEngineReconnected();
 
         await TestWait.Assert(() => engine.Snapshot.Path == b, "the newly resolved target loads");
         Assert.Equal(
             [a, b],
-            engine.Calls
-                .Where(call => call.Op == "Load")
-                .Select(call => ((ValueTuple<string, TimeSpan, bool>)call.Arg!).Item1));
+            engine.Calls.Where(call => call.Op == "Load")
+                  .Select(call => ((ValueTuple<string, TimeSpan, bool>)call.Arg!).Item1));
     }
 
     [Fact]
@@ -155,9 +146,7 @@ public class EngineSessionTests
         await using var session = new EngineSession(engine);
         EngineSessionEnded? ended = null;
         session.OnPlaybackEnded += value => ended = value;
-        engine.Intercept = op => op == "Load"
-            ? new InvalidOperationException("host rejected the load")
-            : null;
+        engine.Intercept = op => op == "Load" ? new InvalidOperationException("host rejected the load") : null;
 
         session.SetTarget(Target(7, @"C:\music\bad.mp3", PlaybackState.Playing));
         await TestWait.Assert(() => ended is not null, "the failed target is reported");
@@ -165,8 +154,7 @@ public class EngineSessionTests
         engine.Intercept = null;
 
         session.SetVolume(0.7f);
-        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.7f) < 0.001f,
-            "the session is alive after the failure");
+        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.7f) < 0.001f, "the session is alive after the failure");
     }
 
     [Fact]
@@ -183,15 +171,8 @@ public class EngineSessionTests
         var playbackId = engine.Snapshot.PlaybackId;
 
         var sequence = engine.Snapshot.Sequence + 1;
-        engine.RaiseUpdated(new EngineSnapshot(
-            PlaybackState.Stopped,
-            null,
-            null,
-            null,
-            DateTimeOffset.UtcNow,
-            playbackId,
-            sequence,
-            EndReason.Finished));
+        engine.RaiseUpdated(new EngineSnapshot(PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow, playbackId,
+                                               sequence, EndReason.Finished));
 
         await TestWait.Assert(() => ended is not null, "the terminal update is attributed");
         Assert.Equal(new EngineSessionEnded(7, EndReason.Finished), ended);
@@ -236,8 +217,7 @@ public class EngineSessionTests
             Sequence = baseline + 2,
             ObservedAt = DateTimeOffset.UtcNow,
         });
-        await TestWait.Assert(() => session.Snapshot.State == PlaybackState.Paused,
-            "the newer update is accepted");
+        await TestWait.Assert(() => session.Snapshot.State == PlaybackState.Paused, "the newer update is accepted");
         engine.RaiseUpdated(engine.Snapshot with
         {
             State = PlaybackState.Playing,
@@ -246,8 +226,7 @@ public class EngineSessionTests
             ObservedAt = DateTimeOffset.UtcNow,
         });
         session.SetVolume(0.4f);
-        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.4f) < 0.001f,
-            "the stale event has drained");
+        await TestWait.Assert(() => Math.Abs(engine.LastVolume - 0.4f) < 0.001f, "the stale event has drained");
 
         Assert.Equal(PlaybackState.Paused, session.Snapshot.State);
     }

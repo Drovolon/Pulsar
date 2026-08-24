@@ -15,6 +15,7 @@ namespace Pulsar.Tests.Fakes;
 public sealed class FakeRemoteEngine : IRemoteEngine
 {
     public sealed record Call(string Op, object? Arg = null);
+
     private sealed record DeferredLoad(string Path, TimeSpan Position, bool Playing, long PlaybackId);
 
     private readonly List<Call> calls = [];
@@ -38,7 +39,13 @@ public sealed class FakeRemoteEngine : IRemoteEngine
     /// <summary>Reported total track length while something is loaded.</summary>
     public TimeSpan TrackDuration
     {
-        get { lock (@lock) return trackDuration; }
+        get
+        {
+            lock (@lock)
+            {
+                return trackDuration;
+            }
+        }
         set
         {
             lock (@lock)
@@ -65,7 +72,13 @@ public sealed class FakeRemoteEngine : IRemoteEngine
 
     public IReadOnlyList<Call> Calls
     {
-        get { lock (@lock) return [.. calls]; }
+        get
+        {
+            lock (@lock)
+            {
+                return [.. calls];
+            }
+        }
     }
 
     public IReadOnlyList<string> Ops => [.. Calls.Select(c => c.Op)];
@@ -76,30 +89,28 @@ public sealed class FakeRemoteEngine : IRemoteEngine
         {
             lock (@lock)
             {
-                return new EngineSnapshot(
-                    state, path, null,
-                    path is null ? null : new PlaybackPosition(position, trackDuration),
-                    DateTimeOffset.UtcNow,
-                    playbackId,
-                    sequence,
-                    terminalReason);
+                return new EngineSnapshot(state, path, null,
+                                          path is null ? null : new PlaybackPosition(position, trackDuration),
+                                          DateTimeOffset.UtcNow, playbackId, sequence, terminalReason);
             }
         }
     }
 
     public event EventHandler<EngineSnapshot>? OnUpdated;
 
-    public Task<bool> WaitForCall(string op, TimeSpan? timeout = null)
-        => TestWait.Until(() => Ops.Contains(op), timeout);
+    public Task<bool> WaitForCall(string op, TimeSpan? timeout = null) => TestWait.Until(() => Ops.Contains(op), timeout);
 
     private void Enter(string op, object? arg = null)
     {
-        lock (@lock) calls.Add(new Call(op, arg));
+        lock (@lock)
+        {
+            calls.Add(new Call(op, arg));
+        }
+
         if (Intercept?.Invoke(op) is { } ex) throw ex;
     }
 
-    public async Task LoadAsync(
-        string loadPath, TimeSpan pos, bool startPlaying, long newPlaybackId, CancellationToken ct)
+    public async Task LoadAsync(string loadPath, TimeSpan pos, bool startPlaying, long newPlaybackId, CancellationToken ct)
     {
         Enter("Load", (loadPath, pos, startPlaying));
         if (Stall?.Invoke("Load") is { } hang) await hang;
@@ -109,8 +120,10 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             {
                 deferredLoad = new DeferredLoad(loadPath, pos, startPlaying, newPlaybackId);
             }
+
             return;
         }
+
         CommitLoad(loadPath, pos, startPlaying, newPlaybackId);
     }
 
@@ -122,6 +135,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             pending = deferredLoad;
             deferredLoad = null;
         }
+
         if (pending is not null)
             CommitLoad(pending.Path, pending.Position, pending.Playing, pending.PlaybackId);
     }
@@ -137,12 +151,12 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             terminalReason = null;
             sequence++;
         }
+
         PublishUpdated();
     }
 
     public Task LoadBytesAsync(
-        string displayPath, byte[] audioData, TimeSpan pos,
-        bool startPlaying, long newPlaybackId, CancellationToken ct)
+        string displayPath, byte[] audioData, TimeSpan pos, bool startPlaying, long newPlaybackId, CancellationToken ct)
     {
         Enter("LoadBytes", (displayPath, pos, startPlaying));
         lock (@lock)
@@ -155,6 +169,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             terminalReason = null;
             sequence++;
         }
+
         PublishUpdated();
         return Task.CompletedTask;
     }
@@ -171,6 +186,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             terminalReason = null;
             sequence++;
         }
+
         PublishUpdated();
     }
 
@@ -187,6 +203,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
                 changed = true;
             }
         }
+
         // Like FilePlayer: no-op commands raise no OnUpdated.
         if (changed) PublishUpdated();
         return Task.CompletedTask;
@@ -205,6 +222,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
                 changed = true;
             }
         }
+
         if (changed) PublishUpdated();
         return Task.CompletedTask;
     }
@@ -229,6 +247,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
                 changed = true;
             }
         }
+
         if (changed) PublishUpdated();
         return Task.CompletedTask;
     }
@@ -271,6 +290,7 @@ public sealed class FakeRemoteEngine : IRemoteEngine
             terminalReason = reason;
             sequence++;
         }
+
         var terminal = Snapshot;
         if (!SuppressUpdatedEvents && terminal.PlaybackId == endedPlaybackId)
             OnUpdated?.Invoke(this, terminal);

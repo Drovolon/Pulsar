@@ -10,11 +10,11 @@ public class UiUtilTests
     [InlineData(0, "0:00")]
     [InlineData(59, "0:59")]
     [InlineData(65, "1:05")]
-    [InlineData(3661, "61:01")]   // minutes never roll into hours - by design
-    [InlineData(-65, "-1:05")]    // sign once, components absolute (honest + debuggable)
+    [InlineData(3661, "61:01")] // minutes never roll into hours - by design
+    [InlineData(-65, "-1:05")]  // sign once, components absolute (honest + debuggable)
     [InlineData(-5, "-0:05")]
-    public void Formats_minutes_and_seconds(int seconds, string expected)
-        => Assert.Equal(expected, UiUtil.FormatTime(TimeSpan.FromSeconds(seconds)));
+    public void Formats_minutes_and_seconds(int seconds, string expected) =>
+        Assert.Equal(expected, UiUtil.FormatTime(TimeSpan.FromSeconds(seconds)));
 
     [Fact]
     public void Volume_taper_round_trips_exactly_at_the_endpoints()

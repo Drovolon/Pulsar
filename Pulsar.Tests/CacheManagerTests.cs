@@ -9,7 +9,7 @@ public class CacheManagerTests : IDisposable
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-cm-test-");
 
-    public void Dispose() => dir.Delete(recursive: true);
+    public void Dispose() => dir.Delete(true);
 
     private string CreateArtifact(string name, int bytes, TimeSpan age)
     {

@@ -1,4 +1,3 @@
-
 using System;
 using Pulsar.Listening;
 
@@ -16,8 +15,7 @@ public sealed record SourceSnapshot(
 /// Identifies one playback state. A source creates a new instance after a load,
 /// seek, pause, resume, or start. Queue edits keep the current instance.
 /// </summary>
-public sealed class SourceCursor
-{ }
+public sealed class SourceCursor { }
 
 /// <summary>
 /// Groups a playback identity with its snapshot. Events tell consumers to reread it.

@@ -1,7 +1,7 @@
 <Project>
-  <!-- Must be set before Dalamud.NET.Sdk's props evaluate its default (csproj body is too late):
-       tests aren't a plugin, so don't run DalamudPackager against them. -->
-  <PropertyGroup>
-    <Use_DalamudPackager>false</Use_DalamudPackager>
-  </PropertyGroup>
+    <!-- Must be set before Dalamud.NET.Sdk's props evaluate its default (csproj body is too late):
+         tests aren't a plugin, so don't run DalamudPackager against them. -->
+    <PropertyGroup>
+        <Use_DalamudPackager>false</Use_DalamudPackager>
+    </PropertyGroup>
 </Project>

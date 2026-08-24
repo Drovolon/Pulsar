@@ -38,16 +38,11 @@ internal sealed class CacheManager
         Directory.CreateDirectory(cacheDirectory);
     }
 
-    public string CachePathFor(string path)
-    {
-        return CachePathFor(PrepInput.Capture(path));
-    }
+    public string CachePathFor(string path) => CachePathFor(PrepInput.Capture(path));
 
-    internal string CachePathFor(PrepInput input)
-        => Path.Combine(cacheDirectory, KeyFor(input));
+    internal string CachePathFor(PrepInput input) => Path.Combine(cacheDirectory, KeyFor(input));
 
-    internal string AttemptPathFor(PrepInput input)
-        => $"{CachePathFor(input)}.attempt-{Guid.NewGuid():N}";
+    internal string AttemptPathFor(PrepInput input) => $"{CachePathFor(input)}.attempt-{Guid.NewGuid():N}";
 
     /// <summary>
     /// Best-effort access-time bump for a served artifact, so LRU eviction sees it as
@@ -70,11 +65,13 @@ internal sealed class CacheManager
     {
         try
         {
-            var files = new DirectoryInfo(cacheDirectory)
-                        .GetFiles()
-                        .Where(f => !f.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
-                        .Where(f => !f.Name.Contains(".attempt-", StringComparison.OrdinalIgnoreCase))
-                        .OrderBy(f => f.LastAccessTimeUtc).ToArray();
+            var files = new DirectoryInfo(cacheDirectory).GetFiles()
+                                                         .Where(f => !f.Name.EndsWith(
+                                                                         ".tmp", StringComparison.OrdinalIgnoreCase))
+                                                         .Where(f => !f.Name.Contains(
+                                                                         ".attempt-", StringComparison.OrdinalIgnoreCase))
+                                                         .OrderBy(f => f.LastAccessTimeUtc)
+                                                         .ToArray();
             var currentSize = files.Sum(f => f.Length);
 
             if (currentSize <= CacheCapBytes) return;

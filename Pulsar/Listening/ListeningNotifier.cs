@@ -18,13 +18,17 @@ internal sealed class ListeningNotifier(Configuration config)
                 break;
             case ListeningOutput.SilentPlaybackStarted(var name, var reason):
                 if (config.NotifyMutedPlayback)
-                    ChatNotifier.Information("Muted Playback: ",
-                        $"{name} started playing, but {SilenceReason(reason)}.");
+                {
+                    ChatNotifier.Information("Muted Playback: ", $"{name} started playing, but {SilenceReason(reason)}.");
+                }
+
                 break;
             case ListeningOutput.TrackChanged(var track):
                 if (config.NotifyListeningTrackChanged)
-                    ChatNotifier.Information(
-                        "Now Playing: ", $"{track.SourceName} is now playing {TrackLabel(track)}.");
+                {
+                    ChatNotifier.Information("Now Playing: ", $"{track.SourceName} is now playing {TrackLabel(track)}.");
+                }
+
                 break;
         }
     }
@@ -35,14 +39,11 @@ internal sealed class ListeningNotifier(Configuration config)
         var nearby = $"{track.SourceName} is playing {label} nearby";
         var (enabled, message) = context switch
         {
-            NearbyBroadcastContext.CurrentlyBroadcasting =>
-                (config.NotifyNearbyBroadcasterWhileBroadcasting,
-                 $"{nearby}, but you're currently broadcasting."),
-            NearbyBroadcastContext.AutoPlayOff =>
-                (config.NotifyNearbyBroadcasterAutoPlayOff,
-                 $"{nearby}, but Auto-play is Off."),
-            NearbyBroadcastContext.Normal =>
-                (config.NotifyNearbyBroadcaster, $"{track.SourceName} is playing {label}."),
+            NearbyBroadcastContext.CurrentlyBroadcasting => (config.NotifyNearbyBroadcasterWhileBroadcasting,
+                                                                $"{nearby}, but you're currently broadcasting."),
+            NearbyBroadcastContext.AutoPlayOff => (config.NotifyNearbyBroadcasterAutoPlayOff,
+                                                      $"{nearby}, but Auto-play is Off."),
+            NearbyBroadcastContext.Normal => (config.NotifyNearbyBroadcaster, $"{track.SourceName} is playing {label}."),
             _ => throw new ArgumentOutOfRangeException(nameof(context)),
         };
 
@@ -56,12 +57,13 @@ internal sealed class ListeningNotifier(Configuration config)
         return Path.GetFileName(track.FilePath);
     }
 
-    private static string SilenceReason(ListeningSilenceReason reason) => reason switch
-    {
-        ListeningSilenceReason.MasterMuted => "your master listening volume is muted",
-        ListeningSilenceReason.PairMuted => "their listening volume is muted",
-        ListeningSilenceReason.MasterVolumeZero => "your master listening volume is set to zero",
-        ListeningSilenceReason.PairVolumeZero => "their listening volume is set to zero",
-        _ => throw new ArgumentOutOfRangeException(nameof(reason)),
-    };
+    private static string SilenceReason(ListeningSilenceReason reason) =>
+        reason switch
+        {
+            ListeningSilenceReason.MasterMuted => "your master listening volume is muted",
+            ListeningSilenceReason.PairMuted => "their listening volume is muted",
+            ListeningSilenceReason.MasterVolumeZero => "your master listening volume is set to zero",
+            ListeningSilenceReason.PairVolumeZero => "their listening volume is set to zero",
+            _ => throw new ArgumentOutOfRangeException(nameof(reason)),
+        };
 }

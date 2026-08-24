@@ -22,7 +22,9 @@ internal static class UiUtil
     internal static void IconColored(FontAwesomeIcon icon, Vector4 color)
     {
         using (ImRaii.PushFont(UiBuilder.IconFont))
+        {
             ImGui.TextColored(color, icon.ToIconString());
+        }
     }
 
     internal static void NowPlaying(UiTheme theme, FontAwesomeIcon icon, string text)
@@ -49,7 +51,7 @@ internal static class UiUtil
     internal static void ProgressMeter(UiTheme theme, float fraction, bool playing, string? trailing = null)
     {
         var (origin, barW, rowH) = MeterLayout(trailing);
-        DrawMeterBar(theme, origin, barW, rowH, fraction, playing, knob: false);
+        DrawMeterBar(theme, origin, barW, rowH, fraction, playing, false);
         ImGui.Dummy(new Vector2(barW, rowH));
         MeterTrailing(trailing);
     }
@@ -57,8 +59,8 @@ internal static class UiUtil
     internal readonly record struct ScrubResult(bool Activated, bool Deactivated);
 
     // An interactive ProgressMeter. Has a draggable knob.
-    internal static ScrubResult Scrubber(UiTheme theme, string id, ref float value, float max, bool playing,
-        string? trailing = null)
+    internal static ScrubResult Scrubber(
+        UiTheme theme, string id, ref float value, float max, bool playing, string? trailing = null)
     {
         var (origin, barW, rowH) = MeterLayout(trailing);
 
@@ -69,7 +71,7 @@ internal static class UiUtil
             value = Math.Clamp((ImGui.GetMousePos().X - origin.X) / barW, 0f, 1f) * max;
         if (ImGui.IsItemHovered()) ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
 
-        DrawMeterBar(theme, origin, barW, rowH, max > 0f ? value / max : 0f, playing, knob: true);
+        DrawMeterBar(theme, origin, barW, rowH, max > 0f ? value / max : 0f, playing, true);
         MeterTrailing(trailing);
         return new ScrubResult(activated, deactivated);
     }
@@ -91,8 +93,8 @@ internal static class UiUtil
     }
 
     // Meter bar used for progress
-    private static void DrawMeterBar(UiTheme theme, Vector2 origin, float barW, float rowH, float fraction,
-        bool playing, bool knob)
+    private static void DrawMeterBar(
+        UiTheme theme, Vector2 origin, float barW, float rowH, float fraction, bool playing, bool knob)
     {
         var scale = ImGuiHelpers.GlobalScale;
         var h = 3f * scale;
@@ -103,10 +105,13 @@ internal static class UiUtil
         var dl = ImGui.GetWindowDrawList();
         var fillCol = playing ? theme.Accent : theme.Accent with { W = 0.5f };
         dl.AddRectFilled(new Vector2(origin.X, top), new Vector2(origin.X + barW, top + h),
-            ImGui.GetColorU32(theme.Neutral with { W = 0.25f }), rounding);
+                         ImGui.GetColorU32(theme.Neutral with { W = 0.25f }), rounding);
         if (frac > 0f)
+        {
             dl.AddRectFilled(new Vector2(origin.X, top), new Vector2(origin.X + (barW * frac), top + h),
-                ImGui.GetColorU32(fillCol), rounding);
+                             ImGui.GetColorU32(fillCol), rounding);
+        }
+
         if (knob)
         {
             var c = new Vector2(origin.X + (barW * frac), top + (h * 0.5f));
@@ -145,7 +150,9 @@ internal static class UiUtil
 
         Vector2 size;
         using (theme.HeaderFont.Push())
+        {
             size = ImGui.CalcTextSize(text);
+        }
 
         var origin = ImGui.GetCursorScreenPos();
         var avail = ImGui.GetContentRegionAvail().X;
@@ -159,18 +166,22 @@ internal static class UiUtil
 
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + ((avail - size.X) * 0.5f));
         using (theme.HeaderFont.Push())
+        {
             ImGui.TextUnformatted(text);
+        }
 
         ImGuiHelpers.ScaledDummy(2f);
     }
 
     // Use a cubic taper (same as PulseAudio on Linux, fwiw) for the volume slider.
     internal static float SliderToAmplitude(float pos) => pos * pos * pos;
+
     // We use linear amplitude in the app itself; the cubic taper is only UI-side.
     internal static float AmplitudeToSlider(float amp) => MathF.Cbrt(amp);
 
-    internal static FaderResult Fader(UiTheme theme, string id, string label, ref float value,
-        bool muted, bool enabled = true, float? labelWidth = null, string? sliderTooltip = null)
+    internal static FaderResult Fader(
+        UiTheme theme, string id, string label, ref float value, bool muted, bool enabled = true, float? labelWidth = null,
+        string? sliderTooltip = null)
     {
         var scale = ImGuiHelpers.GlobalScale;
         using var idScope = ImRaii.PushId(id);
@@ -179,7 +190,7 @@ internal static class UiUtil
         var fp = ImGui.GetStyle().FramePadding;
         using var pad = ImRaii.PushStyle(ImGuiStyleVar.FramePadding, new Vector2(fp.X + (3f * scale), fp.Y + (2f * scale)));
 
-        var labelW = labelWidth ?? (96f * scale);
+        var labelW = labelWidth ?? 96f * scale;
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted(Ellipsize(label, labelW - (6f * scale)));
 
@@ -198,7 +209,7 @@ internal static class UiUtil
 
         ImGui.SameLine();
         var muteToggled = IconButton("mute", muted ? FontAwesomeIcon.VolumeMute : FontAwesomeIcon.VolumeUp,
-            muted ? "Unmute" : "Mute");
+                                     muted ? "Unmute" : "Mute");
 
         return new FaderResult(changed, committed, muteToggled);
     }

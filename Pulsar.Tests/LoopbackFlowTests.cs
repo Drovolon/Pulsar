@@ -46,13 +46,8 @@ public class LoopbackFlowTests : IAsyncLifetime
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
         debugLoopback = new DebugLoopbackController(ipc);
-        coordinator = new ApplicationCoordinator(
-            broadcast,
-            listening,
-            ipc,
-            debugLoopback,
-            new ListeningNotifier(config),
-            new BgmMuter(config, gameBgm));
+        coordinator = new ApplicationCoordinator(broadcast, listening, ipc, debugLoopback, new ListeningNotifier(config),
+                                                 new BgmMuter(config, gameBgm));
         debugLoopback.SetEnabled(true);
     }
 
@@ -63,20 +58,17 @@ public class LoopbackFlowTests : IAsyncLifetime
         await coordinator.DisposeAsync();
         ipc.Dispose();
         await prep.DisposeAsync();
-        dir.Delete(recursive: true);
+        dir.Delete(true);
     }
 
     private string CreateTrack(string name) => TestData.CreateTrack(dir, name);
 
-    private static SourceSnapshot Snap(string file, bool playing = true)
-        => TestData.Snap(file, playing);
+    private static SourceSnapshot Snap(string file, bool playing = true) => TestData.Snap(file, playing);
 
-    private string? LatestSyncedFile
-        => broadcast.CurrentPlayerData()?.CurrentPath;
+    private string? LatestSyncedFile => broadcast.CurrentPlayerData()?.CurrentPath;
 
     // Synced paths are content-hash names: identify tracks by the manifest's OriginalFileName.
-    private string? LatestManifestName
-        => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName;
+    private string? LatestManifestName => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName;
 
     /// <summary>Start the DJ on a track and pin the loopback pair, like a real loopback session.</summary>
     private async Task<FakeMusicSource> StartLoopbackSession(string track)
@@ -93,7 +85,7 @@ public class LoopbackFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_paused_broadcast_still_routes_the_broadcast_bgm_mute_reason()
     {
-        var source = new FakeMusicSource { Current = Snap(CreateTrack("paused.flac"), playing: false) };
+        var source = new FakeMusicSource { Current = Snap(CreateTrack("paused.flac"), false) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
         await TestWait.Assert(() => gameBgm.Muted, "broadcasting mutes game BGM");
 
@@ -139,7 +131,7 @@ public class LoopbackFlowTests : IAsyncLifetime
 
         var expected = config.ListeningMasterVolume * TestData.DbToLinear(service.GainDb);
         await TestWait.Assert(() => Math.Abs(listenEngine.LastVolume - expected) < 0.001f,
-            "the manifest's ReplayGain shapes the listener volume");
+                              "the manifest's ReplayGain shapes the listener volume");
     }
 
     [Fact]
@@ -149,15 +141,13 @@ public class LoopbackFlowTests : IAsyncLifetime
         var source = await StartLoopbackSession(track);
         await TestWait.Assert(() => listenEngine.Snapshot.State == PlaybackState.Playing, "playing");
 
-        source.Current = Snap(track, playing: false);
+        source.Current = Snap(track, false);
         source.RaiseChanged();
-        await TestWait.Assert(() => listenEngine.Snapshot.State == PlaybackState.Paused,
-            "DJ pause pauses the listener");
+        await TestWait.Assert(() => listenEngine.Snapshot.State == PlaybackState.Paused, "DJ pause pauses the listener");
 
         source.Current = Snap(track);
         source.RaiseChanged();
-        await TestWait.Assert(() => listenEngine.Snapshot.State == PlaybackState.Playing,
-            "DJ resume resumes the listener");
+        await TestWait.Assert(() => listenEngine.Snapshot.State == PlaybackState.Playing, "DJ resume resumes the listener");
     }
 
     [Fact]
@@ -180,9 +170,8 @@ public class LoopbackFlowTests : IAsyncLifetime
 
         gate.Open();
 
-        await TestWait.Assert(
-            () => listenEngine.Snapshot.Path is { } p && p != oldSynced && p == LatestSyncedFile,
-            "listener swaps to the new track once it's prepared");
+        await TestWait.Assert(() => listenEngine.Snapshot.Path is { } p && p != oldSynced && p == LatestSyncedFile,
+                              "listener swaps to the new track once it's prepared");
     }
 
     [Fact]
@@ -203,10 +192,9 @@ public class LoopbackFlowTests : IAsyncLifetime
         source.Current = Snap(first);
         source.RaiseChanged();
         await TestWait.Assert(
-            () => LatestManifestName == "first.flac"
-                  && listenEngine.Snapshot.Path == firstSynced
-                  && listenEngine.Snapshot.State == PlaybackState.Playing,
-            "returning to the prepared first track converges");
+            () => LatestManifestName == "first.flac" &&
+                  listenEngine.Snapshot.Path == firstSynced &&
+                  listenEngine.Snapshot.State == PlaybackState.Playing, "returning to the prepared first track converges");
 
         skippedGate.Open();
         await Task.Delay(200); // a late completion must not disturb the converged state
@@ -232,10 +220,10 @@ public class LoopbackFlowTests : IAsyncLifetime
         // The new source replaces the old one without a stop in between.
         gate.Open();
         await TestWait.Assert(
-            () => listenEngine.Snapshot.Path is { } p && p == LatestSyncedFile
-                  && LatestManifestName == "foobar-song.flac"
-                  && listenEngine.Snapshot.State == PlaybackState.Playing,
-            "loopback resumes on the new source's track");
+            () => listenEngine.Snapshot.Path is { } p &&
+                  p == LatestSyncedFile &&
+                  LatestManifestName == "foobar-song.flac" &&
+                  listenEngine.Snapshot.State == PlaybackState.Playing, "loopback resumes on the new source's track");
     }
 
     [Fact]
@@ -247,21 +235,19 @@ public class LoopbackFlowTests : IAsyncLifetime
         var localArtifact = LatestSyncedFile;
 
         var beefwebTrack = CreateTrack("beefweb-song.flac");
-        await broadcast.InstallProviderForTests(
-            BroadcastProvider.Beefweb,
-            new FakeMusicSource { Current = Snap(beefwebTrack) });
+        await broadcast.InstallProviderForTests(BroadcastProvider.Beefweb,
+                                                new FakeMusicSource { Current = Snap(beefwebTrack) });
         broadcast.SetProvider(BroadcastProvider.Beefweb);
         await TestWait.Assert(
-            () => LatestManifestName == "beefweb-song.flac"
-                  && listenEngine.Snapshot.Path == LatestSyncedFile,
+            () => LatestManifestName == "beefweb-song.flac" && listenEngine.Snapshot.Path == LatestSyncedFile,
             "beefweb plays");
 
         broadcast.SetProvider(BroadcastProvider.Local);
         await TestWait.Assert(
-            () => LatestManifestName == "mod-song.flac"
-                  && listenEngine.Snapshot.Path == localArtifact
-                  && listenEngine.Snapshot.State == PlaybackState.Playing
-                  && listening.Playback.Status == ListenerPlaybackStatus.Playing,
+            () => LatestManifestName == "mod-song.flac" &&
+                  listenEngine.Snapshot.Path == localArtifact &&
+                  listenEngine.Snapshot.State == PlaybackState.Playing &&
+                  listening.Playback.Status == ListenerPlaybackStatus.Playing,
             "the existing local provider becomes live again");
 
         Assert.Equal(ListenerPlaybackStatus.Playing, listening.Playback.Status);
@@ -282,21 +268,13 @@ public class LoopbackFlowTests : IAsyncLifetime
         var feed = new ControllableFeed();
         var server = new FakeBeefwebServer();
         await broadcast.SetBeefwebSource(new Watcher(feed, server.CreateClient(), false));
-        await TestWait.Assert(
-            () => listening.View.All(p => p.Ident != MonitorIdent),
-            "stopping the local monitor clears loopback during the switch");
+        await TestWait.Assert(() => listening.View.All(p => p.Ident != MonitorIdent),
+                              "stopping the local monitor clears loopback during the switch");
 
         var beefwebTrack = CreateTrack("beefweb.flac");
         var gate = service.GateFor(beefwebTrack);
-        feed.Push(new Observation(
-            beefwebTrack,
-            PlaybackState.Playing,
-            TimeSpan.Zero,
-            TimeSpan.FromMinutes(3),
-            "Beefweb",
-            "DJ",
-            DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
+        feed.Push(new Observation(beefwebTrack, PlaybackState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3), "Beefweb",
+                                  "DJ", DateTimeOffset.UtcNow, System.Diagnostics.Stopwatch.GetTimestamp()));
         Assert.True(await service.WaitForPrepare(beefwebTrack), "the Beefweb track starts preparing");
         gate.Open();
 
@@ -318,8 +296,8 @@ public class LoopbackFlowTests : IAsyncLifetime
         source.Play();
         await TestWait.Assert(() => LatestSyncedFile is not null, "our broadcast starts");
 
-        listening.AddOrUpdatePair(42, "Bob", new PairData(
-            @"C:\sync\bob.opus", TimeSpan.Zero, true, DateTimeOffset.UtcNow, 1, null));
+        listening.AddOrUpdatePair(
+            42, "Bob", new PairData(@"C:\sync\bob.opus", TimeSpan.Zero, true, DateTimeOffset.UtcNow, 1, null));
         await Task.Delay(200);
         Assert.Null(listenEngine.Snapshot.Path); // no tuning in: we're the DJ
 
@@ -340,7 +318,7 @@ public class LoopbackFlowTests : IAsyncLifetime
         // Only a REAL stop hands the airwaves back to autoplay.
         broadcast.SetOnAir(false);
         await TestWait.Assert(() => listenEngine.Snapshot.Path == @"C:\sync\bob.opus",
-            "Bob plays once we actually stop DJing");
+                              "Bob plays once we actually stop DJing");
     }
 
     [Fact]
@@ -367,15 +345,14 @@ public class LoopbackFlowTests : IAsyncLifetime
         await TestWait.Assert(() => listenEngine.Snapshot.State == PlaybackState.Playing, "playing");
         var loadsBefore = listenEngine.Ops.Count(o => o == "Load");
 
-        listenEngine.FailTrack();          // synth Failed: host died mid-track
-        listening.OnEngineReconnected();   // host respawned
+        listenEngine.FailTrack();        // synth Failed: host died mid-track
+        listening.OnEngineReconnected(); // host respawned
 
         await TestWait.Assert(
-            () => listenEngine.Ops.Count(o => o == "Load") > loadsBefore
-                  && listenEngine.Snapshot.State == PlaybackState.Playing,
-            "track reloads after the host restart");
+            () => listenEngine.Ops.Count(o => o == "Load") > loadsBefore &&
+                  listenEngine.Snapshot.State == PlaybackState.Playing, "track reloads after the host restart");
         var expected = config.ListeningMasterVolume * 0.5f * TestData.DbToLinear(service.GainDb);
         await TestWait.Assert(() => Math.Abs(listenEngine.LastVolume - expected) < 0.001f,
-            "volume is pushed to the fresh host");
+                              "volume is pushed to the fresh host");
     }
 }

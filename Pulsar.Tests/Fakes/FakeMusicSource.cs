@@ -13,6 +13,7 @@ public sealed class FakeMusicSource : IMusicSource
         get => frame?.Snapshot;
         set => frame = value is null ? null : new SourceFrame(new SourceCursor(), value);
     }
+
     public SourceFrame? Frame => frame;
     public bool Disposed { get; private set; }
 
@@ -21,6 +22,7 @@ public sealed class FakeMusicSource : IMusicSource
 
     public event Action<SourceSnapshot?>? OnSnapshotChanged;
     public event Action? OnChanged;
+
     public void RaiseChanged()
     {
         OnSnapshotChanged?.Invoke(Current);
@@ -30,8 +32,8 @@ public sealed class FakeMusicSource : IMusicSource
     public void RaiseProjectionChanged(SourceSnapshot snapshot)
     {
         frame = frame is { } current
-            ? new SourceFrame(current.Cursor, snapshot)
-            : new SourceFrame(new SourceCursor(), snapshot);
+                    ? new SourceFrame(current.Cursor, snapshot)
+                    : new SourceFrame(new SourceCursor(), snapshot);
         OnChanged?.Invoke();
     }
 
@@ -47,12 +49,12 @@ public sealed class FakeMusicSource : IMusicSource
             var snapshots = OnSnapshotChanged;
             var changed = OnChanged;
             return snapshots is null && changed is null
-                ? null
-                : snapshot =>
-                {
-                    snapshots?.Invoke(snapshot);
-                    changed?.Invoke();
-                };
+                       ? null
+                       : snapshot =>
+                       {
+                           snapshots?.Invoke(snapshot);
+                           changed?.Invoke();
+                       };
         }
     }
 

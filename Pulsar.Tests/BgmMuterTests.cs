@@ -67,7 +67,7 @@ public sealed class BgmMuterTests
     [Fact]
     public async Task An_originally_muted_game_is_left_muted()
     {
-        var game = new FakeGameBgmControl(muted: true);
+        var game = new FakeGameBgmControl(true);
         await using var muter = new BgmMuter(new Configuration(), game);
 
         await muter.SetListening(true);

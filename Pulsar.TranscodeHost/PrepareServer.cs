@@ -10,7 +10,8 @@ public class PrepareServer : IPrepareService
         return await Task.Run(() => TrackProcessor.Process(originalPath, transcodeOutPath, ct), ct);
     }
 
-    public async Task<PreparedTrack> PrepareBytesAsync(string originalPath, byte[] audioData, string transcodeOutPath, CancellationToken ct)
+    public async Task<PreparedTrack> PrepareBytesAsync(
+        string originalPath, byte[] audioData, string transcodeOutPath, CancellationToken ct)
     {
         return await Task.Run(() => TrackProcessor.ProcessBytes(originalPath, audioData, transcodeOutPath, ct), ct);
     }

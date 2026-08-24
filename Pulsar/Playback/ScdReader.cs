@@ -26,8 +26,10 @@ internal static class ScdReader
         var audio = scd.GetAudio(0);
 
         if (audio.AudioBasicDesc.Format != AudioFormat.OggVorbis)
+        {
             throw new NotSupportedException(
                 $"Only Vorbis SCD codec supported, not {audio.AudioBasicDesc.Format}: {Path.GetFileName(path)}");
+        }
 
         return audio.AudioData;
     }

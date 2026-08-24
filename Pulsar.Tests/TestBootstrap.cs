@@ -59,6 +59,7 @@ public static class TestWait
             if (condition()) return true;
             await Task.Delay(10);
         }
+
         return condition();
     }
 
@@ -100,15 +101,16 @@ public static class TestWait
 public static class TestData
 {
     /// <summary>A plugin configuration that will not write to the process-global fake chat.</summary>
-    public static Configuration QuietConfiguration() => new()
-    {
-        NotifyNearbyBroadcaster = false,
-        NotifyNearbyBroadcasterAutoPlayOff = false,
-        NotifyNearbyBroadcasterWhileBroadcasting = false,
-        NotifyMutedPlayback = false,
-        NotifyListeningTrackChanged = false,
-        NotifyUnsyncableBroadcast = false,
-    };
+    public static Configuration QuietConfiguration() =>
+        new()
+        {
+            NotifyNearbyBroadcaster = false,
+            NotifyNearbyBroadcasterAutoPlayOff = false,
+            NotifyNearbyBroadcasterWhileBroadcasting = false,
+            NotifyMutedPlayback = false,
+            NotifyListeningTrackChanged = false,
+            NotifyUnsyncableBroadcast = false,
+        };
 
     /// <summary>Writes a small fake audio file and returns its path.</summary>
     public static string CreateTrack(System.IO.DirectoryInfo dir, string name, int bytes = 16)
@@ -119,13 +121,12 @@ public static class TestData
     }
 
     /// <summary>A live source snapshot: 5s into a one-minute track.</summary>
-    public static Pulsar.Broadcast.SourceSnapshot Snap(string file, bool playing = true, string? next = null)
-        => new(file, next, playing, TimeSpan.FromSeconds(5), DateTimeOffset.UtcNow,
-               new Pulsar.Listening.TrackMeta
-               {
-                   OriginalFileName = System.IO.Path.GetFileName(file),
-                   DurationMs = 60_000,
-               });
+    public static Broadcast.SourceSnapshot Snap(string file, bool playing = true, string? next = null) =>
+        new(file, next, playing, TimeSpan.FromSeconds(5), DateTimeOffset.UtcNow, new Listening.TrackMeta
+        {
+            OriginalFileName = System.IO.Path.GetFileName(file),
+            DurationMs = 60_000,
+        });
 
     /// <summary>Expected-value math for gain assertions, derived independently of production.</summary>
     public static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);

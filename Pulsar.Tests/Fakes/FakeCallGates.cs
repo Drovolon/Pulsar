@@ -23,7 +23,13 @@ public sealed class FakeCallGate<TRet> : ICallGateProvider<TRet>
     public void UnregisterAction() => Action = null;
     public void UnregisterFunc() => Func = null;
     public IpcContext? GetContext() => null;
-    public void SendMessage() { object?[] args = []; Sent.Add(args); OnSent?.Invoke(args); }
+
+    public void SendMessage()
+    {
+        object?[] args = [];
+        Sent.Add(args);
+        OnSent?.Invoke(args);
+    }
 }
 
 public sealed class FakeCallGate<T1, TRet> : ICallGateProvider<T1, TRet>
@@ -39,11 +45,16 @@ public sealed class FakeCallGate<T1, TRet> : ICallGateProvider<T1, TRet>
     public void UnregisterAction() => Action = null;
     public void UnregisterFunc() => Func = null;
     public IpcContext? GetContext() => null;
-    public void SendMessage(T1 a1) { object?[] args = [a1]; Sent.Add(args); OnSent?.Invoke(args); }
+
+    public void SendMessage(T1 a1)
+    {
+        object?[] args = [a1];
+        Sent.Add(args);
+        OnSent?.Invoke(args);
+    }
 }
 
-public sealed class FakeCallGate<T1, T2, T3, T4, TRet>
-    : ICallGateProvider<T1, T2, T3, T4, TRet>
+public sealed class FakeCallGate<T1, T2, T3, T4, TRet> : ICallGateProvider<T1, T2, T3, T4, TRet>
 {
     public Action<T1, T2, T3, T4>? Action { get; private set; }
     public Func<T1, T2, T3, T4, TRet>? Func { get; private set; }
@@ -56,6 +67,7 @@ public sealed class FakeCallGate<T1, T2, T3, T4, TRet>
     public void UnregisterAction() => Action = null;
     public void UnregisterFunc() => Func = null;
     public IpcContext? GetContext() => null;
+
     public void SendMessage(T1 a1, T2 a2, T3 a3, T4 a4)
     {
         object?[] args = [a1, a2, a3, a4];
@@ -77,6 +89,6 @@ internal sealed class FakeIpcGates
     public FakeCallGate<ulong, string, string?, string, object?> SetPlayerData { get; } = new();
     public FakeCallGate<ulong, object?> ClearPlayerData { get; } = new();
 
-    public IpcProvider.Gates Gates => new(Ready, Disposing, PlayerDataChanged, IsEnabled,
-        ApiVersion, GetPlayerData, SetPlayerData, ClearPlayerData);
+    public IpcProvider.Gates Gates =>
+        new(Ready, Disposing, PlayerDataChanged, IsEnabled, ApiVersion, GetPlayerData, SetPlayerData, ClearPlayerData);
 }

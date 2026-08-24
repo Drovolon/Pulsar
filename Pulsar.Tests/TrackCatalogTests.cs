@@ -13,7 +13,7 @@ public sealed class TrackCatalogTests : IDisposable
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-catalog-test-");
 
-    public void Dispose() => dir.Delete(recursive: true);
+    public void Dispose() => dir.Delete(true);
 
     private void Track(string relativePath)
     {
@@ -39,9 +39,8 @@ public sealed class TrackCatalogTests : IDisposable
 
         var catalog = await new FolderTrackCatalogLoader(dir.FullName).LoadAsync();
 
-        Assert.Equal(
-            ["1 - Intro.scd", "2 - Verse.scd", "10 - Outro.scd"],
-            catalog.AllFiles.Tracks.Select(track => Path.GetFileName(track.FilePath)));
+        Assert.Equal(["1 - Intro.scd", "2 - Verse.scd", "10 - Outro.scd"],
+                     catalog.AllFiles.Tracks.Select(track => Path.GetFileName(track.FilePath)));
     }
 
     [Fact]
@@ -51,18 +50,18 @@ public sealed class TrackCatalogTests : IDisposable
         Track("soundy/songs/5431_Left Behind.scd");
         Track("sound/Mylist/unreferenced.scd");
         Group("group_004_music.json", """
-            {
-              "Name": "MUSIC // ROCK",
-              "Type": "Single",
-              "Options": [
-                { "Name": "Off", "Files": {} },
-                { "Name": "Spiritbox - Circle With Me", "Files": {
-                    "sound/dam.scd": "SOUNDY\\SONGS\\392_spiritbox.scd" } },
-                { "Name": "The Plot In You - Left Behind", "Files": {
-                    "sound/dam.scd": "soundy/songs/5431_left behind.scd" } }
-              ]
-            }
-            """);
+                                      {
+                                        "Name": "MUSIC // ROCK",
+                                        "Type": "Single",
+                                        "Options": [
+                                          { "Name": "Off", "Files": {} },
+                                          { "Name": "Spiritbox - Circle With Me", "Files": {
+                                              "sound/dam.scd": "SOUNDY\\SONGS\\392_spiritbox.scd" } },
+                                          { "Name": "The Plot In You - Left Behind", "Files": {
+                                              "sound/dam.scd": "soundy/songs/5431_left behind.scd" } }
+                                        ]
+                                      }
+                                      """);
 
         var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
 
@@ -71,9 +70,8 @@ public sealed class TrackCatalogTests : IDisposable
         var rock = catalog.Groups[1];
         Assert.Equal("group_004_music.json", rock.Id);
         Assert.Equal("MUSIC // ROCK", rock.Name);
-        Assert.Equal(
-            ["Spiritbox - Circle With Me", "The Plot In You - Left Behind"],
-            rock.Tracks.Select(track => track.DisplayName));
+        Assert.Equal(["Spiritbox - Circle With Me", "The Plot In You - Left Behind"],
+                     rock.Tracks.Select(track => track.DisplayName));
         Assert.All(rock.Tracks, track => Assert.True(File.Exists(track.FilePath)));
     }
 
@@ -83,23 +81,21 @@ public sealed class TrackCatalogTests : IDisposable
         Track("soundy/songs/100_Hundred.scd");
         Track("soundy/songs/20_Twenty.scd");
         Group("group_004_music.json", """
-            {
-              "Name": "MUSIC",
-              "Type": "Single",
-              "Options": [
-                { "Name": "Hundred", "Files": {
-                    "sound/dam.scd": "soundy/songs/100_Hundred.scd" } },
-                { "Name": "Twenty", "Files": {
-                    "sound/dam.scd": "soundy/songs/20_Twenty.scd" } }
-              ]
-            }
-            """);
+                                      {
+                                        "Name": "MUSIC",
+                                        "Type": "Single",
+                                        "Options": [
+                                          { "Name": "Hundred", "Files": {
+                                              "sound/dam.scd": "soundy/songs/100_Hundred.scd" } },
+                                          { "Name": "Twenty", "Files": {
+                                              "sound/dam.scd": "soundy/songs/20_Twenty.scd" } }
+                                        ]
+                                      }
+                                      """);
 
         var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
 
-        Assert.Equal(
-            ["Hundred", "Twenty"],
-            catalog.Groups[1].Tracks.Select(track => track.DisplayName));
+        Assert.Equal(["Hundred", "Twenty"], catalog.Groups[1].Tracks.Select(track => track.DisplayName));
     }
 
     [Fact]
@@ -108,11 +104,11 @@ public sealed class TrackCatalogTests : IDisposable
         Track("song.scd");
         Group("group_001_broken.json", "{ definitely not json");
         Group("group_002_backup.json", """
-            { "Name": "OLD", "Type": "Single", "Options": [
-              { "Name": "One", "Files": { "sound/dam.scd": "song.scd" } },
-              { "Name": "Two", "Files": { "sound/dam.scd": "song.scd" } }
-            ] }
-            """, "backup");
+                                       { "Name": "OLD", "Type": "Single", "Options": [
+                                         { "Name": "One", "Files": { "sound/dam.scd": "song.scd" } },
+                                         { "Name": "Two", "Files": { "sound/dam.scd": "song.scd" } }
+                                       ] }
+                                       """, "backup");
 
         var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
 
@@ -126,11 +122,11 @@ public sealed class TrackCatalogTests : IDisposable
         Track("songs/one.scd");
         Track("songs/two.scd");
         Group("group_001_sounds.json", """
-            { "Name": "SOUNDS", "Type": "Single", "Options": [
-              { "Name": "One", "Files": { "sound/one.scd": "songs/one.scd" } },
-              { "Name": "Two", "Files": { "sound/two.scd": "songs/two.scd" } }
-            ] }
-            """);
+                                       { "Name": "SOUNDS", "Type": "Single", "Options": [
+                                         { "Name": "One", "Files": { "sound/one.scd": "songs/one.scd" } },
+                                         { "Name": "Two", "Files": { "sound/two.scd": "songs/two.scd" } }
+                                       ] }
+                                       """);
 
         var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
 
@@ -142,11 +138,11 @@ public sealed class TrackCatalogTests : IDisposable
     {
         Track("songs/one.scd");
         Group("group_001_music.json", """
-            { "Name": "MUSIC", "Type": "Single", "Options": [
-              { "Name": "One", "Files": { "sound/dam.scd": "songs/one.scd" } },
-              { "Name": "Missing", "Files": { "sound/dam.scd": "songs/missing.scd" } }
-            ] }
-            """);
+                                      { "Name": "MUSIC", "Type": "Single", "Options": [
+                                        { "Name": "One", "Files": { "sound/dam.scd": "songs/one.scd" } },
+                                        { "Name": "Missing", "Files": { "sound/dam.scd": "songs/missing.scd" } }
+                                      ] }
+                                      """);
 
         var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
 
@@ -162,25 +158,22 @@ public sealed class TrackCatalogTests : IDisposable
         Track("effects/one.scd");
         Track("effects/two.scd");
         Group("group_001_music.json", """
-            { "Name": "MUSIC", "Type": "Single", "Options": [
-              { "Name": "One", "Files": {
-                  "sound/dam.scd": "songs/one.scd",
-                  "sound/effect.scd": "effects/one.scd" } },
-              { "Name": "Two", "Files": {
-                  "sound/dam.scd": "songs/two.scd",
-                  "sound/effect.scd": "effects/two.scd" } },
-              { "Name": "Three", "Files": {
-                  "sound/dam.scd": "songs/three.scd" } }
-            ] }
-            """);
+                                      { "Name": "MUSIC", "Type": "Single", "Options": [
+                                        { "Name": "One", "Files": {
+                                            "sound/dam.scd": "songs/one.scd",
+                                            "sound/effect.scd": "effects/one.scd" } },
+                                        { "Name": "Two", "Files": {
+                                            "sound/dam.scd": "songs/two.scd",
+                                            "sound/effect.scd": "effects/two.scd" } },
+                                        { "Name": "Three", "Files": {
+                                            "sound/dam.scd": "songs/three.scd" } }
+                                      ] }
+                                      """);
 
         var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
 
-        Assert.Equal(
-            ["One", "Two", "Three"],
-            catalog.Groups[1].Tracks.Select(track => track.DisplayName));
-        Assert.All(catalog.Groups[1].Tracks,
-            track => Assert.StartsWith("songs/", track.RelativePath));
+        Assert.Equal(["One", "Two", "Three"], catalog.Groups[1].Tracks.Select(track => track.DisplayName));
+        Assert.All(catalog.Groups[1].Tracks, track => Assert.StartsWith("songs/", track.RelativePath));
     }
 
     [Fact]
@@ -190,24 +183,21 @@ public sealed class TrackCatalogTests : IDisposable
         Track("songs/two.scd");
         Track("effects/shared.scd");
         Group("group_001_music.json", """
-            { "Name": "MUSIC", "Type": "Single", "Options": [
-              { "Name": "One", "Files": {
-                  "sound/dam.scd": "songs/one.scd",
-                  "sound/effect.scd": "effects/shared.scd" } },
-              { "Name": "Two", "Files": {
-                  "sound/dam.scd": "songs/two.scd",
-                  "sound/effect.scd": "effects/shared.scd" } },
-              { "Name": "Also Shared", "Files": {
-                  "sound/effect.scd": "effects/shared.scd" } }
-            ] }
-            """);
+                                      { "Name": "MUSIC", "Type": "Single", "Options": [
+                                        { "Name": "One", "Files": {
+                                            "sound/dam.scd": "songs/one.scd",
+                                            "sound/effect.scd": "effects/shared.scd" } },
+                                        { "Name": "Two", "Files": {
+                                            "sound/dam.scd": "songs/two.scd",
+                                            "sound/effect.scd": "effects/shared.scd" } },
+                                        { "Name": "Also Shared", "Files": {
+                                            "sound/effect.scd": "effects/shared.scd" } }
+                                      ] }
+                                      """);
 
         var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
 
-        Assert.Equal(
-            ["One", "Two"],
-            catalog.Groups[1].Tracks.Select(track => track.DisplayName));
-        Assert.All(catalog.Groups[1].Tracks,
-            track => Assert.StartsWith("songs/", track.RelativePath));
+        Assert.Equal(["One", "Two"], catalog.Groups[1].Tracks.Select(track => track.DisplayName));
+        Assert.All(catalog.Groups[1].Tracks, track => Assert.StartsWith("songs/", track.RelativePath));
     }
 }

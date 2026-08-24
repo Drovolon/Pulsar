@@ -28,12 +28,8 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
     private BroadcastOutput.PlayerDataChanged? currentPublication;
 
     internal ApplicationCoordinator(
-        BroadcastManager broadcast,
-        ListeningManager listening,
-        IpcProvider ipc,
-        DebugLoopbackController debugLoopback,
-        ListeningNotifier listeningNotifier,
-        BgmMuter bgmMuter)
+        BroadcastManager broadcast, ListeningManager listening, IpcProvider ipc, DebugLoopbackController debugLoopback,
+        ListeningNotifier listeningNotifier, BgmMuter bgmMuter)
     {
         this.broadcast = broadcast;
         this.listening = listening;
@@ -52,7 +48,6 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
         try
         {
             await foreach (var output in broadcast.Outputs.ReadAllAsync())
-            {
                 try
                 {
                     switch (output)
@@ -64,8 +59,11 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
                             {
                                 await ipc.PublishPlayerDataAsync(change.Data);
                                 await debugLoopback.OnPlayerDataChangedAsync(change.Data);
+                            } finally
+                            {
+                                previous?.Dispose();
                             }
-                            finally { previous?.Dispose(); }
+
                             break;
                         case BroadcastOutput.BroadcastingChanged(var value):
                             listening.SetBroadcasting(value);
@@ -77,9 +75,7 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
                 {
                     Plugin.Log.Error(e, "failed to route broadcast output: {output}", output);
                 }
-            }
-        }
-        finally
+        } finally
         {
             currentPublication?.Dispose();
             currentPublication = null;
@@ -89,7 +85,6 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
     private async Task RouteListeningOutputs()
     {
         await foreach (var output in listening.Outputs.ReadAllAsync())
-        {
             try
             {
                 listeningNotifier.Notify(output);
@@ -100,7 +95,6 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
             {
                 Plugin.Log.Error(e, "failed to route listening output: {output}", output);
             }
-        }
     }
 
     public async ValueTask DisposeAsync()
@@ -111,14 +105,12 @@ internal sealed class ApplicationCoordinator : IAsyncDisposable
             await broadcastOutputLoop;
             await listening.DisposeAsync();
             await listeningOutputLoop;
-        }
-        finally
+        } finally
         {
             try
             {
                 await bgmMuter.DisposeAsync();
-            }
-            finally
+            } finally
             {
                 debugLoopback.SetEnabled(false);
                 await debugLoopback.DisposeAsync();

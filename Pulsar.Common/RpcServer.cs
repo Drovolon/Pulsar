@@ -17,12 +17,9 @@ public static class RpcServer
         while (!token.IsCancellationRequested)
         {
             Log.Information("Waiting for client connection...");
-            var stream = new NamedPipeServerStream(
-                serverName,
-                PipeDirection.InOut,
-                NamedPipeServerStream.MaxAllowedServerInstances,
-                PipeTransmissionMode.Byte,
-                PipeOptions.Asynchronous);
+            var stream = new NamedPipeServerStream(serverName, PipeDirection.InOut,
+                                                   NamedPipeServerStream.MaxAllowedServerInstances,
+                                                   PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
             try
             {
                 await stream.WaitForConnectionAsync(token);
@@ -32,15 +29,16 @@ public static class RpcServer
                 await stream.DisposeAsync();
                 throw;
             }
+
             _ = RespondToRpcRequestAsync<T>(stream, ++clientId);
         }
     }
 
     public static JsonRpc BuildSharedJsonRpc(Stream stream)
     {
-        var formatter = new NerdbankMessagePackFormatter()
+        var formatter = new NerdbankMessagePackFormatter
         {
-            TypeShapeProvider = ReflectionTypeShapeProvider.Default
+            TypeShapeProvider = ReflectionTypeShapeProvider.Default,
         };
         var handler = new LengthHeaderMessageHandler(stream, stream, formatter);
         return new JsonRpc(handler);
@@ -62,8 +60,7 @@ public static class RpcServer
                 Log.Information("JSON-RPC listener attached to client {id}. Awaiting requests...", clientId);
                 await jsonRpc.Completion;
                 Log.Information("Client {id} disconnected", clientId);
-            }
-            finally
+            } finally
             {
                 jsonRpc.Dispose();
             }
@@ -71,8 +68,7 @@ public static class RpcServer
         catch (Exception ex)
         {
             Log.Warning(ex, "Client {id} connection ended with error", clientId);
-        }
-        finally
+        } finally
         {
             switch (target)
             {

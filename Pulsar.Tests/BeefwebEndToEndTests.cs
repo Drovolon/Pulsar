@@ -23,7 +23,7 @@ public class BeefwebEndToEndTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         if (watcher is not null) await watcher.DisposeAsync();
-        dir.Delete(recursive: true);
+        dir.Delete(true);
     }
 
     [Fact]
@@ -33,10 +33,9 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         var trackB = TestData.CreateTrack(dir, "b.flac");
 
         // The DJ is already playing when Pulsar connects.
-        server.SetPlaying(trackA, positionSeconds: 30, durationSeconds: 120,
-                          artist: "Band", title: "First");
+        server.SetPlaying(trackA, 30, 120, "Band", "First");
         var client = server.CreateClient();
-        watcher = new Watcher(new SseFeed(client), client, isWine: false);
+        watcher = new Watcher(new SseFeed(client), client, false);
 
         await TestWait.Assert(() => watcher.Current is not null, "initial state becomes a snapshot");
         var s = watcher.Current!;
@@ -51,7 +50,7 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         await TestWait.Assert(() => watcher.Current is { IsPlaying: false }, "pause propagates");
 
         // DJ jumps to the next track.
-        server.SetPlaying(trackB, positionSeconds: 0, title: "Second");
+        server.SetPlaying(trackB, 0, title: "Second");
         server.PushUpdate();
         await TestWait.Assert(() => watcher.Current?.FilePath == trackB, "track change propagates");
 
@@ -69,13 +68,16 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         var trackB = TestData.CreateTrack(dir, "b.flac");
         server.SetStopped();
         var client = server.CreateClient();
-        watcher = new Watcher(new SseFeed(client), client, isWine: false);
+        watcher = new Watcher(new SseFeed(client), client, false);
         await TestWait.Assert(() => watcher.Status.Connected, "the initial stopped frame arrives");
 
         var seen = new List<(string? Path, bool? Playing)>();
         watcher.OnSnapshotChanged += snapshot =>
         {
-            lock (seen) seen.Add((snapshot?.FilePath, snapshot?.IsPlaying));
+            lock (seen)
+            {
+                seen.Add((snapshot?.FilePath, snapshot?.IsPlaying));
+            }
         };
 
         // No waits between pushes: all of these frames coexist in the SSE/Watcher pipeline.
@@ -87,34 +89,39 @@ public class BeefwebEndToEndTests : IAsyncLifetime
         server.PushUpdate();
         server.SetPaused();
         server.PushUpdate();
-        server.SetPlaying(trackB, positionSeconds: 0);
+        server.SetPlaying(trackB, 0);
         server.PushUpdate();
-        server.SetPlaying(trackA, positionSeconds: 0);
+        server.SetPlaying(trackA, 0);
         server.PushUpdate();
         server.SetStopped();
         server.PushUpdate();
-        server.SetPlaying(trackA, positionSeconds: 0);
+        server.SetPlaying(trackA, 0);
         server.PushUpdate();
 
         await TestWait.Assert(() =>
         {
-            lock (seen) return seen.Count >= 8;
+            lock (seen)
+            {
+                return seen.Count >= 8;
+            }
         }, "all eight cursor transitions flow through");
 
         (string? Path, bool? Playing)[] actual;
-        lock (seen) actual = [.. seen];
-        Assert.Equal(
-            [
-                (trackA, true),
-                (trackA, false),
-                (trackA, true),
-                (trackA, false),
-                (trackB, true),
-                (trackA, true),
-                (null, null),
-                (trackA, true),
-            ],
-            actual);
+        lock (seen)
+        {
+            actual = [.. seen];
+        }
+
+        Assert.Equal([
+            (trackA, true),
+            (trackA, false),
+            (trackA, true),
+            (trackA, false),
+            (trackB, true),
+            (trackA, true),
+            (null, null),
+            (trackA, true),
+        ], actual);
         Assert.Equal(trackA, watcher.Current?.FilePath);
         Assert.True(watcher.Current?.IsPlaying);
     }

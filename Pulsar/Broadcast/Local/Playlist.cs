@@ -8,6 +8,7 @@ using Pulsar.Playback;
 namespace Pulsar.Broadcast.Local;
 
 public readonly record struct QueueEntryId(long Value);
+
 public sealed record QueueEntry(QueueEntryId Id, LocalTrack Track);
 
 /// <summary>
@@ -26,10 +27,7 @@ internal sealed record PlaylistView(
     LocalTrack? CurrentTrack,
     LocalTrack? NextTrack);
 
-internal readonly record struct EndTransition(
-    bool Notify,
-    bool TargetChanged,
-    bool QueueChanged = false);
+internal readonly record struct EndTransition(bool Notify, bool TargetChanged, bool QueueChanged = false);
 
 internal readonly record struct ObserveTransition(bool Accepted, bool CursorChanged);
 
@@ -61,9 +59,7 @@ internal sealed class Playlist
         get
         {
             var track = DesiredTrack();
-            return track is null
-                ? null
-                : new EngineTarget(targetRevision, track.FilePath, desiredState, TimeSpan.Zero);
+            return track is null ? null : new EngineTarget(targetRevision, track.FilePath, desiredState, TimeSpan.Zero);
         }
     }
 
@@ -75,17 +71,10 @@ internal sealed class Playlist
         get
         {
             var selected = SelectedTrack();
-            var current = observedState == PlaybackState.Stopped
-                ? selected
-                : observedTrack ?? selected;
+            var current = observedState == PlaybackState.Stopped ? selected : observedTrack ?? selected;
             var upcoming = BuildUpcoming();
-            return new PlaylistView(
-                queue,
-                upcoming,
-                position,
-                observedState,
-                current,
-                upcoming.Count == 0 ? null : upcoming[0].Track);
+            return new PlaylistView(queue, upcoming, position, observedState, current,
+                                    upcoming.Count == 0 ? null : upcoming[0].Track);
         }
     }
 
@@ -137,9 +126,7 @@ internal sealed class Playlist
         }
 
         sourceIndex = Array.FindIndex(source, candidate => SameTrack(candidate, current));
-        currentOverride = sourceIndex >= 0
-            ? null
-            : new QueueEntry(default, current);
+        currentOverride = sourceIndex >= 0 ? null : new QueueEntry(default, current);
     }
 
     internal bool Play(QueueEntryId id)
@@ -154,14 +141,11 @@ internal sealed class Playlist
         return true;
     }
 
-    internal void AddNext(LocalTrack track)
-        => queue = [NewEntry(track), .. queue];
+    internal void AddNext(LocalTrack track) => queue = [NewEntry(track), .. queue];
 
-    internal void AddToEnd(LocalTrack track)
-        => queue = [.. queue, NewEntry(track)];
+    internal void AddToEnd(LocalTrack track) => queue = [.. queue, NewEntry(track)];
 
-    internal void Remove(QueueEntryId id)
-        => queue = queue.Where(entry => entry.Id != id).ToArray();
+    internal void Remove(QueueEntryId id) => queue = queue.Where(entry => entry.Id != id).ToArray();
 
     internal void ClearQueue() => queue = [];
 
@@ -190,8 +174,8 @@ internal sealed class Playlist
         // Keep the current source track first and leave the manual queue unchanged.
         var current = source[sourceIndex];
         var upcoming = Enumerable.Range(1, source.Length - 1)
-            .Select(offset => source[(sourceIndex + offset) % source.Length])
-            .Shuffle();
+                                 .Select(offset => source[(sourceIndex + offset) % source.Length])
+                                 .Shuffle();
         source = [current, .. upcoming];
         sourceIndex = 0;
     }
@@ -199,9 +183,8 @@ internal sealed class Playlist
     internal bool Play()
     {
         if (SelectedTrack() is null)
-        {
-            if (!TryConsumeQueue()) return false;
-        }
+            if (!TryConsumeQueue())
+                return false;
 
         desiredState = PlaybackState.Playing;
         ResetFailures();
@@ -227,6 +210,7 @@ internal sealed class Playlist
             desiredState = PlaybackState.Stopped;
             return true;
         }
+
         Reload();
         return true;
     }
@@ -247,6 +231,7 @@ internal sealed class Playlist
             else if (sourceIndex > 0)
                 sourceIndex--;
         }
+
         Reload();
         return true;
     }
@@ -269,35 +254,32 @@ internal sealed class Playlist
     {
         if (observation.Revision != targetRevision) return default;
         var snapshot = observation.Snapshot;
-        if (snapshot.State != PlaybackState.Stopped
-            && !string.Equals(
-                snapshot.Path, DesiredTrack()?.FilePath,
-                StringComparison.OrdinalIgnoreCase))
+        if (snapshot.State != PlaybackState.Stopped &&
+            !string.Equals(snapshot.Path, DesiredTrack()?.FilePath, StringComparison.OrdinalIgnoreCase))
             return default;
-        var nextObservedTrack = snapshot.State == PlaybackState.Stopped
-            ? null
-            : DesiredTrack();
-        var missedSeek = !observation.Discrete
-                         && observedAt is { } previousAsOf
-                         && position is { } previousPosition
-                         && snapshot.Position is { } currentPosition
-                         && snapshot.State == observedState
-                         && observedState != PlaybackState.Stopped
-                         && SameOptionalTrack(observedTrack, nextObservedTrack)
-                         && ((currentPosition.Current - previousPosition.Current)
-                             - (snapshot.State == PlaybackState.Playing
-                                 ? snapshot.ObservedAt - previousAsOf
-                                 : TimeSpan.Zero)).Duration() > TimeSpan.FromSeconds(2);
-        var notify = observation.Discrete
-            || missedSeek
-            || snapshot.State != observedState
-            || !SameOptionalTrack(observedTrack, nextObservedTrack);
+        var nextObservedTrack = snapshot.State == PlaybackState.Stopped ? null : DesiredTrack();
+        var missedSeek = !observation.Discrete &&
+                         observedAt is { } previousAsOf &&
+                         position is { } previousPosition &&
+                         snapshot.Position is { } currentPosition &&
+                         snapshot.State == observedState &&
+                         observedState != PlaybackState.Stopped &&
+                         SameOptionalTrack(observedTrack, nextObservedTrack) &&
+                         (currentPosition.Current -
+                          previousPosition.Current -
+                          (snapshot.State == PlaybackState.Playing ? snapshot.ObservedAt - previousAsOf : TimeSpan.Zero))
+                         .Duration() >
+                         TimeSpan.FromSeconds(2);
+        var notify = observation.Discrete ||
+                     missedSeek ||
+                     snapshot.State != observedState ||
+                     !SameOptionalTrack(observedTrack, nextObservedTrack);
         observedState = snapshot.State;
         position = snapshot.Position;
         observedTrack = nextObservedTrack;
         observedRevision = observation.Revision;
         observedAt = snapshot.ObservedAt;
-        return new ObserveTransition(Accepted: true, CursorChanged: notify);
+        return new ObserveTransition(true, notify);
     }
 
     internal EndTransition End(EngineSessionEnded ended)
@@ -309,7 +291,7 @@ internal sealed class Playlist
             observedState = PlaybackState.Stopped;
             position = null;
             observedTrack = null;
-            return new EndTransition(Notify: true, TargetChanged: false);
+            return new EndTransition(true, false);
         }
 
         if (ended.Reason == EndReason.Failed)
@@ -325,7 +307,7 @@ internal sealed class Playlist
                 observedState = PlaybackState.Stopped;
                 position = null;
                 observedTrack = null;
-                return new EndTransition(Notify: true, TargetChanged: true);
+                return new EndTransition(true, true);
             }
         }
         else
@@ -339,30 +321,20 @@ internal sealed class Playlist
             observedState = PlaybackState.Stopped;
             observedTrack = null;
             position = null;
-            return new EndTransition(
-                Notify: true,
-                TargetChanged: true,
-                QueueChanged: queue.Length != queueCount);
+            return new EndTransition(true, true, queue.Length != queueCount);
         }
 
         Reload();
-        return new EndTransition(
-            Notify: false,
-            TargetChanged: true,
-            QueueChanged: queue.Length != queueCount);
+        return new EndTransition(false, true, queue.Length != queueCount);
     }
 
     private IReadOnlyList<UpcomingTrack> BuildUpcoming()
     {
-        var sourceCount = sourceIndex < 0
-            ? source.Length
-            : Math.Max(0, source.Length - 1);
+        var sourceCount = sourceIndex < 0 ? source.Length : Math.Max(0, source.Length - 1);
         var result = new List<UpcomingTrack>(queue.Length + sourceCount);
         result.AddRange(queue.Select(entry => new UpcomingTrack(entry.Track, entry.Id)));
         for (var offset = 1; offset <= sourceCount; offset++)
-            result.Add(new UpcomingTrack(
-                source[(sourceIndex + offset) % source.Length],
-                QueueEntryId: null));
+            result.Add(new UpcomingTrack(source[(sourceIndex + offset) % source.Length], null));
         return result;
     }
 
@@ -383,8 +355,7 @@ internal sealed class Playlist
         return true;
     }
 
-    private int FailureCycleLength()
-        => queue.Length + source.Length + (currentOverride is null ? 0 : 1);
+    private int FailureCycleLength() => queue.Length + source.Length + (currentOverride is null ? 0 : 1);
 
     private void ResetFailures()
     {
@@ -398,18 +369,15 @@ internal sealed class Playlist
         position = null;
     }
 
-    private LocalTrack? DesiredTrack()
-        => desiredState == PlaybackState.Stopped ? null : SelectedTrack();
+    private LocalTrack? DesiredTrack() => desiredState == PlaybackState.Stopped ? null : SelectedTrack();
 
-    private LocalTrack? SelectedTrack()
-        => currentOverride?.Track
-           ?? (source.Length == 0 ? null : source[sourceIndex]);
+    private LocalTrack? SelectedTrack() => currentOverride?.Track ?? (source.Length == 0 ? null : source[sourceIndex]);
 
     private QueueEntry NewEntry(LocalTrack track) => new(new QueueEntryId(++nextEntryId), track);
 
-    private static bool SameTrack(LocalTrack left, LocalTrack right)
-        => string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase);
+    private static bool SameTrack(LocalTrack left, LocalTrack right) =>
+        string.Equals(left.FilePath, right.FilePath, StringComparison.OrdinalIgnoreCase);
 
-    private static bool SameOptionalTrack(LocalTrack? left, LocalTrack? right)
-        => left is null ? right is null : right is not null && SameTrack(left, right);
+    private static bool SameOptionalTrack(LocalTrack? left, LocalTrack? right) =>
+        left is null ? right is null : right is not null && SameTrack(left, right);
 }

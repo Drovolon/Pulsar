@@ -22,11 +22,10 @@ public static class PipeNames
 [GenerateShape(IncludeMethods = MethodShapeFlags.AllPublic)]
 public partial interface IRemoteEngine
 {
-    Task LoadAsync(
-        string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct);
+    Task LoadAsync(string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct);
+
     Task LoadBytesAsync(
-        string displayPath, byte[] audioData, TimeSpan position,
-        bool startPlaying, long playbackId, CancellationToken ct);
+        string displayPath, byte[] audioData, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct);
 
     Task StopAsync(CancellationToken ct);
     Task PauseAsync(CancellationToken ct);
@@ -61,7 +60,7 @@ public partial record PlaybackPosition(TimeSpan Current, TimeSpan Total);
 
 public enum EndReason
 {
-    Finished, // the track played to its natural end
-    Failed,   // a load or playback error tore it down
+    Finished,     // the track played to its natural end
+    Failed,       // a load or playback error tore it down
     Disconnected, // the audio host disappeared; the caller may restore playback after reconnect
 }

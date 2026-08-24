@@ -24,11 +24,10 @@ internal sealed record ListeningTrack(string SourceName, string FilePath, TrackM
 internal abstract record ListeningOutput
 {
     public sealed record ListeningChanged(bool Value) : ListeningOutput;
-    public sealed record NearbyBroadcastDetected(
-        ListeningTrack Track,
-        NearbyBroadcastContext Context) : ListeningOutput;
-    public sealed record SilentPlaybackStarted(
-        string SourceName,
-        ListeningSilenceReason Reason) : ListeningOutput;
+
+    public sealed record NearbyBroadcastDetected(ListeningTrack Track, NearbyBroadcastContext Context) : ListeningOutput;
+
+    public sealed record SilentPlaybackStarted(string SourceName, ListeningSilenceReason Reason) : ListeningOutput;
+
     public sealed record TrackChanged(ListeningTrack Track) : ListeningOutput;
 }

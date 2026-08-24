@@ -34,17 +34,17 @@ public sealed class ListeningOutputTests : IAsyncLifetime
     [Fact]
     public async Task Playing_and_paused_engine_states_emit_listening_transitions()
     {
-        listening.AddOrUpdatePair(1, "Alice", Pair(playing: true));
+        listening.AddOrUpdatePair(1, "Alice", Pair(true));
         await TestWait.Assert(() => Changes().SequenceEqual([true]), "listening starts");
 
-        listening.AddOrUpdatePair(1, "Alice", Pair(playing: false, epoch: 2));
+        listening.AddOrUpdatePair(1, "Alice", Pair(false, 2));
         await TestWait.Assert(() => Changes().SequenceEqual([true, false]), "listening stops on pause");
     }
 
     [Fact]
     public async Task Listening_stop_is_emitted_only_after_the_engine_has_stopped()
     {
-        listening.AddOrUpdatePair(1, "Alice", Pair(playing: true));
+        listening.AddOrUpdatePair(1, "Alice", Pair(true));
         await TestWait.Assert(() => Changes().SequenceEqual([true]), "listening starts");
 
         var stopGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -54,21 +54,19 @@ public sealed class ListeningOutputTests : IAsyncLifetime
             listening.SetAutoPlay(false);
             Assert.True(await engine.WaitForCall("Stop"), "the stop RPC begins");
             Assert.Equal([true], Changes());
-        }
-        finally
+        } finally
         {
             stopGate.TrySetResult();
         }
 
-        await TestWait.Assert(() => Changes().SequenceEqual([true, false]),
-            "listening stops after the engine confirms it");
+        await TestWait.Assert(() => Changes().SequenceEqual([true, false]), "listening stops after the engine confirms it");
     }
 
     [Fact]
     public async Task Muted_pulsar_playback_still_counts_as_listening()
     {
         listening.SetMasterMuted(true);
-        listening.AddOrUpdatePair(1, "Alice", Pair(playing: true));
+        listening.AddOrUpdatePair(1, "Alice", Pair(true));
 
         await TestWait.Assert(() => Changes().Contains(true), "muted playback starts listening");
         Assert.Equal(0f, engine.LastVolume);
@@ -78,19 +76,16 @@ public sealed class ListeningOutputTests : IAsyncLifetime
     public async Task Detecting_a_source_with_autoplay_off_does_not_begin_listening()
     {
         listening.SetAutoPlay(false);
-        listening.AddOrUpdatePair(1, "Alice", Pair(playing: true));
+        listening.AddOrUpdatePair(1, "Alice", Pair(true));
 
         await TestWait.Assert(() => listening.View.Count == 1, "source is detected");
         Assert.Empty(Changes());
     }
 
-    private PairData Pair(bool playing, int epoch = 1)
-        => new(TrackPath, TimeSpan.FromSeconds(5), playing, DateTimeOffset.UtcNow, epoch, null);
+    private PairData Pair(bool playing, int epoch = 1) =>
+        new(TrackPath, TimeSpan.FromSeconds(5), playing, DateTimeOffset.UtcNow, epoch, null);
 
-    private bool[] Changes() => outputs
-        .OfType<ListeningOutput.ListeningChanged>()
-        .Select(change => change.Value)
-        .ToArray();
+    private bool[] Changes() => outputs.OfType<ListeningOutput.ListeningChanged>().Select(change => change.Value).ToArray();
 
     private async Task CollectOutputs()
     {

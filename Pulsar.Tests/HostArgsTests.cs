@@ -14,8 +14,10 @@ public class HostArgsTests
     [Fact]
     public void Parses_all_five_flags()
     {
-        var a = HostArgs.Parse(["--log-dir", "/tmp/logs", "--parent", "1234",
-                                "--pipe", "p", "--log-tag", "t", "--mixer-name", "m"]);
+        var a = HostArgs.Parse([
+            "--log-dir", "/tmp/logs", "--parent", "1234",
+            "--pipe", "p", "--log-tag", "t", "--mixer-name", "m",
+        ]);
         Assert.Equal("/tmp/logs", a.LogDirectory);
         Assert.Equal(1234, a.ParentProcessId);
         Assert.Equal("p", a.PipeName);
@@ -33,8 +35,8 @@ public class HostArgsTests
     }
 
     [Fact]
-    public void Last_occurrence_of_a_repeated_flag_wins()
-        => Assert.Equal("b", HostArgs.Parse(["--pipe", "a", "--pipe", "b"]).PipeName);
+    public void Last_occurrence_of_a_repeated_flag_wins() =>
+        Assert.Equal("b", HostArgs.Parse(["--pipe", "a", "--pipe", "b"]).PipeName);
 
     [Fact]
     public void Non_integer_parent_is_ignored_but_parsing_continues()
@@ -53,6 +55,5 @@ public class HostArgsTests
     }
 
     [Fact]
-    public void Unknown_flags_are_ignored()
-        => Assert.Equal("p", HostArgs.Parse(["--wat", "x", "--pipe", "p"]).PipeName);
+    public void Unknown_flags_are_ignored() => Assert.Equal("p", HostArgs.Parse(["--wat", "x", "--pipe", "p"]).PipeName);
 }

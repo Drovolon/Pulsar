@@ -48,7 +48,7 @@ public class BroadcastSourceTests : IAsyncLifetime
     {
         await broadcast.DisposeAsync();
         await prep.DisposeAsync();
-        dir.Delete(recursive: true);
+        dir.Delete(true);
     }
 
     private sealed class FakeModResolver : IModResolver
@@ -62,8 +62,7 @@ public class BroadcastSourceTests : IAsyncLifetime
         private int calls;
         public string RootDirectory { get; } = root;
         public int Calls => Volatile.Read(ref calls);
-        public TaskCompletionSource<TrackCatalog> Result { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<TrackCatalog> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -75,9 +74,9 @@ public class BroadcastSourceTests : IAsyncLifetime
     private string Track(string name) => TestData.CreateTrack(dir, name);
 
     /// <summary>A snapshot whose duration/next the prefetch timer reads.</summary>
-    private static SourceSnapshot TimedSnap(string file, long durationMs, string? next = null, bool playing = true)
-        => new(file, next, playing, TimeSpan.Zero, DateTimeOffset.UtcNow,
-               new TrackMeta { OriginalFileName = Path.GetFileName(file), DurationMs = durationMs });
+    private static SourceSnapshot TimedSnap(string file, long durationMs, string? next = null, bool playing = true) =>
+        new(file, next, playing, TimeSpan.Zero, DateTimeOffset.UtcNow,
+            new TrackMeta { OriginalFileName = Path.GetFileName(file), DurationMs = durationMs });
 
     // ---- prefetch timer ---------------------------------------------------------
 
@@ -90,19 +89,18 @@ public class BroadcastSourceTests : IAsyncLifetime
         var current = Track("current.flac");
         var next = Track("next.flac");
 
-        var source = new FakeMusicSource { Current = TimedSnap(current, durationMs: 1000) };
+        var source = new FakeMusicSource { Current = TimedSnap(current, 1000) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
         Assert.True(await service.WaitForPrepare(current), "active track preps");
         Assert.False(await service.WaitForPrepare(next, TimeSpan.FromMilliseconds(150)),
-            "nothing can have prefetched 'next' yet - no event ever carried it");
+                     "nothing can have prefetched 'next' yet - no event ever carried it");
 
         // Queue changes keep the playback ID but wake consumers.
-        source.RaiseProjectionChanged(TimedSnap(current, durationMs: 1000, next: next));
+        source.RaiseProjectionChanged(TimedSnap(current, 1000, next));
 
         Assert.True(await service.WaitForPrepare(next), "the lead tick prefetched the next track");
-        await TestWait.Assert(
-            () => broadcast.CurrentPlayerData()?.PrefetchPath is { Length: > 0 },
-            "the completed prefetch reaches the published manifest");
+        await TestWait.Assert(() => broadcast.CurrentPlayerData()?.PrefetchPath is { Length: > 0 },
+                              "the completed prefetch reaches the published manifest");
     }
 
     [Fact]
@@ -115,11 +113,11 @@ public class BroadcastSourceTests : IAsyncLifetime
         var current = Track("current.flac");
         var next = Track("next.flac");
 
-        var source = new FakeMusicSource { Current = TimedSnap(current, durationMs: 1000) };
+        var source = new FakeMusicSource { Current = TimedSnap(current, 1000) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
         Assert.True(await service.WaitForPrepare(current), "active track preps");
 
-        source.RaiseProjectionChanged(TimedSnap(current, durationMs: 1000, next: next));
+        source.RaiseProjectionChanged(TimedSnap(current, 1000, next));
 
         Assert.True(await service.WaitForPrepare(next), "the final tick prefetched the next track");
     }
@@ -135,12 +133,12 @@ public class BroadcastSourceTests : IAsyncLifetime
         var staleGate = service.GateFor(staleNext);
         var source = new FakeMusicSource
         {
-            Current = TimedSnap(current, durationMs: 1000, next: staleNext),
+            Current = TimedSnap(current, 1000, staleNext),
         };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
 
         Assert.True(await service.WaitForPrepare(staleNext), "the checkpoint samples the old queue head");
-        source.RaiseProjectionChanged(TimedSnap(current, durationMs: 1000, next: liveNext));
+        source.RaiseProjectionChanged(TimedSnap(current, 1000, liveNext));
         staleGate.Open();
 
         await Task.Delay(200);
@@ -160,7 +158,7 @@ public class BroadcastSourceTests : IAsyncLifetime
         var source = new FakeMusicSource { Current = TimedSnap(current, 1000, playing: false) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
 
-        source.Current = TimedSnap(current, 1000, next: next, playing: false); // no event
+        source.Current = TimedSnap(current, 1000, next, false); // no event
         await Task.Delay(400);
         Assert.DoesNotContain(next, service.PrepareCalls); // paused: no tick may fire
     }
@@ -173,11 +171,11 @@ public class BroadcastSourceTests : IAsyncLifetime
         var current = Track("current.flac");
         var next = Track("next.flac");
 
-        var source = new FakeMusicSource { Current = TimedSnap(current, durationMs: 0) };
+        var source = new FakeMusicSource { Current = TimedSnap(current, 0) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
         Assert.True(await service.WaitForPrepare(current), "active track preps");
 
-        source.Current = TimedSnap(current, durationMs: 0, next: next); // no event
+        source.Current = TimedSnap(current, 0, next); // no event
         await Task.Delay(400);
         Assert.DoesNotContain(next, service.PrepareCalls); // unknown duration: no tick may fire
     }
@@ -190,20 +188,20 @@ public class BroadcastSourceTests : IAsyncLifetime
         var current = Track("current.flac");
         var staleNext = Track("stale-next.flac");
         var liveNext = Track("live-next.flac");
-        var source = new FakeMusicSource { Current = TimedSnap(current, durationMs: 1000) };
+        var source = new FakeMusicSource { Current = TimedSnap(current, 1000) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, source);
 
         // This observation cancels the playing timer. The next path is installed only
         // after the event, so the paused observation itself cannot prefetch it.
-        source.Current = TimedSnap(current, durationMs: 1000, playing: false);
+        source.Current = TimedSnap(current, 1000, playing: false);
         source.RaiseChanged();
-        source.Current = TimedSnap(current, durationMs: 1000, next: staleNext, playing: false);
+        source.Current = TimedSnap(current, 1000, staleNext, false);
         await Task.Delay(400); // past the original ~300ms lead checkpoint
         Assert.DoesNotContain(staleNext, service.PrepareCalls);
 
-        source.Current = TimedSnap(current, durationMs: 1000, playing: true);
+        source.Current = TimedSnap(current, 1000, playing: true);
         source.RaiseChanged();
-        source.Current = TimedSnap(current, durationMs: 1000, next: liveNext, playing: true);
+        source.Current = TimedSnap(current, 1000, liveNext, true);
 
         Assert.True(await service.WaitForPrepare(liveNext), "resume arms a fresh checkpoint");
         Assert.DoesNotContain(staleNext, service.PrepareCalls);
@@ -219,13 +217,13 @@ public class BroadcastSourceTests : IAsyncLifetime
         var newCurrent = Track("new-current.flac");
         var newNext = Track("new-next.flac");
 
-        var oldSource = new FakeMusicSource { Current = TimedSnap(oldCurrent, durationMs: 1000) };
+        var oldSource = new FakeMusicSource { Current = TimedSnap(oldCurrent, 1000) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, oldSource);
 
-        var newSource = new FakeMusicSource { Current = TimedSnap(newCurrent, durationMs: 1000) };
+        var newSource = new FakeMusicSource { Current = TimedSnap(newCurrent, 1000) };
         await broadcast.BroadcastFromForTests(BroadcastProvider.Local, newSource); // ClearAsync fences off the old timer
-        oldSource.Current = TimedSnap(oldCurrent, durationMs: 1000, next: oldNext);
-        newSource.Current = TimedSnap(newCurrent, durationMs: 1000, next: newNext);
+        oldSource.Current = TimedSnap(oldCurrent, 1000, oldNext);
+        newSource.Current = TimedSnap(newCurrent, 1000, newNext);
 
         Assert.True(await service.WaitForPrepare(newNext), "the new source owns the checkpoint");
         Assert.DoesNotContain(oldNext, service.PrepareCalls);
@@ -278,11 +276,10 @@ public class BroadcastSourceTests : IAsyncLifetime
         current.Current = TestData.Snap(second);
         current.RaiseChanged();
 
-        await TestWait.Assert(
-            () => broadcast.CurrentSnapshot?.FilePath == second,
-            "the current source remains responsive during the scan");
-        loader.Result.TrySetResult(new TrackCatalog(
-            [new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [])]));
+        await TestWait.Assert(() => broadcast.CurrentSnapshot?.FilePath == second,
+                              "the current source remains responsive during the scan");
+        loader.Result.TrySetResult(
+            new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [])]));
         await TestWait.Within(loading, "the catalog load finishes");
     }
 
@@ -291,19 +288,13 @@ public class BroadcastSourceTests : IAsyncLifetime
     {
         var feed = new ControllableFeed();
         var server = new FakeBeefwebServer();
-        var watcher = new Watcher(feed, server.CreateClient(), isWine: false);
+        var watcher = new Watcher(feed, server.CreateClient(), false);
         await broadcast.SetBeefwebSource(watcher);
         var track = Track("paused.flac");
 
-        feed.Push(new Observation(
-            track,
-            PulsarState.Paused,
-            TimeSpan.FromSeconds(12),
-            TimeSpan.FromMinutes(3),
-            "Paused Song",
-            "Band",
-            DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
+        feed.Push(new Observation(track, PulsarState.Paused, TimeSpan.FromSeconds(12), TimeSpan.FromMinutes(3),
+                                  "Paused Song", "Band", DateTimeOffset.UtcNow,
+                                  System.Diagnostics.Stopwatch.GetTimestamp()));
 
         await TestWait.Assert(() => watcher.Current is not null, "Beefweb observes its initial state");
         Assert.False(broadcast.OnAir);
@@ -329,34 +320,27 @@ public class BroadcastSourceTests : IAsyncLifetime
     {
         var feed = new ControllableFeed();
         var server = new FakeBeefwebServer();
-        var watcher = new Watcher(feed, server.CreateClient(), isWine: false);
+        var watcher = new Watcher(feed, server.CreateClient(), false);
         await broadcast.SetBeefwebSource(watcher);
 
-        feed.Push(new Observation(
-            "https://radio.example/off-air", PulsarState.Playing, TimeSpan.Zero,
-            TimeSpan.FromMinutes(3), "Off Air", "DJ", DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
-        await TestWait.Assert(() => watcher.Status.Unsyncable is not null,
-            "Beefweb reports the off-air source");
+        feed.Push(new Observation("https://radio.example/off-air", PulsarState.Playing, TimeSpan.Zero,
+                                  TimeSpan.FromMinutes(3), "Off Air", "DJ", DateTimeOffset.UtcNow,
+                                  System.Diagnostics.Stopwatch.GetTimestamp()));
+        await TestWait.Assert(() => watcher.Status.Unsyncable is not null, "Beefweb reports the off-air source");
         await Task.Delay(100);
         Assert.Empty(TestBootstrap.Chat.Messages);
 
         var track = Track("syncable.mp3");
-        feed.Push(new Observation(
-            track, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3),
-            "Syncable", "DJ", DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
-        await TestWait.Assert(() => watcher.Current is not null,
-            "a syncable source resets the warning edge");
+        feed.Push(new Observation(track, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3), "Syncable", "DJ",
+                                  DateTimeOffset.UtcNow, System.Diagnostics.Stopwatch.GetTimestamp()));
+        await TestWait.Assert(() => watcher.Current is not null, "a syncable source resets the warning edge");
         broadcast.SetOnAir(true);
         await TestWait.Assert(() => broadcast.OnAir, "broadcasting is enabled");
 
-        feed.Push(new Observation(
-            "https://radio.example/on-air", PulsarState.Playing, TimeSpan.Zero,
-            TimeSpan.FromMinutes(3), "On Air", "DJ", DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "the selected on-air source warns the DJ");
+        feed.Push(new Observation("https://radio.example/on-air", PulsarState.Playing, TimeSpan.Zero,
+                                  TimeSpan.FromMinutes(3), "On Air", "DJ", DateTimeOffset.UtcNow,
+                                  System.Diagnostics.Stopwatch.GetTimestamp()));
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "the selected on-air source warns the DJ");
         Assert.Contains("internet radio stream", TestBootstrap.Chat.Messages[0]);
     }
 
@@ -391,27 +375,22 @@ public class BroadcastSourceTests : IAsyncLifetime
         var player = broadcast.ActiveLocalSource!;
         broadcast.SetOnAir(true);
         player.Play();
-        await TestWait.Assert(
-            () => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "local.mp3",
-            "local provider is live");
+        await TestWait.Assert(() => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "local.mp3",
+                              "local provider is live");
 
         var feed = new ControllableFeed();
         var server = new FakeBeefwebServer();
-        var watcher = new Watcher(feed, server.CreateClient(), isWine: false);
+        var watcher = new Watcher(feed, server.CreateClient(), false);
         await broadcast.SetBeefwebSource(watcher);
-        await TestWait.Assert(
-            () => engine.Snapshot.State == PulsarState.Stopped,
-            "selecting Beefweb stops the Local monitor");
-        await TestWait.Assert(
-            () => broadcast.CurrentPlayerData() is null,
-            "the stopped Local source is no longer published");
+        await TestWait.Assert(() => engine.Snapshot.State == PulsarState.Stopped,
+                              "selecting Beefweb stops the Local monitor");
+        await TestWait.Assert(() => broadcast.CurrentPlayerData() is null,
+                              "the stopped Local source is no longer published");
 
         var beefwebTrack = Track("beefweb.mp3");
         var gate = service.GateFor(beefwebTrack);
-        feed.Push(new Observation(
-            beefwebTrack, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3),
-            "Beefweb", "DJ", DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
+        feed.Push(new Observation(beefwebTrack, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3), "Beefweb", "DJ",
+                                  DateTimeOffset.UtcNow, System.Diagnostics.Stopwatch.GetTimestamp()));
 
         Assert.True(await service.WaitForPrepare(beefwebTrack), "handoff candidate starts preparing");
         await Task.Delay(200);
@@ -421,10 +400,9 @@ public class BroadcastSourceTests : IAsyncLifetime
 
         gate.Open();
         await TestWait.Assert(
-            () => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "beefweb.mp3"
-                  && broadcast.BroadcastStatus.LiveProvider == BroadcastProvider.Beefweb
-                  && broadcast.BroadcastStatus.Phase == BroadcastPhase.Live,
-            "prepared Beefweb provider commits");
+            () => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "beefweb.mp3" &&
+                  broadcast.BroadcastStatus.LiveProvider == BroadcastProvider.Beefweb &&
+                  broadcast.BroadcastStatus.Phase == BroadcastPhase.Live, "prepared Beefweb provider commits");
     }
 
     private DirectoryInfo CreateFolder(params string[] tracks)
@@ -451,18 +429,14 @@ public class BroadcastSourceTests : IAsyncLifetime
         await StartLocalBroadcast("local.mp3");
         var feed = new ControllableFeed();
         var server = new FakeBeefwebServer();
-        await broadcast.SetBeefwebSource(new Watcher(
-            feed, server.CreateClient(), false));
+        await broadcast.SetBeefwebSource(new Watcher(feed, server.CreateClient(), false));
         var broken = Track("broken.mp3");
         service.GateFor(broken).Fail(new InvalidDataException("cannot prepare"));
 
-        feed.Push(new Observation(
-            broken, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3),
-            "Broken", "DJ", DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
+        feed.Push(new Observation(broken, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3), "Broken", "DJ",
+                                  DateTimeOffset.UtcNow, System.Diagnostics.Stopwatch.GetTimestamp()));
 
-        await TestWait.Assert(() => broadcast.BroadcastStatus.Phase == BroadcastPhase.Retrying,
-            "failure is surfaced");
+        await TestWait.Assert(() => broadcast.BroadcastStatus.Phase == BroadcastPhase.Retrying, "failure is surfaced");
         Assert.Null(broadcast.CurrentPlayerData());
         Assert.Null(broadcast.BroadcastStatus.LiveProvider);
         Assert.Equal(PulsarState.Stopped, engine.Snapshot.State);
@@ -475,14 +449,11 @@ public class BroadcastSourceTests : IAsyncLifetime
         var player = await StartLocalBroadcast("local.mp3");
         var feed = new ControllableFeed();
         var server = new FakeBeefwebServer();
-        await broadcast.SetBeefwebSource(new Watcher(
-            feed, server.CreateClient(), false));
+        await broadcast.SetBeefwebSource(new Watcher(feed, server.CreateClient(), false));
         var next = Track("next.mp3");
         var gate = service.GateFor(next);
-        feed.Push(new Observation(
-            next, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3),
-            "Next", "DJ", DateTimeOffset.UtcNow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
+        feed.Push(new Observation(next, PulsarState.Playing, TimeSpan.Zero, TimeSpan.FromMinutes(3), "Next", "DJ",
+                                  DateTimeOffset.UtcNow, System.Diagnostics.Stopwatch.GetTimestamp()));
         Assert.True(await service.WaitForPrepare(next), "handoff preparation starts");
 
         player.Stop();
@@ -490,9 +461,8 @@ public class BroadcastSourceTests : IAsyncLifetime
         Assert.True(broadcast.OnAir);
 
         gate.Open();
-        await TestWait.Assert(
-            () => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "next.mp3",
-            "armed On Air publishes the replacement when ready");
+        await TestWait.Assert(() => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "next.mp3",
+                              "armed On Air publishes the replacement when ready");
     }
 
     [Fact]
@@ -505,7 +475,7 @@ public class BroadcastSourceTests : IAsyncLifetime
         broadcast.SetOnAir(true);
         broadcast.ActiveLocalSource!.Play();
         await TestWait.Assert(() => broadcast.CurrentSnapshot is { IsPlaying: true },
-            "the local snapshot goes live through the manager");
+                              "the local snapshot goes live through the manager");
     }
 
     [Fact]
@@ -515,9 +485,8 @@ public class BroadcastSourceTests : IAsyncLifetime
         await broadcast.LoadFolder(folder.FullName);
         var player = broadcast.ActiveLocalSource!;
         player.Play();
-        await TestWait.Assert(
-            () => engine.Snapshot is { State: PulsarState.Playing, Path: not null },
-            "folder monitor starts");
+        await TestWait.Assert(() => engine.Snapshot is { State: PulsarState.Playing, Path: not null },
+                              "folder monitor starts");
         var playingPath = engine.Snapshot.Path;
 
         var mod = Directory.CreateDirectory(Path.Combine(dir.FullName, "mod"));
@@ -538,22 +507,19 @@ public class BroadcastSourceTests : IAsyncLifetime
         await broadcast.LoadFolder(folder.FullName);
         broadcast.SetOnAir(true);
         broadcast.ActiveLocalSource!.Play();
-        await TestWait.Assert(
-            () => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "a.mp3",
-            "the first track is live");
+        await TestWait.Assert(() => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "a.mp3",
+                              "the first track is live");
         while (broadcast.Outputs.TryRead(out _)) { }
 
         engine.FinishTrack();
 
-        await TestWait.Assert(
-            () => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "b.mp3",
-            "the next track replaces it");
+        await TestWait.Assert(() => broadcast.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "b.mp3",
+                              "the next track replaces it");
         var transitionOutputs = new System.Collections.Generic.List<BroadcastOutput>();
         while (broadcast.Outputs.TryRead(out var output)) transitionOutputs.Add(output);
-        Assert.DoesNotContain(
-            transitionOutputs,
-            output => output is BroadcastOutput.PlayerDataChanged { Data: null }
-                      or BroadcastOutput.BroadcastingChanged { Value: false });
+        Assert.DoesNotContain(transitionOutputs,
+                              output => output is BroadcastOutput.PlayerDataChanged { Data: null }
+                                            or BroadcastOutput.BroadcastingChanged { Value: false });
     }
 
     [Fact]
@@ -566,9 +532,9 @@ public class BroadcastSourceTests : IAsyncLifetime
         broadcast.SetOnAir(true);
         broadcast.ActiveLocalSource!.Play();
         await TestWait.Assert(() => engine.Snapshot.State == PulsarState.Playing,
-            "the host starts playing without publishing its change event");
+                              "the host starts playing without publishing its change event");
         await TestWait.Assert(() => broadcast.CurrentSnapshot is { IsPlaying: true },
-            "poll confirmation promotes playback into the broadcast pipeline");
+                              "poll confirmation promotes playback into the broadcast pipeline");
     }
 
     [Fact]
@@ -586,12 +552,10 @@ public class BroadcastSourceTests : IAsyncLifetime
         broadcast.OnEngineReconnected();
 
         await TestWait.Assert(
-            () => engine.Ops.Count(op => op == "Load") == loads + 1
-                  && engine.Snapshot.State == PulsarState.Playing,
+            () => engine.Ops.Count(op => op == "Load") == loads + 1 && engine.Snapshot.State == PulsarState.Playing,
             "the selected track reloads after reconnect");
-        await TestWait.Assert(
-            () => broadcast.CurrentSnapshot is { IsPlaying: true },
-            "the reloaded track returns to the broadcast pipeline");
+        await TestWait.Assert(() => broadcast.CurrentSnapshot is { IsPlaying: true },
+                              "the reloaded track returns to the broadcast pipeline");
     }
 
     [Fact]
@@ -636,10 +600,9 @@ public class BroadcastSourceTests : IAsyncLifetime
     public async Task A_failed_catalog_load_keeps_the_current_source()
     {
         var live = Track("live.flac");
-        await broadcast.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = TestData.Snap(live) });
-        await TestWait.Assert(
-            () => broadcast.CurrentSnapshot?.FilePath == live,
-            "current source starts");
+        await broadcast.BroadcastFromForTests(BroadcastProvider.Local,
+                                              new FakeMusicSource { Current = TestData.Snap(live) });
+        await TestWait.Assert(() => broadcast.CurrentSnapshot?.FilePath == live, "current source starts");
         var failing = new GatedCatalogLoader(Path.Combine(dir.FullName, "broken"));
         failing.Result.TrySetException(new IOException("scan failed"));
 
@@ -660,9 +623,7 @@ public class BroadcastSourceTests : IAsyncLifetime
         var source = broadcast.ActiveLocalSource!;
         broadcast.SetOnAir(true);
         source.Play();
-        await TestWait.Assert(
-            () => broadcast.CurrentPlayerData() is not null,
-            "the playing track is published");
+        await TestWait.Assert(() => broadcast.CurrentPlayerData() is not null, "the playing track is published");
         var epoch = broadcast.CurrentPlayerData()!.Cursor.CursorEpoch;
         File.Delete(Path.Combine(folder.FullName, "b.mp3"));
         TestData.CreateTrack(folder, "c.mp3");
@@ -688,7 +649,8 @@ public class BroadcastSourceTests : IAsyncLifetime
     public async Task LoadMod_failure_keeps_the_current_source_on_air()
     {
         var live = Track("live.flac");
-        await broadcast.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = TestData.Snap(live) });
+        await broadcast.BroadcastFromForTests(BroadcastProvider.Local,
+                                              new FakeMusicSource { Current = TestData.Snap(live) });
 
         resolver.Result = null; // Penumbra unavailable / mod missing
         await broadcast.LoadMod("MissingMod");

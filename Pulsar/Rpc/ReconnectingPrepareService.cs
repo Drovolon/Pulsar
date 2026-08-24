@@ -18,12 +18,13 @@ public sealed class ReconnectingPrepareService(HostSpec spec) : IPrepareService,
 
     public ValueTask DisposeAsync() => connection.DisposeAsync();
 
-    private IPrepareService Live => connection.Proxy
-        ?? throw new ConnectionLostException($"{connection.HostName} is not connected");
+    private IPrepareService Live =>
+        connection.Proxy ?? throw new ConnectionLostException($"{connection.HostName} is not connected");
 
-    public Task<PreparedTrack> PrepareAsync(string originalPath, string transcodeOutPath, CancellationToken ct)
-        => Live.PrepareAsync(originalPath, transcodeOutPath, ct);
+    public Task<PreparedTrack> PrepareAsync(string originalPath, string transcodeOutPath, CancellationToken ct) =>
+        Live.PrepareAsync(originalPath, transcodeOutPath, ct);
 
-    public Task<PreparedTrack> PrepareBytesAsync(string originalPath, byte[] audioData, string transcodeOutPath, CancellationToken ct)
-        => Live.PrepareBytesAsync(originalPath, audioData, transcodeOutPath, ct);
+    public Task<PreparedTrack> PrepareBytesAsync(
+        string originalPath, byte[] audioData, string transcodeOutPath, CancellationToken ct) =>
+        Live.PrepareBytesAsync(originalPath, audioData, transcodeOutPath, ct);
 }

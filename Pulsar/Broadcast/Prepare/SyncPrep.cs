@@ -13,7 +13,10 @@ namespace Pulsar.Broadcast.Prepare;
 internal abstract record PrepResult
 {
     public sealed record Successful(
-        string PreparedFilePath, string Blake3Hash, string Sha1Hash, double GainDb,
+        string PreparedFilePath,
+        string Blake3Hash,
+        string Sha1Hash,
+        double GainDb,
         PrepInput Input) : PrepResult;
 
     public sealed record Failed(Exception Ex) : PrepResult;
@@ -36,13 +39,17 @@ internal abstract record PrepResult
 /// </summary>
 internal sealed class SyncPrep : IAsyncDisposable
 {
-    private enum PrepPriority { Prefetch, Active }
+    private enum PrepPriority
+    {
+        Prefetch,
+        Active,
+    }
 
     private abstract record Message;
-    private sealed record PrepRequested(
-        PrepInput Input,
-        PrepPriority Priority,
-        TaskCompletionSource<PrepResult> Completion) : Message;
+
+    private sealed record PrepRequested(PrepInput Input, PrepPriority Priority, TaskCompletionSource<PrepResult> Completion)
+        : Message;
+
     private sealed record JobCompleted(RunningJob Job, PrepResult Result) : Message;
 
     private sealed record Pending(PrepInput Input, TaskCompletionSource<PrepResult> Tcs);
@@ -76,6 +83,7 @@ internal sealed class SyncPrep : IAsyncDisposable
     /// but that's probably not enough for a big music library anyway (it's like ~150 songs).
     /// </summary>
     private readonly ConcurrentDictionary<PrepInput, PrepResult> observedResults = new();
+
     private readonly Dictionary<string, int> artifactPins = [];
     private readonly object artifactGate = new();
 
@@ -83,10 +91,7 @@ internal sealed class SyncPrep : IAsyncDisposable
     private readonly IPrepareService prepareService;
     private readonly TimeSpan attemptTimeout;
 
-    public SyncPrep(
-        CacheManager cacheManager,
-        IPrepareService prepareService,
-        TimeSpan? attemptTimeout = null)
+    public SyncPrep(CacheManager cacheManager, IPrepareService prepareService, TimeSpan? attemptTimeout = null)
     {
         this.cacheManager = cacheManager;
         this.prepareService = prepareService;
@@ -103,17 +108,26 @@ internal sealed class SyncPrep : IAsyncDisposable
 
     public bool TryGet(string key, out PrepResult? result)
     {
-        try { return observedResults.TryGetValue(PrepInput.Capture(key), out result); }
-        catch (IOException) { result = null; return false; }
+        try
+        {
+            return observedResults.TryGetValue(PrepInput.Capture(key), out result);
+        }
+        catch (IOException)
+        {
+            result = null;
+            return false;
+        }
     }
 
-    internal bool TryGet(PrepInput input, out PrepResult? result)
-        => observedResults.TryGetValue(input, out result);
+    internal bool TryGet(PrepInput input, out PrepResult? result) => observedResults.TryGetValue(input, out result);
 
     internal ArtifactLease PinArtifact(string path)
     {
         lock (artifactGate)
+        {
             artifactPins[path] = artifactPins.GetValueOrDefault(path) + 1;
+        }
+
         return new ArtifactLease(this, path);
     }
 
@@ -126,30 +140,28 @@ internal sealed class SyncPrep : IAsyncDisposable
                 lease = null!;
                 return false;
             }
+
             artifactPins[path] = artifactPins.GetValueOrDefault(path) + 1;
             lease = new ArtifactLease(this, path);
             return true;
         }
     }
 
-    internal bool TryAcquire(
-        PrepInput input,
-        out PrepResult.Successful success,
-        out ArtifactLease lease)
+    internal bool TryAcquire(PrepInput input, out PrepResult.Successful success, out ArtifactLease lease)
     {
         lock (artifactGate)
         {
-            if (observedResults.TryGetValue(input, out var known)
-                && known is PrepResult.Successful prepared
-                && File.Exists(prepared.PreparedFilePath))
+            if (observedResults.TryGetValue(input, out var known) &&
+                known is PrepResult.Successful prepared &&
+                File.Exists(prepared.PreparedFilePath))
             {
-                artifactPins[prepared.PreparedFilePath] =
-                    artifactPins.GetValueOrDefault(prepared.PreparedFilePath) + 1;
+                artifactPins[prepared.PreparedFilePath] = artifactPins.GetValueOrDefault(prepared.PreparedFilePath) + 1;
                 success = prepared;
                 lease = new ArtifactLease(this, prepared.PreparedFilePath);
                 return true;
             }
         }
+
         success = null!;
         lease = null!;
         return false;
@@ -157,8 +169,14 @@ internal sealed class SyncPrep : IAsyncDisposable
 
     private Task<PrepResult> Prep(string filePath, PrepPriority priority)
     {
-        try { return Prep(PrepInput.Capture(filePath), priority); }
-        catch (Exception e) { return Task.FromResult<PrepResult>(new PrepResult.Failed(e)); }
+        try
+        {
+            return Prep(PrepInput.Capture(filePath), priority);
+        }
+        catch (Exception e)
+        {
+            return Task.FromResult<PrepResult>(new PrepResult.Failed(e));
+        }
     }
 
     private Task<PrepResult> Prep(PrepInput input, PrepPriority priority)
@@ -169,18 +187,19 @@ internal sealed class SyncPrep : IAsyncDisposable
         return completion.Task;
     }
 
-    private static TaskCompletionSource<PrepResult> NewCompletion()
-        => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource<PrepResult> NewCompletion() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private bool TryGetPrepared(PrepInput input, out PrepResult.Successful success)
     {
-        if (observedResults.TryGetValue(input, out var known)
-            && known is PrepResult.Successful prepared
-            && File.Exists(prepared.PreparedFilePath))
+        if (observedResults.TryGetValue(input, out var known) &&
+            known is PrepResult.Successful prepared &&
+            File.Exists(prepared.PreparedFilePath))
         {
             success = prepared;
             return true;
         }
+
         success = null!;
         return false;
     }
@@ -200,10 +219,7 @@ internal sealed class SyncPrep : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    private void HandleRequest(
-        PrepInput input,
-        PrepPriority priority,
-        TaskCompletionSource<PrepResult> completion)
+    private void HandleRequest(PrepInput input, PrepPriority priority, TaskCompletionSource<PrepResult> completion)
     {
         if (TryGetPrepared(input, out var success))
         {
@@ -214,9 +230,7 @@ internal sealed class SyncPrep : IAsyncDisposable
             return;
         }
 
-        if (running is { } current
-            && current.Input == input
-            && !current.Cts.IsCancellationRequested)
+        if (running is { } current && current.Input == input && !current.Cts.IsCancellationRequested)
         {
             current.Waiters.Add(completion);
             if (priority == PrepPriority.Active) current.Priority = PrepPriority.Active;
@@ -288,8 +302,7 @@ internal sealed class SyncPrep : IAsyncDisposable
         {
             if (!job.Input.IsCurrent())
                 throw new IOException($"Preparation input changed before processing: {job.FilePath}");
-            serviceTask = prepareService.PrepareFileAsync(
-                job.FilePath, attemptPath, job.Cts.Token);
+            serviceTask = prepareService.PrepareFileAsync(job.FilePath, attemptPath, job.Cts.Token);
             var processed = await serviceTask.WaitAsync(attemptTimeout, job.Cts.Token);
 
             if (!job.Input.IsCurrent())
@@ -299,15 +312,14 @@ internal sealed class SyncPrep : IAsyncDisposable
             if (PathsEqual(preparedPath, attemptPath))
             {
                 preparedPath = cacheManager.CachePathFor(job.Input);
-                File.Move(attemptPath, preparedPath, overwrite: true);
+                File.Move(attemptPath, preparedPath, true);
             }
 
             if (!job.Input.IsCurrent())
                 throw new IOException($"Preparation input changed while committing: {job.FilePath}");
 
-            result = new PrepResult.Successful(
-                preparedPath, processed.Blake3Hash, processed.Sha1Hash, processed.GainDb,
-                job.Input);
+            result = new PrepResult.Successful(preparedPath, processed.Blake3Hash, processed.Sha1Hash, processed.GainDb,
+                                               job.Input);
         }
         catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
         {
@@ -321,8 +333,7 @@ internal sealed class SyncPrep : IAsyncDisposable
         catch (Exception ex)
         {
             result = new PrepResult.Failed(ex);
-        }
-        finally
+        } finally
         {
             if (serviceTask is { IsCompleted: false })
                 _ = ObserveAbandoned(serviceTask, attemptPath);
@@ -335,14 +346,21 @@ internal sealed class SyncPrep : IAsyncDisposable
 
     private static async Task ObserveAbandoned(Task task, string attemptPath)
     {
-        try { await task; }
-        catch { /* logical attempt already settled; observe the physical task */ }
-        finally { CleanupAttempt(attemptPath); }
+        try
+        {
+            await task;
+        }
+        catch
+        {
+            /* logical attempt already settled; observe the physical task */
+        } finally
+        {
+            CleanupAttempt(attemptPath);
+        }
     }
 
-    private static bool PathsEqual(string left, string right)
-        => string.Equals(
-            Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
 
     private static void CleanupAttempt(string attemptPath)
     {
@@ -352,7 +370,10 @@ internal sealed class SyncPrep : IAsyncDisposable
 
     private static void DeleteIfPresent(string path)
     {
-        try { File.Delete(path); }
+        try
+        {
+            File.Delete(path);
+        }
         catch (Exception ex)
         {
             Plugin.Log.Warning(ex, "Failed to clean preparation attempt {path}", path);
@@ -371,6 +392,7 @@ internal sealed class SyncPrep : IAsyncDisposable
                     cacheManager.TryEvictLru([ok.PreparedFilePath, .. artifactPins.Keys]);
                     observedResults[job.Input] = result;
                 }
+
                 break;
             case PrepResult.Failed { Ex: not ConnectionLostException } failed:
                 observedResults[job.Input] = result;

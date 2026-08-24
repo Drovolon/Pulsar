@@ -10,11 +10,7 @@ using Pulsar.Playback;
 namespace Pulsar.Broadcast.Local;
 
 /// <summary>A local audio file together with catalog-only presentation data.</summary>
-public sealed record LocalTrack(
-    string FilePath,
-    string RelativePath,
-    string DisplayName,
-    string? Origin = null);
+public sealed record LocalTrack(string FilePath, string RelativePath, string DisplayName, string? Origin = null);
 
 /// <summary>A playable subset of a local catalog.</summary>
 public sealed record TrackGroup(string Id, string Name, IReadOnlyList<LocalTrack> Tracks);
@@ -31,16 +27,13 @@ public sealed record TrackCatalog(IReadOnlyList<TrackGroup> Groups)
 
     public TrackGroup AllFiles => Groups[0];
 
-    public TrackGroup FindGroup(string? id)
-        => id is null
-            ? AllFiles
-            : Groups.FirstOrDefault(g => string.Equals(g.Id, id, StringComparison.Ordinal)) ?? AllFiles;
+    public TrackGroup FindGroup(string? id) =>
+        id is null ? AllFiles : Groups.FirstOrDefault(g => string.Equals(g.Id, id, StringComparison.Ordinal)) ?? AllFiles;
 
-    internal static LocalTrack[] SortTracksByFileName(IEnumerable<LocalTrack> tracks)
-        => tracks
-            .OrderBy(track => Path.GetFileName(track.FilePath), NaturalPathComparer.Instance)
-            .ThenBy(track => track.RelativePath, NaturalPathComparer.Instance)
-            .ToArray();
+    internal static LocalTrack[] SortTracksByFileName(IEnumerable<LocalTrack> tracks) =>
+        tracks.OrderBy(track => Path.GetFileName(track.FilePath), NaturalPathComparer.Instance)
+              .ThenBy(track => track.RelativePath, NaturalPathComparer.Instance)
+              .ToArray();
 }
 
 public interface ITrackCatalogLoader
@@ -56,29 +49,32 @@ public sealed class FolderTrackCatalogLoader(string rootDirectory) : ITrackCatal
     [
         "*.aac", "*.aiff", "*.flac", "*.m4a",
         "*.mp3", "*.ogg", "*.opus", "*.wav",
-        "*.wma", "*.wv", "*.scd"
+        "*.wma", "*.wv", "*.scd",
     ];
 
     public string RootDirectory { get; } = Path.GetFullPath(rootDirectory);
 
-    public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default)
-        => Task.Run(() => Scan(cancellationToken), cancellationToken);
+    public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(() => Scan(cancellationToken), cancellationToken);
 
     internal TrackCatalog Scan(CancellationToken cancellationToken)
     {
         var tracks = TrackCatalog.SortTracksByFileName(Extensions
-            .SelectMany(pattern => Directory.EnumerateFiles(RootDirectory, pattern, SearchOption.AllDirectories))
-            .Select(path =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var full = Path.GetFullPath(path);
-                var relative = Path.GetRelativePath(RootDirectory, full).Replace('\\', '/');
-                return new LocalTrack(
-                    full,
-                    relative,
-                    Path.GetFileName(full),
-                    Path.GetFileName(RootDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
-            }));
+                                                       .SelectMany(pattern => Directory.EnumerateFiles(
+                                                                       RootDirectory, pattern, SearchOption.AllDirectories))
+                                                       .Select(path =>
+                                                       {
+                                                           cancellationToken.ThrowIfCancellationRequested();
+                                                           var full = Path.GetFullPath(path);
+                                                           var relative = Path.GetRelativePath(RootDirectory, full)
+                                                                              .Replace('\\', '/');
+                                                           return new LocalTrack(
+                                                               full, relative, Path.GetFileName(full),
+                                                               Path.GetFileName(
+                                                                   RootDirectory.TrimEnd(
+                                                                       Path.DirectorySeparatorChar,
+                                                                       Path.AltDirectorySeparatorChar)));
+                                                       }));
 
         return new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, tracks)]);
     }
@@ -100,8 +96,8 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
 {
     public string RootDirectory { get; } = Path.GetFullPath(rootDirectory);
 
-    public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default)
-        => Task.Run(() => Load(cancellationToken), cancellationToken);
+    public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(() => Load(cancellationToken), cancellationToken);
 
     private TrackCatalog Load(CancellationToken cancellationToken)
     {
@@ -110,17 +106,13 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
         foreach (var track in baseCatalog.AllFiles.Tracks) byRelativePath.TryAdd(track.RelativePath, track);
         var groups = new List<TrackGroup> { baseCatalog.AllFiles };
 
-        foreach (var groupFile in Directory
-                     .EnumerateFiles(RootDirectory, "group_*.json", SearchOption.TopDirectoryOnly)
-                     .OrderBy(path => path, NaturalPathComparer.Instance))
+        foreach (var groupFile in Directory.EnumerateFiles(RootDirectory, "group_*.json", SearchOption.TopDirectoryOnly)
+                                           .OrderBy(path => path, NaturalPathComparer.Instance))
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                if (TryReadGroup(groupFile, byRelativePath, out var group))
-                {
-                    groups.Add(group);
-                }
+                if (TryReadGroup(groupFile, byRelativePath, out var group)) groups.Add(group);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
             {
@@ -132,9 +124,7 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
     }
 
     private static bool TryReadGroup(
-        string groupFile,
-        IReadOnlyDictionary<string, LocalTrack> byRelativePath,
-        out TrackGroup group)
+        string groupFile, IReadOnlyDictionary<string, LocalTrack> byRelativePath, out TrackGroup group)
     {
         group = null!;
         using var document = JsonDocument.Parse(File.ReadAllBytes(groupFile), new JsonDocumentOptions
@@ -144,12 +134,12 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
             MaxDepth = 32,
         });
         var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object
-            || !root.TryGetProperty("Type", out var type)
-            || type.ValueKind != JsonValueKind.String
-            || !string.Equals(type.GetString(), "Single", StringComparison.OrdinalIgnoreCase)
-            || !root.TryGetProperty("Options", out var options)
-            || options.ValueKind != JsonValueKind.Array)
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("Type", out var type) ||
+            type.ValueKind != JsonValueKind.String ||
+            !string.Equals(type.GetString(), "Single", StringComparison.OrdinalIgnoreCase) ||
+            !root.TryGetProperty("Options", out var options) ||
+            options.ValueKind != JsonValueKind.Array)
             return false;
 
         var mappings = new List<OptionMapping>();
@@ -162,8 +152,8 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
                 continue;
             }
 
-            var optionName = option.TryGetProperty("Name", out var nameElement)
-                && nameElement.ValueKind == JsonValueKind.String
+            var optionName =
+                option.TryGetProperty("Name", out var nameElement) && nameElement.ValueKind == JsonValueKind.String
                     ? nameElement.GetString() ?? ""
                     : "";
             if (!option.TryGetProperty("Files", out var files) || files.ValueKind != JsonValueKind.Object)
@@ -174,20 +164,16 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
 
             foreach (var mapping in files.EnumerateObject())
             {
-                if (!mapping.Name.EndsWith(".scd", StringComparison.OrdinalIgnoreCase)
-                    || mapping.Value.ValueKind != JsonValueKind.String
-                    || mapping.Value.GetString() is not { } backingPath
-                    || !backingPath.EndsWith(".scd", StringComparison.OrdinalIgnoreCase)
-                    || !byRelativePath.TryGetValue(
-                        backingPath.Replace('\\', '/'), out var physicalTrack))
+                if (!mapping.Name.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
+                    mapping.Value.ValueKind != JsonValueKind.String ||
+                    mapping.Value.GetString() is not { } backingPath ||
+                    !backingPath.EndsWith(".scd", StringComparison.OrdinalIgnoreCase) ||
+                    !byRelativePath.TryGetValue(backingPath.Replace('\\', '/'), out var physicalTrack))
                     continue;
 
-                mappings.Add(new OptionMapping(
-                    optionIndex,
-                    optionName,
-                    mapping.Name.Replace('\\', '/'),
-                    physicalTrack));
+                mappings.Add(new OptionMapping(optionIndex, optionName, mapping.Name.Replace('\\', '/'), physicalTrack));
             }
+
             optionIndex++;
         }
 
@@ -195,41 +181,43 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
         //     {"dam.scd" => "song1.scd", "dam.scd" => "song2.scd", "dam.scd" => "song3.scd",
         //      "some_other_thing.scd" => "effect.scd", ... }
         // this groups by the key (e.g. dam.scd) and picks the most frequent option
-        var mostFrequentGamePath = mappings
-            .GroupBy(mapping => mapping.GamePath, StringComparer.OrdinalIgnoreCase)
-            .Select(candidate => new
-            {
-                GamePath = candidate.Key,
-                OptionCount = candidate.Select(mapping => mapping.OptionIndex).Distinct().Count(),
-                TrackCount = candidate.Select(mapping => mapping.Track.FilePath)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Count(),
-            })
-            .Where(candidate => candidate.OptionCount >= 2 && candidate.TrackCount >= 2)
-            .OrderByDescending(candidate => candidate.OptionCount)
-            .ThenBy(candidate => candidate.GamePath, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
+        var mostFrequentGamePath = mappings.GroupBy(mapping => mapping.GamePath, StringComparer.OrdinalIgnoreCase)
+                                           .Select(candidate => new
+                                           {
+                                               GamePath = candidate.Key,
+                                               OptionCount = candidate.Select(mapping => mapping.OptionIndex)
+                                                                      .Distinct()
+                                                                      .Count(),
+                                               TrackCount = candidate.Select(mapping => mapping.Track.FilePath)
+                                                                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                                                                     .Count(),
+                                           })
+                                           .Where(candidate => candidate.OptionCount >= 2 && candidate.TrackCount >= 2)
+                                           .OrderByDescending(candidate => candidate.OptionCount)
+                                           .ThenBy(candidate => candidate.GamePath, StringComparer.OrdinalIgnoreCase)
+                                           .FirstOrDefault();
         if (mostFrequentGamePath is null) return false;
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var tracks = mappings
-            .Where(mapping => string.Equals(mapping.GamePath, mostFrequentGamePath.GamePath, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(mapping => mapping.OptionIndex)
-            .Where(mapping => seen.Add(mapping.Track.FilePath))
-            .Select(mapping => mapping.Track with
-            {
-                DisplayName = string.IsNullOrWhiteSpace(mapping.OptionName)
-                    ? mapping.Track.DisplayName
-                    : mapping.OptionName,
-            })
-            .ToArray();
+                     .Where(mapping => string.Equals(mapping.GamePath, mostFrequentGamePath.GamePath,
+                                                     StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(mapping => mapping.OptionIndex)
+                     .Where(mapping => seen.Add(mapping.Track.FilePath))
+                     .Select(mapping => mapping.Track with
+                     {
+                         DisplayName = string.IsNullOrWhiteSpace(mapping.OptionName)
+                                           ? mapping.Track.DisplayName
+                                           : mapping.OptionName,
+                     })
+                     .ToArray();
         if (tracks.Length < 2) return false;
 
-        var name = root.TryGetProperty("Name", out var groupName)
-            && groupName.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(groupName.GetString())
-                ? groupName.GetString()!
-                : Path.GetFileNameWithoutExtension(groupFile);
+        var name = root.TryGetProperty("Name", out var groupName) &&
+                   groupName.ValueKind == JsonValueKind.String &&
+                   !string.IsNullOrWhiteSpace(groupName.GetString())
+                       ? groupName.GetString()!
+                       : Path.GetFileNameWithoutExtension(groupFile);
         group = new TrackGroup(Path.GetFileName(groupFile), name, tracks);
         return true;
     }

@@ -15,11 +15,8 @@ namespace Pulsar.Tests;
 /// </summary>
 public class ReconnectingPrepareServiceTests
 {
-    private static HostSpec Spec => new(
-        ExePath: "/nonexistent/Pulsar.TranscodeHost.exe",
-        PipeName: $"pulsar-test-{Guid.NewGuid():N}",
-        LogDirectory: Path.GetTempPath(),
-        LogTag: "test");
+    private static HostSpec Spec =>
+        new("/nonexistent/Pulsar.TranscodeHost.exe", $"pulsar-test-{Guid.NewGuid():N}", Path.GetTempPath(), "test");
 
     // Both tests bound their awaits: a regression that HANGS (rather than throws)
     // must fail the test, not wedge the whole run.
@@ -28,10 +25,12 @@ public class ReconnectingPrepareServiceTests
     {
         await using var prep = new ReconnectingPrepareService(Spec); // never Start()ed
 
-        await Assert.ThrowsAsync<ConnectionLostException>(
-            () => prep.PrepareAsync("in.flac", "out", CancellationToken.None)).WaitAsync(TestWait.Timeout);
-        await Assert.ThrowsAsync<ConnectionLostException>(
-            () => prep.PrepareBytesAsync("in.scd", [1], "out", CancellationToken.None)).WaitAsync(TestWait.Timeout);
+        await Assert.ThrowsAsync<ConnectionLostException>(() => prep.PrepareAsync("in.flac", "out", CancellationToken.None))
+                    .WaitAsync(TestWait.Timeout);
+        await Assert
+              .ThrowsAsync<ConnectionLostException>(() => prep.PrepareBytesAsync(
+                                                        "in.scd", [1], "out", CancellationToken.None))
+              .WaitAsync(TestWait.Timeout);
     }
 
     [Fact]

@@ -11,19 +11,19 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <!-- Abstractions only (IHostedService/IHostApplicationLifetime for ParentWatchdog);
-           the full Hosting package lives in the host projects. -->
-      <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5" />
-      <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9" />
-      <PackageReference Include="Nerdbank.MessagePack" Version="1.2.30" />
-      <PackageReference Include="Serilog" Version="4.3.1" />
-      <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
-      <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
-      <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
-      <PackageReference Include="NAudio" Version="3.0.0-preview.16" />
-      <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16" />
-      <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16" />
-      <PackageReference Include="NAudio.Wasapi" Version="3.0.0-preview.16" />
+        <!-- Abstractions only (IHostedService/IHostApplicationLifetime for ParentWatchdog);
+             the full Hosting package lives in the host projects. -->
+        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.5"/>
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.9"/>
+        <PackageReference Include="Nerdbank.MessagePack" Version="1.2.30"/>
+        <PackageReference Include="Serilog" Version="4.3.1"/>
+        <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1"/>
+        <PackageReference Include="Serilog.Sinks.File" Version="7.0.0"/>
+        <PackageReference Include="StreamJsonRpc" Version="2.25.29"/>
+        <PackageReference Include="NAudio" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.Wasapi" Version="3.0.0-preview.16"/>
     </ItemGroup>
 
 </Project>

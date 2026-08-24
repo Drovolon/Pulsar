@@ -28,7 +28,7 @@ internal static class ActiveItemFields
     [
         ("%path%", (f, v) => f.Path = string.IsNullOrEmpty(v) ? null : v),
         ("%artist%", (f, v) => f.Artist = v),
-        ("%title%", (f, v) => f.Title = v)
+        ("%title%", (f, v) => f.Title = v),
     ];
 
     internal static string[] Columns { get; } = Spec.Select(s => s.Query).ToArray();
@@ -36,10 +36,7 @@ internal static class ActiveItemFields
     internal static Fields Parse(IList<string> cols)
     {
         var f = new Fields();
-        for (var i = 0; i < Spec.Length && i < cols.Count; i++)
-        {
-            Spec[i].Assign(f, cols[i]);
-        }
+        for (var i = 0; i < Spec.Length && i < cols.Count; i++) Spec[i].Assign(f, cols[i]);
         return f;
     }
 }
@@ -70,7 +67,10 @@ public sealed class PollingFeed(PlayerClient client, TimeSpan? pollInterval = nu
                 o = BeefwebObservationMapper.Map(state);
                 SetConnected(true);
             }
-            catch (OperationCanceledException) { yield break; }
+            catch (OperationCanceledException)
+            {
+                yield break;
+            }
             catch (Exception e)
             {
                 SetConnected(false);
@@ -79,8 +79,14 @@ public sealed class PollingFeed(PlayerClient client, TimeSpan? pollInterval = nu
 
             if (o is { } val) yield return val;
 
-            try { await Task.Delay(pollInterval, ct); }
-            catch (OperationCanceledException) { yield break; }
+            try
+            {
+                await Task.Delay(pollInterval, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                yield break;
+            }
         }
     }
 
@@ -102,7 +108,7 @@ internal static class BeefwebObservationMapper
         {
             PlaybackState.Playing => PulsarState.Playing,
             PlaybackState.Paused => PulsarState.Paused,
-            _ => PulsarState.Stopped
+            _ => PulsarState.Stopped,
         };
 
         var (f, position, duration) =
@@ -110,7 +116,7 @@ internal static class BeefwebObservationMapper
                 ? (ActiveItemFields.Parse(cols), st.ActiveItem.Position, st.ActiveItem.Duration)
                 : (new ActiveItemFields.Fields(), TimeSpan.Zero, TimeSpan.Zero);
 
-        return new Observation(f.Path, state, position, duration, f.Title, f.Artist,
-            DateTimeOffset.UtcNow, Stopwatch.GetTimestamp());
+        return new Observation(f.Path, state, position, duration, f.Title, f.Artist, DateTimeOffset.UtcNow,
+                               Stopwatch.GetTimestamp());
     }
 }

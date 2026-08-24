@@ -14,14 +14,14 @@ public class SyncabilityTests : IDisposable
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-sync-test-");
 
-    public void Dispose() => dir.Delete(recursive: true);
+    public void Dispose() => dir.Delete(true);
 
     [Fact]
     public void An_existing_local_file_is_syncable_and_its_path_is_broadcast_verbatim()
     {
         var track = TestData.CreateTrack(dir, "song.flac");
 
-        var verdict = Syncability.Check(track, isWine: false);
+        var verdict = Syncability.Check(track, false);
 
         Assert.True(verdict.Syncable);
         Assert.Equal(track, verdict.LocalPath);
@@ -32,7 +32,7 @@ public class SyncabilityTests : IDisposable
     [InlineData("https://radio.example/stream.mp3")]
     public void Web_streams_are_internet_radio(string url)
     {
-        var verdict = Syncability.Check(url, isWine: false);
+        var verdict = Syncability.Check(url, false);
 
         Assert.False(verdict.Syncable);
         Assert.Equal(UnsyncableReason.InternetRadio, verdict.Reason);
@@ -42,7 +42,7 @@ public class SyncabilityTests : IDisposable
     [Fact]
     public void Cd_audio_is_unsyncable()
     {
-        var verdict = Syncability.Check("cdda://drive/track01", isWine: false);
+        var verdict = Syncability.Check("cdda://drive/track01", false);
 
         Assert.False(verdict.Syncable);
         Assert.Equal(UnsyncableReason.CdAudio, verdict.Reason);
@@ -55,7 +55,7 @@ public class SyncabilityTests : IDisposable
     [InlineData(@"C:\music\album.zip|3")]
     public void Archive_members_are_unsyncable(string path)
     {
-        var verdict = Syncability.Check(path, isWine: false);
+        var verdict = Syncability.Check(path, false);
 
         Assert.False(verdict.Syncable);
         Assert.Equal(UnsyncableReason.Archive, verdict.Reason);
@@ -66,7 +66,7 @@ public class SyncabilityTests : IDisposable
     [InlineData("")]
     public void A_missing_path_is_not_a_local_file(string? path)
     {
-        var verdict = Syncability.Check(path, isWine: false);
+        var verdict = Syncability.Check(path, false);
 
         Assert.False(verdict.Syncable);
         Assert.Equal(UnsyncableReason.NotLocalFile, verdict.Reason);
@@ -75,7 +75,7 @@ public class SyncabilityTests : IDisposable
     [Fact]
     public void A_file_that_does_not_exist_fails_the_existence_check()
     {
-        var verdict = Syncability.Check(Path.Combine(dir.FullName, "deleted.flac"), isWine: false);
+        var verdict = Syncability.Check(Path.Combine(dir.FullName, "deleted.flac"), false);
 
         Assert.False(verdict.Syncable);
         Assert.Equal(UnsyncableReason.FileDoesNotExist, verdict.Reason);
@@ -93,12 +93,11 @@ public class SyncabilityTests : IDisposable
         File.WriteAllBytes(translated, new byte[16]);
         try
         {
-            var verdict = Syncability.Check(unixStyle, isWine: true);
+            var verdict = Syncability.Check(unixStyle, true);
 
             Assert.True(verdict.Syncable);
             Assert.Equal(translated, verdict.LocalPath);
-        }
-        finally
+        } finally
         {
             File.Delete(translated);
         }
@@ -112,7 +111,7 @@ public class SyncabilityTests : IDisposable
         // into the "enable the locale hack" chat warning), not silently synced.
         var track = TestData.CreateTrack(dir, "song.flac");
 
-        var verdict = Syncability.Check(track, isWine: true);
+        var verdict = Syncability.Check(track, true);
 
         Assert.False(verdict.Syncable);
         Assert.Equal(UnsyncableReason.FileDoesNotExist, verdict.Reason);

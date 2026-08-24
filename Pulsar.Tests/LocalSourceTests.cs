@@ -22,8 +22,7 @@ public class LocalSourceTests : IAsyncLifetime
     {
         public string RootDirectory { get; } = root;
         public TrackCatalog Catalog { get; set; } = catalog;
-        public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(Catalog);
+        public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Catalog);
     }
 
     private sealed class SequencedCatalogLoader(
@@ -36,8 +35,8 @@ public class LocalSourceTests : IAsyncLifetime
         public string RootDirectory { get; } = root;
         public int Calls => Volatile.Read(ref calls);
 
-        public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default)
-            => Interlocked.Increment(ref calls) switch
+        public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default) =>
+            Interlocked.Increment(ref calls) switch
             {
                 1 => Task.FromResult(initial),
                 2 => firstRescan,
@@ -51,7 +50,10 @@ public class LocalSourceTests : IAsyncLifetime
     private readonly EngineSession engineSession;
     private LocalSource? source;
 
-    public LocalSourceTests() => engineSession = new EngineSession(engine);
+    public LocalSourceTests()
+    {
+        engineSession = new EngineSession(engine);
+    }
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -59,7 +61,7 @@ public class LocalSourceTests : IAsyncLifetime
     {
         if (source is not null) await source.DisposeAsync();
         await engineSession.DisposeAsync();
-        dir.Delete(recursive: true);
+        dir.Delete(true);
     }
 
     private async Task<LocalSource> Create(params string[] tracks)
@@ -93,12 +95,8 @@ public class LocalSourceTests : IAsyncLifetime
     public async Task Playing_snapshot_carries_the_catalog_display_name_separately_from_the_filename()
     {
         var path = TestData.CreateTrack(dir, "2826_DeathbyRomy - Vicious Bliss_2842.scd");
-        var track = new LocalTrack(
-            path,
-            Path.GetFileName(path),
-            "DeathbyRomy - Vicious Bliss");
-        var catalog = new TrackCatalog(
-            [new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [track])]);
+        var track = new LocalTrack(path, Path.GetFileName(path), "DeathbyRomy - Vicious Bliss");
+        var catalog = new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [track])]);
         var loader = new MutableCatalogLoader(dir.FullName, catalog);
         source = await LocalSource.Create(engineSession, loader, catalog);
 
@@ -162,9 +160,7 @@ public class LocalSourceTests : IAsyncLifetime
 
         engine.DeferLoads = true;
         engine.FinishTrack();
-        await TestWait.Assert(
-            () => engine.Calls.Count(call => call.Op == "Load") >= 2,
-            "queued successor load dispatched");
+        await TestWait.Assert(() => engine.Calls.Count(call => call.Op == "Load") >= 2, "queued successor load dispatched");
 
         Assert.NotNull(local.Frame);
         Assert.Same(before.Cursor, local.Frame!.Cursor);
@@ -188,9 +184,9 @@ public class LocalSourceTests : IAsyncLifetime
         local.Seek(TimeSpan.FromMinutes(1));
 
         await TestWait.Assert(
-            () => local.Frame is { } frame
-                  && !ReferenceEquals(frame.Cursor, before.Cursor)
-                  && frame.Snapshot.Position >= TimeSpan.FromMinutes(1),
+            () => local.Frame is { } frame &&
+                  !ReferenceEquals(frame.Cursor, before.Cursor) &&
+                  frame.Snapshot.Position >= TimeSpan.FromMinutes(1),
             "poll observes the missed seek as a cursor transition");
     }
 
@@ -209,9 +205,8 @@ public class LocalSourceTests : IAsyncLifetime
 
         engine.DeferLoads = true;
         engine.FinishTrack();
-        await TestWait.Assert(
-            () => engine.Calls.Count(call => call.Op == "Load") >= 2,
-            "same-path successor load dispatched");
+        await TestWait.Assert(() => engine.Calls.Count(call => call.Op == "Load") >= 2,
+                              "same-path successor load dispatched");
 
         Assert.Equal(a.FilePath, local.Frame!.Snapshot.NextFilePath);
     }
@@ -237,8 +232,7 @@ public class LocalSourceTests : IAsyncLifetime
         var all = new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [one, two]);
         var rock = new TrackGroup("group_rock.json", "Rock", [two]);
         var loader = new MutableCatalogLoader(dir.FullName, new TrackCatalog([all, rock]));
-        source = await LocalSource.Create(
-            engineSession, loader, loader.Catalog, "CoolMod");
+        source = await LocalSource.Create(engineSession, loader, loader.Catalog, "CoolMod");
         source.PlayNow(one);
         await source.DrainForTests();
 
@@ -266,8 +260,7 @@ public class LocalSourceTests : IAsyncLifetime
         var all = new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [one, two]);
         var rock = new TrackGroup("group_rock.json", "Rock", [two]);
         var loader = new MutableCatalogLoader(dir.FullName, new TrackCatalog([all, rock]));
-        source = await LocalSource.Create(
-            engineSession, loader, loader.Catalog, "CoolMod");
+        source = await LocalSource.Create(engineSession, loader, loader.Catalog, "CoolMod");
         source.AddToEnd(one);
         await source.DrainForTests();
         source.OnQueueChanged += () => throw new InvalidOperationException("subscriber failed");
@@ -305,9 +298,7 @@ public class LocalSourceTests : IAsyncLifetime
         Assert.Equal(one.FilePath, source.CurrentTrack?.FilePath);
         Assert.Equal(loadsBefore, engine.Calls.Count(call => call.Op == "Load"));
         Assert.Equal(queued, Assert.Single(source.Queue).Track);
-        Assert.Equal(
-            [queued.FilePath, two.FilePath, three.FilePath],
-            source.UpNext.Select(item => item.Track.FilePath));
+        Assert.Equal([queued.FilePath, two.FilePath, three.FilePath], source.UpNext.Select(item => item.Track.FilePath));
 
         engine.FinishTrack();
         await TestWait.Assert(() => engine.Snapshot.Path == queued.FilePath, "manual queue plays next");
@@ -381,12 +372,15 @@ public class LocalSourceTests : IAsyncLifetime
         var initialTrack = new LocalTrack(Path.Combine(dir.FullName, "initial.scd"), "initial.scd", "Initial");
         var oldTrack = new LocalTrack(Path.Combine(dir.FullName, "old.scd"), "old.scd", "Old");
         var newTrack = new LocalTrack(Path.Combine(dir.FullName, "new.scd"), "new.scd", "New");
-        TrackCatalog Catalog(LocalTrack track) => new([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [track])]);
+
+        TrackCatalog Catalog(LocalTrack track)
+        {
+            return new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [track])]);
+        }
 
         var olderResult = new TaskCompletionSource<TrackCatalog>(TaskCreationOptions.RunContinuationsAsynchronously);
         var newerResult = new TaskCompletionSource<TrackCatalog>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var loader = new SequencedCatalogLoader(
-            dir.FullName, Catalog(initialTrack), olderResult.Task, newerResult.Task);
+        var loader = new SequencedCatalogLoader(dir.FullName, Catalog(initialTrack), olderResult.Task, newerResult.Task);
         var initial = await loader.LoadAsync();
         source = await LocalSource.Create(engineSession, loader, initial);
         source.PlayNow(initialTrack);

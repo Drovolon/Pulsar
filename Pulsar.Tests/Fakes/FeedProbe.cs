@@ -27,7 +27,10 @@ public sealed class FeedProbe : IAsyncDisposable
             try
             {
                 await foreach (var o in feed.Observations(cts.Token))
-                    lock (seen) seen.Add(o);
+                    lock (seen)
+                    {
+                        seen.Add(o);
+                    }
             }
             catch (OperationCanceledException) { }
         });
@@ -35,11 +38,33 @@ public sealed class FeedProbe : IAsyncDisposable
 
     private void OnConnectedChanged(bool connected)
     {
-        lock (seen) connectivity.Add(connected);
+        lock (seen)
+        {
+            connectivity.Add(connected);
+        }
     }
 
-    public Observation[] Seen { get { lock (seen) return [.. seen]; } }
-    public bool[] Connectivity { get { lock (seen) return [.. connectivity]; } }
+    public Observation[] Seen
+    {
+        get
+        {
+            lock (seen)
+            {
+                return [.. seen];
+            }
+        }
+    }
+
+    public bool[] Connectivity
+    {
+        get
+        {
+            lock (seen)
+            {
+                return [.. connectivity];
+            }
+        }
+    }
 
     /// <summary>Cancels the enumeration and asserts it actually ends.</summary>
     public async Task CancelAndAwaitEnd(string because)
@@ -55,8 +80,7 @@ public sealed class FeedProbe : IAsyncDisposable
         try
         {
             await TestWait.Within(pump, "feed probe pump exits during disposal");
-        }
-        finally
+        } finally
         {
             cts.Dispose();
             await feed.DisposeAsync();

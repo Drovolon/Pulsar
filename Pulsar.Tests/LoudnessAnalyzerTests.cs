@@ -10,14 +10,14 @@ namespace Pulsar.Tests;
 /// </summary>
 public class LoudnessAnalyzerTests
 {
-    private static void Feed(LoudnessAnalyzer analyzer, int channels, int rate, double seconds,
-        Func<int, double>[] perChannel)
+    private static void Feed(
+        LoudnessAnalyzer analyzer, int channels, int rate, double seconds, Func<int, double>[] perChannel)
     {
         var frames = (int)(rate * seconds);
         var buf = new float[frames * channels];
         for (var i = 0; i < frames; i++)
-            for (var c = 0; c < channels; c++)
-                buf[(i * channels) + c] = (float)perChannel[c](i);
+        for (var c = 0; c < channels; c++)
+            buf[(i * channels) + c] = (float)perChannel[c](i);
         analyzer.AddFrames(buf);
     }
 

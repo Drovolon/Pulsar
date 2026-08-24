@@ -15,8 +15,7 @@ namespace Pulsar.Rpc;
 /// The host subprocesses handle the game dying; DisposeAsync handles the plugin unloading gracefully;
 /// this class handles the rest.
 /// </summary>
-public sealed class HostConnection<T> : IAsyncDisposable
-    where T : class
+public sealed class HostConnection<T> : IAsyncDisposable where T : class
 {
     private readonly HostSpec spec;
     private readonly Action<T> wireProxy;
@@ -30,15 +29,12 @@ public sealed class HostConnection<T> : IAsyncDisposable
     private Process? process;
     private volatile T? proxy;
 
-    public HostConnection(HostSpec spec, Action<T> wireProxy)
-        : this(spec, wireProxy,
-               connectTimeout: TimeSpan.FromSeconds(10),
-               backoffUnit: TimeSpan.FromSeconds(1),
-               maxBackoff: TimeSpan.FromSeconds(30)) { }
+    public HostConnection(HostSpec spec, Action<T> wireProxy) : this(spec, wireProxy, TimeSpan.FromSeconds(10),
+                                                                     TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30)) { }
 
     // For unit tests
-    internal HostConnection(HostSpec spec, Action<T> wireProxy,
-        TimeSpan connectTimeout, TimeSpan backoffUnit, TimeSpan maxBackoff)
+    internal HostConnection(
+        HostSpec spec, Action<T> wireProxy, TimeSpan connectTimeout, TimeSpan backoffUnit, TimeSpan maxBackoff)
     {
         this.spec = spec;
         this.wireProxy = wireProxy;
@@ -100,7 +96,7 @@ public sealed class HostConnection<T> : IAsyncDisposable
                 if (ct.IsCancellationRequested) break;
 
                 Plugin.Log.Warning("Lost connection to {host}: {reason}", HostName,
-                    rpc.Completion.Exception?.GetBaseException().Message ?? "connection closed");
+                                   rpc.Completion.Exception?.GetBaseException().Message ?? "connection closed");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -109,8 +105,7 @@ public sealed class HostConnection<T> : IAsyncDisposable
             catch (Exception ex)
             {
                 Plugin.Log.Warning("Connecting to {host} failed: {message}", HostName, ex.Message);
-            }
-            finally
+            } finally
             {
                 if (proxy is not null)
                 {
@@ -118,14 +113,21 @@ public sealed class HostConnection<T> : IAsyncDisposable
                     if (!ct.IsCancellationRequested)
                         RaiseSafely(OnDisconnected, nameof(OnDisconnected));
                 }
+
                 rpc?.Dispose();
                 pipe?.Dispose();
             }
 
             attempt++;
             var delay = Backoff(attempt, backoffUnit, maxBackoff);
-            try { await Task.Delay(delay, ct); }
-            catch (OperationCanceledException) { break; }
+            try
+            {
+                await Task.Delay(delay, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
     }
 
@@ -136,10 +138,7 @@ public sealed class HostConnection<T> : IAsyncDisposable
         await Task.WhenAny(rpc.Completion, cancelled.Task);
     }
 
-    private async Task ConnectWhileProcessLives(
-        NamedPipeClientStream pipe,
-        Process hostProcess,
-        CancellationToken ct)
+    private async Task ConnectWhileProcessLives(NamedPipeClientStream pipe, Process hostProcess, CancellationToken ct)
     {
         using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var connect = pipe.ConnectAsync((int)connectTimeout.TotalMilliseconds, ct);
@@ -155,8 +154,7 @@ public sealed class HostConnection<T> : IAsyncDisposable
         try
         {
             await connect;
-        }
-        finally
+        } finally
         {
             startupCts.Cancel();
         }
@@ -227,8 +225,8 @@ public sealed class HostConnection<T> : IAsyncDisposable
 
         // Forward stdout/stderr to Dalamud logs
         // (Actual logs use Serilog to disk)
-        _ = DrainToPluginLogAsync(fresh.StandardOutput, HostName, isError: false);
-        _ = DrainToPluginLogAsync(fresh.StandardError, HostName, isError: true);
+        _ = DrainToPluginLogAsync(fresh.StandardOutput, HostName, false);
+        _ = DrainToPluginLogAsync(fresh.StandardError, HostName, true);
 
         Plugin.Log.Information("Started {name} (pid {pid})", HostName, fresh.Id);
         process = fresh;
@@ -240,12 +238,10 @@ public sealed class HostConnection<T> : IAsyncDisposable
         try
         {
             while (await reader.ReadLineAsync() is { } line)
-            {
                 if (isError)
                     Plugin.Log.Warning("[{name}] {line}", name, line);
                 else
                     Plugin.Log.Debug("[{name}] {line}", name, line);
-            }
         }
         catch
         {
@@ -272,14 +268,13 @@ public sealed class HostConnection<T> : IAsyncDisposable
         {
             try
             {
-                process.Kill(entireProcessTree: true);
+                process.Kill(true);
                 process.WaitForExit(3000);
             }
             catch
             {
                 // already exited
-            }
-            finally
+            } finally
             {
                 process.Dispose();
             }

@@ -18,7 +18,10 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
     private ListeningManager? manager;
     private Task? outputLoop;
 
-    public ListeningNotificationTests() => TestBootstrap.Chat.Clear();
+    public ListeningNotificationTests()
+    {
+        TestBootstrap.Chat.Clear();
+    }
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -43,10 +46,9 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
             notifier.Notify(output);
     }
 
-    private static PairData Track(string path, bool playing = true, int epoch = 1,
-                                  string displayName = "Artist - Song")
-        => new(path, TimeSpan.FromSeconds(60), playing, DateTimeOffset.UtcNow, epoch,
-               new TrackMeta { DisplayName = displayName });
+    private static PairData Track(string path, bool playing = true, int epoch = 1, string displayName = "Artist - Song") =>
+        new(path, TimeSpan.FromSeconds(60), playing, DateTimeOffset.UtcNow, epoch,
+            new TrackMeta { DisplayName = displayName });
 
     [Fact]
     public void Notification_defaults_match_the_intended_noise_level()
@@ -73,11 +75,10 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
 
         listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack));
 
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "one specific nearby notification");
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "one specific nearby notification");
         Assert.Contains("Auto-play is Off", TestBootstrap.Chat.Messages[0]);
         Assert.Contains(TestBootstrap.Chat.RichMessages[0].Payloads,
-            payload => payload is UIForegroundPayload { ColorKey: 504 });
+                        payload => payload is UIForegroundPayload { ColorKey: 504 });
     }
 
     [Fact]
@@ -90,8 +91,7 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
 
         listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack));
 
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "broadcasting-specific nearby notification");
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "broadcasting-specific nearby notification");
         Assert.Contains("you're currently broadcasting", TestBootstrap.Chat.Messages[0]);
     }
 
@@ -105,8 +105,7 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
 
         listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack));
 
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "one silent-playback notification");
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "one silent-playback notification");
         Assert.Contains("master listening volume is set to zero", TestBootstrap.Chat.Messages[0]);
     }
 
@@ -116,14 +115,13 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
         config.ListeningMasterVolume = 0f;
         config.NotifyMutedPlayback = true;
         var listening = Create();
-        listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack, playing: false));
+        listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack, false));
         await TestWait.Assert(() => listening.View.Count == 1, "paused pair is tracked");
         Assert.Empty(TestBootstrap.Chat.Messages);
 
-        listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack, playing: true, epoch: 2));
+        listening.AddOrUpdatePair(1, "Alice", Track(AliceTrack, true, 2));
 
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "muted start notification");
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "muted start notification");
         Assert.Contains("Alice started playing", TestBootstrap.Chat.Messages[0]);
     }
 
@@ -139,8 +137,7 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
         listening.AddOrUpdatePair(1, "Alice", Track(NextTrack, epoch: 2, displayName: "Artist - Second"));
 
         await TestWait.Assert(() => engine.Snapshot.Path == NextTrack, "next track is applied");
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "track change notification");
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "track change notification");
         Assert.Contains("Now Playing: Alice is now playing Artist - Second", TestBootstrap.Chat.Messages[0]);
     }
 
@@ -153,10 +150,8 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
 
         listening.AddOrUpdatePair(ulong.MaxValue, "Debug Loopback", Track(AliceTrack));
 
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "loopback notification");
-        Assert.Contains("Nearby Broadcast: Debug Loopback is playing Artist - Song",
-            TestBootstrap.Chat.Messages[0]);
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "loopback notification");
+        Assert.Contains("Nearby Broadcast: Debug Loopback is playing Artist - Song", TestBootstrap.Chat.Messages[0]);
     }
 
     [Fact]
@@ -164,24 +159,16 @@ public sealed class ListeningNotificationTests : IAsyncLifetime
     {
         config.NotifyNearbyBroadcaster = true;
         var listening = Create();
-        var track = new PairData(
-            AliceTrack,
-            TimeSpan.Zero,
-            true,
-            DateTimeOffset.UtcNow,
-            1,
-            new TrackMeta
-            {
-                DisplayName = "DeathbyRomy - Vicious Bliss",
-                OriginalFileName = "2826_DeathbyRomy - Vicious Bliss_2842.scd",
-            });
+        var track = new PairData(AliceTrack, TimeSpan.Zero, true, DateTimeOffset.UtcNow, 1, new TrackMeta
+        {
+            DisplayName = "DeathbyRomy - Vicious Bliss",
+            OriginalFileName = "2826_DeathbyRomy - Vicious Bliss_2842.scd",
+        });
 
         listening.AddOrUpdatePair(ulong.MaxValue, "Debug Loopback", track);
 
-        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1,
-            "display name notification");
-        Assert.Contains("Debug Loopback is playing DeathbyRomy - Vicious Bliss",
-            TestBootstrap.Chat.Messages[0]);
+        await TestWait.Assert(() => TestBootstrap.Chat.Messages.Length == 1, "display name notification");
+        Assert.Contains("Debug Loopback is playing DeathbyRomy - Vicious Bliss", TestBootstrap.Chat.Messages[0]);
         Assert.DoesNotContain("2826_", TestBootstrap.Chat.Messages[0]);
     }
 }

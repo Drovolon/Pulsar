@@ -1,157 +1,157 @@
 name: Publish Dalamud release
 
 on:
-  release:
-    types: [published, released]
+    release:
+        types: [ published, released ]
 
 permissions:
-  contents: write
+    contents: write
 
 # Only permit a single build at a time
 concurrency:
-  group: pulsar-dalamud-release
-  cancel-in-progress: false
+    group: pulsar-dalamud-release
+    cancel-in-progress: false
 
 jobs:
-  publish:
-    # "published" catches prereleases, including ones published from drafts.
-    # "released" catches both direct stable releases and promoted prereleases.
-    if: >-
-      !github.event.release.draft &&
-      ((github.event.action == 'published' && github.event.release.prerelease) ||
-       (github.event.action == 'released' && !github.event.release.prerelease))
-    runs-on: windows-2022
-    timeout-minutes: 45
+    publish:
+        # "published" catches prereleases, including ones published from drafts.
+        # "released" catches both direct stable releases and promoted prereleases.
+        if: >-
+            !github.event.release.draft &&
+            ((github.event.action == 'published' && github.event.release.prerelease) ||
+             (github.event.action == 'released' && !github.event.release.prerelease))
+        runs-on: windows-2022
+        timeout-minutes: 45
+        
+        steps:
+            -   name: Checkout released source
+                uses: actions/checkout@v5
+                with:
+                    ref: ${{ github.event.release.tag_name }}
+                    fetch-depth: 0
 
-    steps:
-    - name: Checkout released source
-      uses: actions/checkout@v5
-      with:
-        ref: ${{ github.event.release.tag_name }}
-        fetch-depth: 0
+            -   name: Install .NET
+                uses: actions/setup-dotnet@v5
+                with:
+                    dotnet-version: 10.0.x
 
-    - name: Install .NET
-      uses: actions/setup-dotnet@v5
-      with:
-        dotnet-version: 10.0.x
+            -   name: Resolve release metadata
+                id: release
+                shell: pwsh
+                env:
+                    RELEASE_ACTION: ${{ github.event.action }}
+                    RELEASE_IMMUTABLE: ${{ github.event.release.immutable }}
+                    RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+                    RELEASE_TAG: ${{ github.event.release.tag_name }}
+                run: |
+                    if ($env:RELEASE_IMMUTABLE -eq "true") {
+                      throw "This workflow uploads Pulsar.zip after publication, which is incompatible with immutable releases."
+                    }
+                    
+                    $version = $env:RELEASE_TAG
+                    if ($version.StartsWith("v", [StringComparison]::OrdinalIgnoreCase)) {
+                      $version = $version.Substring(1)
+                    }
+                    
+                    if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') {
+                      throw "Release tag '$($env:RELEASE_TAG)' must be v1.2.3, 1.2.3, v1.2.3.4, or 1.2.3.4."
+                    }
+                    
+                    $parsedVersion = [Version]::Parse($version)
+                    $revision = if ($parsedVersion.Revision -lt 0) { 0 } else { $parsedVersion.Revision }
+                    $version = [Version]::new(
+                      $parsedVersion.Major,
+                      $parsedVersion.Minor,
+                      $parsedVersion.Build,
+                      $revision).ToString()
+                    $channel = if ($env:RELEASE_PRERELEASE -eq "true") { "testing" } else { "stable" }
+                    
+                    "channel=$channel" >> $env:GITHUB_OUTPUT
+                    "version=$version" >> $env:GITHUB_OUTPUT
 
-    - name: Resolve release metadata
-      id: release
-      shell: pwsh
-      env:
-        RELEASE_ACTION: ${{ github.event.action }}
-        RELEASE_IMMUTABLE: ${{ github.event.release.immutable }}
-        RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
-        RELEASE_TAG: ${{ github.event.release.tag_name }}
-      run: |
-        if ($env:RELEASE_IMMUTABLE -eq "true") {
-          throw "This workflow uploads Pulsar.zip after publication, which is incompatible with immutable releases."
-        }
+            -   name: Download Dalamud
+                shell: pwsh
+                run: |
+                    Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
+                    Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
 
-        $version = $env:RELEASE_TAG
-        if ($version.StartsWith("v", [StringComparison]::OrdinalIgnoreCase)) {
-          $version = $version.Substring(1)
-        }
+            -   name: Build and package Pulsar
+                shell: pwsh
+                run: >-
+                    dotnet build .\Pulsar\Pulsar.csproj
+                    --configuration Release
+                    -p:Platform=x64
+                    -p:Version=${{ steps.release.outputs.version }}
+                    -p:AssemblyVersion=${{ steps.release.outputs.version }}
+                    -p:FileVersion=${{ steps.release.outputs.version }}
+                    --nologo
 
-        if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') {
-          throw "Release tag '$($env:RELEASE_TAG)' must be v1.2.3, 1.2.3, v1.2.3.4, or 1.2.3.4."
-        }
+            -   name: Stage release archive
+                shell: pwsh
+                run: Copy-Item .\Pulsar\bin\x64\Release\Pulsar\latest.zip .\Pulsar.zip
 
-        $parsedVersion = [Version]::Parse($version)
-        $revision = if ($parsedVersion.Revision -lt 0) { 0 } else { $parsedVersion.Revision }
-        $version = [Version]::new(
-          $parsedVersion.Major,
-          $parsedVersion.Minor,
-          $parsedVersion.Build,
-          $revision).ToString()
-        $channel = if ($env:RELEASE_PRERELEASE -eq "true") { "testing" } else { "stable" }
+            -   name: Read existing Dalamud repository metadata
+                id: existing_repo
+                shell: pwsh
+                run: |
+                    $outputPath = Join-Path $env:RUNNER_TEMP "existing-repo.json"
+                    $repoRef = @(git ls-remote --heads origin refs/heads/repo)
+                    if ($LASTEXITCODE -ne 0) {
+                      throw "Could not determine whether the repo branch exists (exit code $LASTEXITCODE)."
+                    }
+                    
+                    if ($repoRef.Count -gt 0) {
+                      git fetch origin refs/heads/repo --depth=1
+                      if ($LASTEXITCODE -ne 0) {
+                        throw "Could not fetch the existing repo branch."
+                      }
+                    
+                      $content = git show FETCH_HEAD:repo.json
+                      if ($LASTEXITCODE -ne 0) {
+                        throw "The repo branch exists but does not contain repo.json."
+                      }
+                    
+                      [IO.File]::WriteAllLines($outputPath, $content, [Text.UTF8Encoding]::new($false))
+                      "path=$outputPath" >> $env:GITHUB_OUTPUT
+                    } else {
+                      "path=" >> $env:GITHUB_OUTPUT
+                    }
 
-        "channel=$channel" >> $env:GITHUB_OUTPUT
-        "version=$version" >> $env:GITHUB_OUTPUT
+            -   name: Generate repo.json
+                shell: pwsh
+                env:
+                    EXISTING_REPO_PATH: ${{ steps.existing_repo.outputs.path }}
+                    RELEASE_BODY: ${{ github.event.release.body }}
+                    RELEASE_TAG: ${{ github.event.release.tag_name }}
+                    RELEASE_UPDATED_AT: ${{ github.event.release.updated_at }}
+                run: |
+                    $arguments = @{
+                      Channel = "${{ steps.release.outputs.channel }}"
+                      PluginManifestPath = ".\Pulsar\bin\x64\Release\Pulsar\Pulsar.json"
+                      OutputPath = ".\repo.json"
+                      Version = "${{ steps.release.outputs.version }}"
+                      Tag = $env:RELEASE_TAG
+                      ReleaseNotes = $env:RELEASE_BODY
+                      ReleaseUpdatedAt = $env:RELEASE_UPDATED_AT
+                      RepositoryUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY"
+                    }
+                    
+                    if (-not [string]::IsNullOrWhiteSpace($env:EXISTING_REPO_PATH)) {
+                      $arguments.ExistingRepoJsonPath = $env:EXISTING_REPO_PATH
+                    }
+                    
+                    & .\.github\scripts\New-DalamudRepoJson.ps1 @arguments
 
-    - name: Download Dalamud
-      shell: pwsh
-      run: |
-        Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
-        Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+            -   name: Upload archive to the GitHub release
+                shell: pwsh
+                env:
+                    GH_TOKEN: ${{ github.token }}
+                    RELEASE_TAG: ${{ github.event.release.tag_name }}
+                run: gh release upload $env:RELEASE_TAG .\Pulsar.zip --clobber
 
-    - name: Build and package Pulsar
-      shell: pwsh
-      run: >-
-        dotnet build .\Pulsar\Pulsar.csproj
-        --configuration Release
-        -p:Platform=x64
-        -p:Version=${{ steps.release.outputs.version }}
-        -p:AssemblyVersion=${{ steps.release.outputs.version }}
-        -p:FileVersion=${{ steps.release.outputs.version }}
-        --nologo
-
-    - name: Stage release archive
-      shell: pwsh
-      run: Copy-Item .\Pulsar\bin\x64\Release\Pulsar\latest.zip .\Pulsar.zip
-
-    - name: Read existing Dalamud repository metadata
-      id: existing_repo
-      shell: pwsh
-      run: |
-        $outputPath = Join-Path $env:RUNNER_TEMP "existing-repo.json"
-        $repoRef = @(git ls-remote --heads origin refs/heads/repo)
-        if ($LASTEXITCODE -ne 0) {
-          throw "Could not determine whether the repo branch exists (exit code $LASTEXITCODE)."
-        }
-
-        if ($repoRef.Count -gt 0) {
-          git fetch origin refs/heads/repo --depth=1
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not fetch the existing repo branch."
-          }
-
-          $content = git show FETCH_HEAD:repo.json
-          if ($LASTEXITCODE -ne 0) {
-            throw "The repo branch exists but does not contain repo.json."
-          }
-
-          [IO.File]::WriteAllLines($outputPath, $content, [Text.UTF8Encoding]::new($false))
-          "path=$outputPath" >> $env:GITHUB_OUTPUT
-        } else {
-          "path=" >> $env:GITHUB_OUTPUT
-        }
-
-    - name: Generate repo.json
-      shell: pwsh
-      env:
-        EXISTING_REPO_PATH: ${{ steps.existing_repo.outputs.path }}
-        RELEASE_BODY: ${{ github.event.release.body }}
-        RELEASE_TAG: ${{ github.event.release.tag_name }}
-        RELEASE_UPDATED_AT: ${{ github.event.release.updated_at }}
-      run: |
-        $arguments = @{
-          Channel = "${{ steps.release.outputs.channel }}"
-          PluginManifestPath = ".\Pulsar\bin\x64\Release\Pulsar\Pulsar.json"
-          OutputPath = ".\repo.json"
-          Version = "${{ steps.release.outputs.version }}"
-          Tag = $env:RELEASE_TAG
-          ReleaseNotes = $env:RELEASE_BODY
-          ReleaseUpdatedAt = $env:RELEASE_UPDATED_AT
-          RepositoryUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY"
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($env:EXISTING_REPO_PATH)) {
-          $arguments.ExistingRepoJsonPath = $env:EXISTING_REPO_PATH
-        }
-
-        & .\.github\scripts\New-DalamudRepoJson.ps1 @arguments
-
-    - name: Upload archive to the GitHub release
-      shell: pwsh
-      env:
-        GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: ${{ github.event.release.tag_name }}
-      run: gh release upload $env:RELEASE_TAG .\Pulsar.zip --clobber
-
-    - name: Publish repo branch
-      shell: pwsh
-      run: >-
-        .\.github\scripts\Publish-DalamudRepoBranch.ps1
-        -RepoJsonPath .\repo.json
-        -Message "Publish Pulsar ${{ steps.release.outputs.channel }} ${{ steps.release.outputs.version }}"
+            -   name: Publish repo branch
+                shell: pwsh
+                run: >-
+                    .\.github\scripts\Publish-DalamudRepoBranch.ps1
+                    -RepoJsonPath .\repo.json
+                    -Message "Publish Pulsar ${{ steps.release.outputs.channel }} ${{ steps.release.outputs.version }}"

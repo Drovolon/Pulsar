@@ -43,13 +43,8 @@ public class IpcProviderTests : IAsyncLifetime
         ipc = new IpcProvider(gates.Gates, listening, broadcast);
         ipc.Prepare();
         debugLoopback = new DebugLoopbackController(ipc);
-        coordinator = new ApplicationCoordinator(
-            broadcast,
-            listening,
-            ipc,
-            debugLoopback,
-            new ListeningNotifier(config),
-            new BgmMuter(config, gameBgm));
+        coordinator = new ApplicationCoordinator(broadcast, listening, ipc, debugLoopback, new ListeningNotifier(config),
+                                                 new BgmMuter(config, gameBgm));
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -59,15 +54,14 @@ public class IpcProviderTests : IAsyncLifetime
         await coordinator.DisposeAsync();
         ipc.Dispose();
         await prep.DisposeAsync();
-        dir.Delete(recursive: true);
+        dir.Delete(true);
     }
 
     [Fact]
     public void Malformed_peer_cursor_is_contained()
     {
         // A buggy peer must never explode into Dalamud's IPC dispatch.
-        var ex = Record.Exception(() =>
-            gates.SetPlayerData.Action!(7UL, @"C:\x.opus", null, "{this is not json"));
+        var ex = Record.Exception(() => gates.SetPlayerData.Action!(7UL, @"C:\x.opus", null, "{this is not json"));
         Assert.Null(ex);
         Assert.Empty(listening.View); // and no half-built pair materializes
     }
@@ -82,12 +76,10 @@ public class IpcProviderTests : IAsyncLifetime
             CursorEpoch = 1,
         });
         gates.SetPlayerData.Action!(7UL, @"C:\x.opus", null, payload);
-        await TestWait.Assert(() => listening.View.Any(p => p.Ident == 7UL),
-            "SetPlayerData adds the pair");
+        await TestWait.Assert(() => listening.View.Any(p => p.Ident == 7UL), "SetPlayerData adds the pair");
 
         gates.ClearPlayerData.Action!(7UL);
-        await TestWait.Assert(() => listening.View.All(p => p.Ident != 7UL),
-            "ClearPlayerData removes the pair");
+        await TestWait.Assert(() => listening.View.All(p => p.Ident != 7UL), "ClearPlayerData removes the pair");
     }
 
     [Fact]
@@ -113,7 +105,8 @@ public class IpcProviderTests : IAsyncLifetime
         Assert.Equal(PulsarApiVersions.Current, gates.ApiVersion.Func!());
 
         var track = TestData.CreateTrack(dir, "song.flac");
-        await broadcast.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = TestData.Snap(track) });
+        await broadcast.BroadcastFromForTests(BroadcastProvider.Local,
+                                              new FakeMusicSource { Current = TestData.Snap(track) });
         await TestWait.Assert(() => gates.PlayerDataChanged.Sent.Count > 0, "manifest reaches the wire");
 
         // camelCase is OUR PropertyNamingPolicy choice - no compile error guards it,
@@ -134,9 +127,7 @@ public class IpcProviderTests : IAsyncLifetime
         Assert.Equal(cursorJson, queried.Payload);
 
         broadcast.SetOnAir(false);
-        await TestWait.Assert(() =>
-            gates.PlayerDataChanged.Sent[^1] is [null],
-            "a stop goes out as null player data");
+        await TestWait.Assert(() => gates.PlayerDataChanged.Sent[^1] is [null], "a stop goes out as null player data");
     }
 
     [Fact]
@@ -148,14 +139,14 @@ public class IpcProviderTests : IAsyncLifetime
         var current = TestData.CreateTrack(dir, "current.flac");
         var next = TestData.CreateTrack(dir, "next.flac");
 
-        await broadcast.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = TestData.Snap(current, next: next) });
-        await TestWait.Assert(
-            () => gates.PlayerDataChanged.Sent.LastOrDefault() is [PulsarPlayerData { Prefetch: null }],
-            "the current-only manifest reaches IPC");
+        await broadcast.BroadcastFromForTests(BroadcastProvider.Local,
+                                              new FakeMusicSource { Current = TestData.Snap(current, next: next) });
+        await TestWait.Assert(() => gates.PlayerDataChanged.Sent.LastOrDefault() is [PulsarPlayerData { Prefetch: null }],
+                              "the current-only manifest reaches IPC");
         var before = Assert.IsType<PulsarPlayerData>(gates.PlayerDataChanged.Sent[^1][0]);
 
         Assert.False(await service.WaitForPrepare(next, TimeSpan.FromMilliseconds(100)),
-            "prefetch does not start at the track switch");
+                     "prefetch does not start at the track switch");
         Assert.True(await service.WaitForPrepare(next), "the checkpoint starts prefetch");
         await TestWait.Assert(
             () => gates.PlayerDataChanged.Sent.LastOrDefault() is [PulsarPlayerData { Prefetch: not null }],

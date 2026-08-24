@@ -41,8 +41,7 @@ public class PollingFeedTests : IAsyncLifetime
     [Fact]
     public async Task Player_state_arrives_as_observations()
     {
-        server.SetPlaying("/music/a.flac", positionSeconds: 42, durationSeconds: 300,
-                          artist: "Band", title: "Song");
+        server.SetPlaying("/music/a.flac", 42, 300, "Band", "Song");
         Start();
 
         await TestWait.Assert(() => probe.Seen.Length >= 1, "first poll result");
@@ -119,14 +118,11 @@ public class PollingFeedTests : IAsyncLifetime
 
             server.SetPlaying(paths[cycle]);
             server.Down = false;
-            await TestWait.Assert(
-                () => feed.Connected && probe.Seen is [.., { RawPath: var path }] && path == paths[cycle],
-                $"recovery #{cycle + 1} catches up");
+            await TestWait.Assert(() => feed.Connected && probe.Seen is [.., { RawPath: var path }] && path == paths[cycle],
+                                  $"recovery #{cycle + 1} catches up");
         }
 
-        Assert.Equal(
-            [true, false, true, false, true, false, true],
-            probe.Connectivity);
+        Assert.Equal([true, false, true, false, true, false, true], probe.Connectivity);
     }
 
     [Fact]

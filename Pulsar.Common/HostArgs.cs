@@ -60,7 +60,10 @@ public sealed class HostArgs
 
             continue;
 
-            string? Next() => i + 1 < args.Length ? args[++i] : null;
+            string? Next()
+            {
+                return i + 1 < args.Length ? args[++i] : null;
+            }
         }
 
         return new HostArgs

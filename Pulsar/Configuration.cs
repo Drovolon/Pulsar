@@ -19,8 +19,10 @@ public class Configuration : IPluginConfiguration
 
     // Listening (receiver) side volumes.
     public float ListeningMasterVolume { get; set; } = 0.5f;
+
     // Map of character names -> volumes.
     public Dictionary<string, float> ListeningPairVolumes { get; set; } = [];
+
     // When nothing is explicitly pinned, auto-play whoever nearby is broadcasting.
     public bool ListeningAutoPlay { get; set; } = true;
 

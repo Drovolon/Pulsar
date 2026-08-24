@@ -13,8 +13,7 @@ namespace Pulsar.TranscodeHost.Prepare;
 /// Feeds each decoded buffer into a <see cref="LoudnessAnalyzer"/> as it passes through, and honours
 /// cancellation. Used both to drive the Opus encoder and to drive a bare analysis pass.
 /// </summary>
-internal sealed class AnalyzerTap(ISampleProvider source, LoudnessAnalyzer analyzer, CancellationToken ct)
-    : ISampleProvider
+internal sealed class AnalyzerTap(ISampleProvider source, LoudnessAnalyzer analyzer, CancellationToken ct) : ISampleProvider
 {
     public WaveFormat WaveFormat => source.WaveFormat;
 
@@ -33,16 +32,15 @@ public static class TrackProcessor
 
     private const int HashBufferSize = 128 * 1024;
     public const long BitrateThresholdBpsPerChannel = 256_000 / 2; // >=256 Kbps (stereo) gets transcoded
-    public const int OpusTargetBpsPerChannel = 160_000 / 2; // 160 Kbps for stereo
-    public const double TargetLufs = -18.0; // matches ReplayGain
+    public const int OpusTargetBpsPerChannel = 160_000 / 2;        // 160 Kbps for stereo
+    public const double TargetLufs = -18.0;                        // matches ReplayGain
     public const double PeakCeilingDb = -1.0;
-    
+
     /// <summary>
     /// Decodes a file, transcodes it to Opus if it's higher than the bitrate threshold, and does ReplayGain
     /// loudness measurement to keep listening consistent.
     /// </summary>
-    public static PreparedTrack Process(
-        string originalPath, string transcodeOutPath, CancellationToken ct)
+    public static PreparedTrack Process(string originalPath, string transcodeOutPath, CancellationToken ct)
     {
         using var reader = AudioReaderFactory.Open(originalPath);
         return Process(reader, new FileInfo(originalPath).Length, originalPath, transcodeOutPath, ct);
@@ -65,7 +63,7 @@ public static class TrackProcessor
         var fmt = sp.WaveFormat;
 
         var durMs = reader.TotalTime.TotalMilliseconds;
-        var transcode = durMs <= 0 || (sizeBytes * 8000.0 / durMs) > BitrateThresholdBpsPerChannel * fmt.Channels;
+        var transcode = durMs <= 0 || sizeBytes * 8000.0 / durMs > BitrateThresholdBpsPerChannel * fmt.Channels;
 
         using var analyzer = new LoudnessAnalyzer(fmt.Channels, fmt.SampleRate);
         var tap = new AnalyzerTap(sp, analyzer, ct);
@@ -76,22 +74,31 @@ public static class TrackProcessor
         {
             // Opus has strict sample rate requirements, so resample if needed
             ISampleProvider encodeSource = fmt.SampleRate is 8000 or 12000 or 16000 or 24000 or 48000
-                ? tap
-                : new WdlResamplingSampleProvider(tap, 48000);
+                                               ? tap
+                                               : new WdlResamplingSampleProvider(tap, 48000);
             var tmp = transcodeOutPath + ".tmp";
             try
             {
                 var quality = OpusQualityForBitrate(OpusTargetBpsPerChannel);
-                SoundFileWriter.CreateSoundFile(tmp, encodeSource.ToWaveProvider(),
-                    SoundFileMajorFormat.Opus, new SoundFileWriterOptions { VbrQuality = quality });
+                SoundFileWriter.CreateSoundFile(tmp, encodeSource.ToWaveProvider(), SoundFileMajorFormat.Opus,
+                                                new SoundFileWriterOptions { VbrQuality = quality });
                 hashes = ComputeHashes(tmp, ct);
-                File.Move(tmp, transcodeOutPath, overwrite: true);
+                File.Move(tmp, transcodeOutPath, true);
             }
             catch
             {
-                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* best effort */ }
+                try
+                {
+                    if (File.Exists(tmp)) File.Delete(tmp);
+                }
+                catch
+                {
+                    /* best effort */
+                }
+
                 throw;
             }
+
             syncPath = transcodeOutPath;
         }
         else
@@ -102,6 +109,7 @@ public static class TrackProcessor
             {
                 // AnalyzerTap still does loudness measure. Drain the tap.
             }
+
             syncPath = passthroughPath;
             hashes = ComputeHashes(syncPath, ct);
         }
@@ -114,14 +122,14 @@ public static class TrackProcessor
             gainDb = Math.Min(gainDb, PeakCeilingDb - peakDb);
             gainDb = Math.Round(gainDb, 2);
         }
+
         return new PreparedTrack(syncPath, hashes.Blake3Hash, hashes.Sha1Hash, gainDb);
     }
 
     internal static ContentHashes ComputeHashes(string path, CancellationToken ct)
     {
-        using var stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read, HashBufferSize,
-            FileOptions.SequentialScan);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, HashBufferSize,
+                                          FileOptions.SequentialScan);
         using var hasher = Hasher.New();
         using var sha1 = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
         var buffer = ArrayPool<byte>.Shared.Rent(HashBufferSize);
@@ -137,10 +145,8 @@ public static class TrackProcessor
 
             Span<byte> hash = stackalloc byte[Hash.Size];
             hasher.Finalize(hash);
-            return new ContentHashes(
-                Convert.ToHexString(hash), Convert.ToHexString(sha1.GetHashAndReset()));
-        }
-        finally
+            return new ContentHashes(Convert.ToHexString(hash), Convert.ToHexString(sha1.GetHashAndReset()));
+        } finally
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
@@ -157,8 +163,6 @@ public static class TrackProcessor
     // Additionally, because it's a per-channel formula, the target bitrate is per-channel as well,
     // taking the guidance of 160 Kbps, etc., as stereo numbers. 160 Kbps total for a 7.1 file would be
     // a tiny, tiny bitrate - unlistenable.
-    internal static double OpusQualityForBitrate(int targetBpsPerChannel)
-    {
-        return Math.Clamp((targetBpsPerChannel - 6000) / 250_000.0, 0.0, 1.0);
-    }
+    internal static double OpusQualityForBitrate(int targetBpsPerChannel) =>
+        Math.Clamp((targetBpsPerChannel - 6000) / 250_000.0, 0.0, 1.0);
 }

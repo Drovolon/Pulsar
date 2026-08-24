@@ -42,8 +42,14 @@ public sealed class PenumbraIntegration : IModResolver, IDisposable
 
     private bool Probe()
     {
-        try { return apiVersion.Invoke().Breaking == ExpectedBreaking; }
-        catch { return false; }
+        try
+        {
+            return apiVersion.Invoke().Breaking == ExpectedBreaking;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void OnPenumbraInitialized() => available = Probe();
@@ -58,9 +64,12 @@ public sealed class PenumbraIntegration : IModResolver, IDisposable
         try
         {
             // GetModList: directory name -> display name.
-            return [.. getModList.Invoke()
-                .Select(kv => new ModEntry(kv.Key, kv.Value))
-                .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase)];
+            return
+            [
+                .. getModList.Invoke()
+                             .Select(kv => new ModEntry(kv.Key, kv.Value))
+                             .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase),
+            ];
         }
         catch (Exception e)
         {
@@ -79,6 +88,7 @@ public sealed class PenumbraIntegration : IModResolver, IDisposable
             Plugin.Log.Warning("No mod directory name provided");
             return null;
         }
+
         try
         {
             var root = getModDirectory.Invoke();
@@ -87,6 +97,7 @@ public sealed class PenumbraIntegration : IModResolver, IDisposable
                 Plugin.Log.Warning("Penumbra mod directory is null or empty");
                 return null;
             }
+
             return ResolveUnder(root, modDirectoryName);
         }
         catch (Exception e)

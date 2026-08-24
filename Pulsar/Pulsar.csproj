@@ -1,96 +1,96 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
-  <PropertyGroup>
-    <Version>0.0.0.1</Version>
-    <PackageProjectUrl>https://github.com/Drovolon/Pulsar</PackageProjectUrl>
-    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
-    <IsPackable>false</IsPackable>
+    <PropertyGroup>
+        <Version>0.0.0.1</Version>
+        <PackageProjectUrl>https://github.com/Drovolon/Pulsar</PackageProjectUrl>
+        <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+        <IsPackable>false</IsPackable>
 
-    <!-- Need net10.0-windows10 to get WASAPI. Which needed for FLAC etc. -->
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="Pulsar.Tests" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Beefweb.Client" Version="0.4.0" />
-    <PackageReference Include="NAudio" Version="3.0.0-preview.16" />
-    <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16" />
-    <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16" />
-    <PackageReference Include="Penumbra.Api" Version="5.13.1" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Pulsar.Api\Pulsar.Api.csproj" />
-    <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj" />
-    <!-- Sidecar host processes: build them with the plugin, but never reference their assemblies. -->
-    <ProjectReference Include="..\Pulsar.AudioHost\Pulsar.AudioHost.csproj"
-                      ReferenceOutputAssembly="false"
-                      Private="false"
-                      PulsarHost="audio" />
-    <ProjectReference Include="..\Pulsar.TranscodeHost\Pulsar.TranscodeHost.csproj"
-                      ReferenceOutputAssembly="false"
-                      Private="false"
-                      PulsarHost="transcode" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Pulsar.json" />
-  </ItemGroup>
-
-  <Target Name="SetPulsarSourceRevisionId" BeforeTargets="InitializeSourceControlInformationFromSourceControlManager;InitializeSourceControlInformation" Condition="'$(SourceRevisionId)' == ''">
-    <Exec Condition="'$(Configuration)' == 'Debug' and Exists('$(MSBuildProjectDirectory)/../.git')" Command="git describe --tags --dirty --always --long" WorkingDirectory="$(MSBuildProjectDirectory)/.." ConsoleToMsBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low" StandardErrorImportance="Low">
-      <Output TaskParameter="ConsoleOutput" ItemName="_PulsarGitDescribeOutput" />
-      <Output TaskParameter="ExitCode" PropertyName="_PulsarGitDescribeExitCode" />
-    </Exec>
-
-    <PropertyGroup Condition="'$(Configuration)' == 'Debug' and '$(_PulsarGitDescribeExitCode)' == '0' and '@(_PulsarGitDescribeOutput)' != ''">
-      <SourceRevisionId>@(_PulsarGitDescribeOutput)</SourceRevisionId>
+        <!-- Need net10.0-windows10 to get WASAPI. Which needed for FLAC etc. -->
+        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
-    <PropertyGroup Condition="'$(SourceRevisionId)' == ''">
-      <SourceRevisionId Condition="'$(Configuration)' == 'Debug'">local</SourceRevisionId>
-      <SourceRevisionId Condition="'$(Configuration)' != 'Debug'">build$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss:fffZ"))</SourceRevisionId>
-    </PropertyGroup>
-  </Target>
+    <ItemGroup>
+        <InternalsVisibleTo Include="Pulsar.Tests"/>
+    </ItemGroup>
 
-  <!-- Copy the host sidecars and all their deployment artifacts (dlls, etc) into their
-  own directory. -->
-  <Target Name="CopyHostProcesses"
-          BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
-    <!-- PublishItemsOutputGroup only enumerates the deployment files; it does not ensure
-         that the project producing them is current. Build explicitly here so IDE builds
-         that skip project-reference builds cannot combine a stale host executable with
-         freshly-built shared assemblies. -->
-    <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'audio'))"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);Platform=$(Platform)" />
+    <ItemGroup>
+        <PackageReference Include="Beefweb.Client" Version="0.4.0"/>
+        <PackageReference Include="NAudio" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16"/>
+        <PackageReference Include="Penumbra.Api" Version="5.13.1"/>
+    </ItemGroup>
 
-    <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'transcode'))"
-             Targets="Build"
-             Properties="Configuration=$(Configuration);Platform=$(Platform)" />
+    <ItemGroup>
+        <ProjectReference Include="..\Pulsar.Api\Pulsar.Api.csproj"/>
+        <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj"/>
+        <!-- Sidecar host processes: build them with the plugin, but never reference their assemblies. -->
+        <ProjectReference Include="..\Pulsar.AudioHost\Pulsar.AudioHost.csproj"
+                          ReferenceOutputAssembly="false"
+                          Private="false"
+                          PulsarHost="audio"/>
+        <ProjectReference Include="..\Pulsar.TranscodeHost\Pulsar.TranscodeHost.csproj"
+                          ReferenceOutputAssembly="false"
+                          Private="false"
+                          PulsarHost="transcode"/>
+    </ItemGroup>
 
-    <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'audio'))"
-             Targets="PublishItemsOutputGroup"
-             Properties="Configuration=$(Configuration);Platform=$(Platform)">
-      <Output TaskParameter="TargetOutputs" ItemName="_AudioHostFiles" />
-    </MSBuild>
+    <ItemGroup>
+        <Content Include="Pulsar.json"/>
+    </ItemGroup>
 
-    <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'transcode'))"
-             Targets="PublishItemsOutputGroup"
-             Properties="Configuration=$(Configuration);Platform=$(Platform)">
-      <Output TaskParameter="TargetOutputs" ItemName="_TranscodeHostFiles" />
-    </MSBuild>
+    <Target Name="SetPulsarSourceRevisionId" BeforeTargets="InitializeSourceControlInformationFromSourceControlManager;InitializeSourceControlInformation" Condition="'$(SourceRevisionId)' == ''">
+        <Exec Condition="'$(Configuration)' == 'Debug' and Exists('$(MSBuildProjectDirectory)/../.git')" Command="git describe --tags --dirty --always --long" WorkingDirectory="$(MSBuildProjectDirectory)/.." ConsoleToMsBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low" StandardErrorImportance="Low">
+            <Output TaskParameter="ConsoleOutput" ItemName="_PulsarGitDescribeOutput"/>
+            <Output TaskParameter="ExitCode" PropertyName="_PulsarGitDescribeExitCode"/>
+        </Exec>
 
-    <Copy SourceFiles="@(_AudioHostFiles)"
-          DestinationFiles="@(_AudioHostFiles->'$(TargetDir)hosts/audio/%(TargetPath)')"
-          SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(_TranscodeHostFiles)"
-          DestinationFiles="@(_TranscodeHostFiles->'$(TargetDir)hosts/transcode/%(TargetPath)')"
-          SkipUnchangedFiles="true" />
-  </Target>
+        <PropertyGroup Condition="'$(Configuration)' == 'Debug' and '$(_PulsarGitDescribeExitCode)' == '0' and '@(_PulsarGitDescribeOutput)' != ''">
+            <SourceRevisionId>@(_PulsarGitDescribeOutput)</SourceRevisionId>
+        </PropertyGroup>
+
+        <PropertyGroup Condition="'$(SourceRevisionId)' == ''">
+            <SourceRevisionId Condition="'$(Configuration)' == 'Debug'">local</SourceRevisionId>
+            <SourceRevisionId Condition="'$(Configuration)' != 'Debug'">build$([System.DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ss:fffZ"))</SourceRevisionId>
+        </PropertyGroup>
+    </Target>
+
+    <!-- Copy the host sidecars and all their deployment artifacts (dlls, etc) into their
+    own directory. -->
+    <Target Name="CopyHostProcesses"
+            BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
+        <!-- PublishItemsOutputGroup only enumerates the deployment files; it does not ensure
+             that the project producing them is current. Build explicitly here so IDE builds
+             that skip project-reference builds cannot combine a stale host executable with
+             freshly-built shared assemblies. -->
+        <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'audio'))"
+                 Targets="Build"
+                 Properties="Configuration=$(Configuration);Platform=$(Platform)"/>
+
+        <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'transcode'))"
+                 Targets="Build"
+                 Properties="Configuration=$(Configuration);Platform=$(Platform)"/>
+
+        <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'audio'))"
+                 Targets="PublishItemsOutputGroup"
+                 Properties="Configuration=$(Configuration);Platform=$(Platform)">
+            <Output TaskParameter="TargetOutputs" ItemName="_AudioHostFiles"/>
+        </MSBuild>
+
+        <MSBuild Projects="@(ProjectReference->WithMetadataValue('PulsarHost', 'transcode'))"
+                 Targets="PublishItemsOutputGroup"
+                 Properties="Configuration=$(Configuration);Platform=$(Platform)">
+            <Output TaskParameter="TargetOutputs" ItemName="_TranscodeHostFiles"/>
+        </MSBuild>
+
+        <Copy SourceFiles="@(_AudioHostFiles)"
+              DestinationFiles="@(_AudioHostFiles->'$(TargetDir)hosts/audio/%(TargetPath)')"
+              SkipUnchangedFiles="true"/>
+        <Copy SourceFiles="@(_TranscodeHostFiles)"
+              DestinationFiles="@(_TranscodeHostFiles->'$(TargetDir)hosts/transcode/%(TargetPath)')"
+              SkipUnchangedFiles="true"/>
+    </Target>
 </Project>

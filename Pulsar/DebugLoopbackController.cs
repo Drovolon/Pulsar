@@ -16,10 +16,10 @@ namespace Pulsar;
 internal sealed class DebugLoopbackController : IAsyncDisposable
 {
     private abstract record Message;
+
     private sealed record EnabledSet(bool Value) : Message;
-    private sealed record PlayerDataChanged(
-        BroadcastPlayerData? Data,
-        TaskCompletionSource Completion) : Message;
+
+    private sealed record PlayerDataChanged(BroadcastPlayerData? Data, TaskCompletionSource Completion) : Message;
 
     private readonly IpcProvider ipc;
     private readonly SerializedMailbox<Message> mailbox;
@@ -36,8 +36,7 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
 
     internal Task OnPlayerDataChangedAsync(BroadcastPlayerData? data)
     {
-        var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!mailbox.TryPost(new PlayerDataChanged(data, completion))) completion.TrySetResult();
         return completion.Task;
     }
@@ -52,6 +51,7 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
                     enabled = value;
                     ipc.ApplyDebugLoopback(value ? current : null);
                 }
+
                 break;
             case PlayerDataChanged(var data, var completion):
                 current = data;

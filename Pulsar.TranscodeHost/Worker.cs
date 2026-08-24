@@ -8,13 +8,10 @@ public class Worker(ILogger<Worker> logger, HostArgs args) : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
-        {
             try
             {
                 if (logger.IsEnabled(LogLevel.Information))
-                {
                     logger.LogInformation("TranscodeHost running at: {time}", DateTimeOffset.Now);
-                }
 
                 await RpcServer.NamedPipeServerAsync<PrepareServer>(args.PipeName ?? PipeNames.TranscodeHost, stoppingToken);
             }
@@ -34,6 +31,5 @@ public class Worker(ILogger<Worker> logger, HostArgs args) : BackgroundService
                     break;
                 }
             }
-        }
     }
 }

@@ -36,22 +36,19 @@ public class BroadcastFlowTests : IAsyncLifetime
         if (manager is not null) await manager.DisposeAsync();
         if (outputPump is not null) await outputPump;
         if (prep is not null) await prep.DisposeAsync();
-        dir.Delete(recursive: true);
+        dir.Delete(true);
     }
 
     private BroadcastManager Create(
-        PrefetchTiming? prefetchTiming = null,
-        BroadcastRetryTiming? retryTiming = null,
-        long? cacheCapBytes = null,
+        PrefetchTiming? prefetchTiming = null, BroadcastRetryTiming? retryTiming = null, long? cacheCapBytes = null,
         TimeSpan? providerDisposeTimeout = null)
     {
         prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache"))
         {
             CacheCapBytes = cacheCapBytes ?? 1L << 26,
         }, service);
-        manager = new BroadcastManager(
-            new FakeRemoteEngine(), null!, prep, new Configuration(),
-            prefetchTiming ?? new PrefetchTiming(), retryTiming, providerDisposeTimeout);
+        manager = new BroadcastManager(new FakeRemoteEngine(), null!, prep, new Configuration(),
+                                       prefetchTiming ?? new PrefetchTiming(), retryTiming, providerDisposeTimeout);
         outputPump = Task.Run(async () =>
         {
             await foreach (var output in manager.Outputs.ReadAllAsync())
@@ -61,11 +58,19 @@ public class BroadcastFlowTests : IAsyncLifetime
                 {
                     case BroadcastOutput.PlayerDataChanged change:
                         outputProbe?.Invoke(change.Data);
-                        lock (events) events.Add(change.Data);
+                        lock (events)
+                        {
+                            events.Add(change.Data);
+                        }
+
                         change.Dispose();
                         break;
                     case BroadcastOutput.BroadcastingChanged(var value):
-                        lock (broadcastingEvents) broadcastingEvents.Add(value);
+                        lock (broadcastingEvents)
+                        {
+                            broadcastingEvents.Add(value);
+                        }
+
                         break;
                 }
             }
@@ -75,13 +80,19 @@ public class BroadcastFlowTests : IAsyncLifetime
 
     private BroadcastPlayerData?[] Events
     {
-        get { lock (events) return [.. events]; }
+        get
+        {
+            lock (events)
+            {
+                return [.. events];
+            }
+        }
     }
 
     private string CreateTrack(string name) => TestData.CreateTrack(dir, name);
 
-    private static SourceSnapshot Snap(string file, bool playing = true, string? next = null)
-        => TestData.Snap(file, playing, next);
+    private static SourceSnapshot Snap(string file, bool playing = true, string? next = null) =>
+        TestData.Snap(file, playing, next);
 
     private async Task<FakeMusicSource> StartBroadcasting(BroadcastManager mgr, string track)
     {
@@ -116,7 +127,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         Assert.NotNull(manifest);
         Assert.Equal(Path.GetFileName(next), manifest!.Cursor.Meta!.OriginalFileName);
         Assert.True(manifest.Cursor.CursorEpoch > Events[seen - 1]!.Cursor.CursorEpoch,
-            "track change bumps the cursor epoch");
+                    "track change bumps the cursor epoch");
     }
 
     [Fact]
@@ -138,17 +149,13 @@ public class BroadcastFlowTests : IAsyncLifetime
         source.Current = Snap(first);
         source.RaiseChanged();
         await TestWait.Assert(
-            () => Events.Length > seen
-                  && Events[^1] is { } e
-                  && e.Cursor.Meta!.OriginalFileName == "a.flac",
+            () => Events.Length > seen && Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "a.flac",
             "the return to A is published");
 
         skippedGate.Open();
         await Task.Delay(200); // let any stale PrepCompleted message reach the mailbox
 
-        Assert.All(
-            Events.Skip(seen),
-            e => Assert.NotEqual("b.flac", e?.Cursor.Meta?.OriginalFileName));
+        Assert.All(Events.Skip(seen), e => Assert.NotEqual("b.flac", e?.Cursor.Meta?.OriginalFileName));
         Assert.Equal("a.flac", Events[^1]!.Cursor.Meta!.OriginalFileName);
     }
 
@@ -165,8 +172,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         source.RaiseChanged();
 
         // The broadcast must stop when the track is unpreparable.
-        await TestWait.Assert(() => Events.Length > seen && Events[^1] is null,
-            "failed prep emits a stop");
+        await TestWait.Assert(() => Events.Length > seen && Events[^1] is null, "failed prep emits a stop");
     }
 
     [Fact]
@@ -177,12 +183,10 @@ public class BroadcastFlowTests : IAsyncLifetime
         var source = await StartBroadcasting(mgr, track);
         var playingManifest = Events[^1]!;
 
-        source.Current = Snap(track, playing: false);
+        source.Current = Snap(track, false);
         source.RaiseChanged();
 
-        await TestWait.Assert(
-            () => Events[^1] is { } e && !e.Cursor.IsPlaying,
-            "paused cursor reaches listeners");
+        await TestWait.Assert(() => Events[^1] is { } e && !e.Cursor.IsPlaying, "paused cursor reaches listeners");
         var paused = Events[^1]!;
         Assert.Equal(playingManifest.CurrentPath, paused.CurrentPath); // same synced file
         Assert.True(paused.Cursor.CursorEpoch > playingManifest.Cursor.CursorEpoch);
@@ -202,18 +206,15 @@ public class BroadcastFlowTests : IAsyncLifetime
         source.Current = Snap(current, next: upcoming);
         source.RaiseChanged();
 
-        await TestWait.Assert(
-            () => Events[^1]?.Cursor.Meta?.OriginalFileName == "b.flac",
-            "the current track manifest is ready");
+        await TestWait.Assert(() => Events[^1]?.Cursor.Meta?.OriginalFileName == "b.flac",
+                              "the current track manifest is ready");
         var withoutPrefetch = Events[^1]!;
         Assert.False(await service.WaitForPrepare(upcoming, TimeSpan.FromMilliseconds(100)),
-            "switching tracks does not immediately start the prefetch");
+                     "switching tracks does not immediately start the prefetch");
 
-        Assert.True(await service.WaitForPrepare(upcoming),
-            "the lead checkpoint prepares the upcoming track");
-        await TestWait.Assert(
-            () => Events[^1] is { PrefetchPath.Length: > 0 },
-            "the prepared upcoming track is republished");
+        Assert.True(await service.WaitForPrepare(upcoming), "the lead checkpoint prepares the upcoming track");
+        await TestWait.Assert(() => Events[^1] is { PrefetchPath.Length: > 0 },
+                              "the prepared upcoming track is republished");
 
         var withPrefetch = Events[^1]!;
         Assert.Equal(withoutPrefetch.CurrentPath, withPrefetch.CurrentPath);
@@ -258,15 +259,13 @@ public class BroadcastFlowTests : IAsyncLifetime
             source.RaiseChanged();
 
             prepareStarted = await service.WaitForPrepare(next, TimeSpan.FromMilliseconds(300));
-        }
-        finally
+        } finally
         {
             outputStall = null;
             resumeOutputs.TrySetResult();
         }
 
-        Assert.True(prepareStarted,
-            "preparing the active track is operational work, independent of output consumption");
+        Assert.True(prepareStarted, "preparing the active track is operational work, independent of output consumption");
     }
 
     [Fact]
@@ -288,13 +287,12 @@ public class BroadcastFlowTests : IAsyncLifetime
         // The LRU cache evicts the artifact behind the cached result...
         File.Delete(artifact);
         // ...and the DJ pauses, which recomputes the manifest.
-        source.Current = Snap(track, playing: false);
+        source.Current = Snap(track, false);
         source.RaiseChanged();
 
         // The gap must HOLD (like a transcode gap) - never announce a deleted path.
-        await TestWait.Assert(
-            () => Events.Length > seen && Events[^1] is { } e && !e.Cursor.IsPlaying,
-            "the re-prepped manifest with the paused cursor");
+        await TestWait.Assert(() => Events.Length > seen && Events[^1] is { } e && !e.Cursor.IsPlaying,
+                              "the re-prepped manifest with the paused cursor");
         Assert.Equal(0, ghostsAnnounced);
     }
 
@@ -303,31 +301,24 @@ public class BroadcastFlowTests : IAsyncLifetime
     {
         service.ArtifactBytes = 600;
         var mgr = Create(cacheCapBytes: 1000);
-        var releaseOutput = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         outputStall = releaseOutput.Task;
         try
         {
             var first = CreateTrack("first.flac");
-            await mgr.BroadcastFromForTests(
-                BroadcastProvider.Local,
-                new FakeMusicSource { Current = Snap(first) });
+            await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(first) });
             await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == first, "first commits");
             Assert.True(prep!.TryGet(first, out var firstResult));
             var firstArtifact = Assert.IsType<PrepResult.Successful>(firstResult).PreparedFilePath;
 
             var second = CreateTrack("second.flac");
-            await mgr.BroadcastFromForTests(
-                BroadcastProvider.Local,
-                new FakeMusicSource { Current = Snap(second) });
+            await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(second) });
             await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == second, "second commits");
 
             var pressure = CreateTrack("pressure.flac");
             Assert.IsType<PrepResult.Successful>(await prep.PreparePrefetch(pressure));
-            Assert.True(File.Exists(firstArtifact),
-                "the stalled first publication still owns its artifact");
-        }
-        finally
+            Assert.True(File.Exists(firstArtifact), "the stalled first publication still owns its artifact");
+        } finally
         {
             outputStall = null;
             releaseOutput.TrySetResult();
@@ -338,7 +329,8 @@ public class BroadcastFlowTests : IAsyncLifetime
     public async Task Provider_replacement_after_dispose_disposes_the_incoming_source()
     {
         var mgr = Create();
-        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(CreateTrack("a.flac")) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local,
+                                        new FakeMusicSource { Current = Snap(CreateTrack("a.flac")) });
         await mgr.DisposeAsync();
 
         // A UI load that lost the race with plugin unload: installing it would leak
@@ -369,26 +361,26 @@ public class BroadcastFlowTests : IAsyncLifetime
         // A delivery captured before the switch unsubscribed, still in flight mid-teardown.
         var lateEvent = sourceA.CapturedHandlers!;
 
-        var switching = mgr.BroadcastFromForTests(
-            BroadcastProvider.Local, new FakeMusicSource { Current = Snap(trackB) });
+        var switching = mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(trackB) });
         try
         {
             await TestWait.Within(switching, "the replacement is installed");
-            await TestWait.Assert(
-                () => mgr.CurrentSnapshot?.FilePath == trackB,
-                "the prepared replacement commits");
+            await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == trackB, "the prepared replacement commits");
             lateEvent(null); // a delivery captured before unsubscribe lands after commit
-        }
-        finally
+        } finally
         {
             teardown.TrySetResult(); // always unblock, or fixture teardown deadlocks
         }
+
         await TestWait.Within(switching, "the switch completes");
 
-        await TestWait.Assert(
-            () => Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "b.flac",
-            "the new source's manifest goes out");
-        lock (broadcastingEvents) Assert.Equal([true], broadcastingEvents); // one rise at start, never a drop
+        await TestWait.Assert(() => Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "b.flac",
+                              "the new source's manifest goes out");
+        lock (broadcastingEvents)
+        {
+            Assert.Equal([true], broadcastingEvents); // one rise at start, never a drop
+        }
+
         Assert.All(Events.Skip(seen), e => Assert.NotNull(e)); // and no stop on the wire
     }
 
@@ -405,8 +397,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         var next = CreateTrack("b.mp3");
         var gate = service.GateFor(next);
         var seen = Events.Length;
-        await mgr.BroadcastFromForTests(
-            BroadcastProvider.Local, new FakeMusicSource { Current = Snap(next) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(next) });
 
         Assert.True(await service.WaitForPrepare(next), "replacement preparation starts");
         await Task.Delay(200);
@@ -414,9 +405,8 @@ public class BroadcastFlowTests : IAsyncLifetime
         Assert.Equal("a.mp3", Events[^1]!.Cursor.Meta!.OriginalFileName);
 
         gate.Open();
-        await TestWait.Assert(
-            () => Events[^1]?.Cursor.Meta?.OriginalFileName == "b.mp3",
-            "the prepared replacement commits without a stop");
+        await TestWait.Assert(() => Events[^1]?.Cursor.Meta?.OriginalFileName == "b.mp3",
+                              "the prepared replacement commits without a stop");
         Assert.All(Events, Assert.NotNull);
     }
 
@@ -459,20 +449,20 @@ public class BroadcastFlowTests : IAsyncLifetime
 
         await mgr.BroadcastFromForTests(BroadcastProvider.Local, local);
         await TestWait.Assert(() => Events.LastOrDefault()?.Cursor.Meta?.OriginalFileName == "local.flac",
-            "local activation commits");
+                              "local activation commits");
         var firstLocal = Events[^1]!;
 
         await mgr.InstallProviderForTests(BroadcastProvider.Beefweb, beefweb);
         mgr.SetProvider(BroadcastProvider.Beefweb);
         await TestWait.Assert(() => Events.LastOrDefault()?.Cursor.Meta?.OriginalFileName == "beefweb.flac",
-            "beefweb activation commits");
+                              "beefweb activation commits");
         var beefwebManifest = Events[^1]!;
 
         mgr.SetProvider(BroadcastProvider.Local);
         await TestWait.Assert(
-            () => Events.LastOrDefault() is { } latest
-                  && latest.Cursor.Meta?.OriginalFileName == "local.flac"
-                  && latest.Cursor.CursorEpoch != firstLocal.Cursor.CursorEpoch,
+            () => Events.LastOrDefault() is { } latest &&
+                  latest.Cursor.Meta?.OriginalFileName == "local.flac" &&
+                  latest.Cursor.CursorEpoch != firstLocal.Cursor.CursorEpoch,
             "the unchanged local cursor is activated again");
 
         var secondLocal = Events[^1]!;
@@ -504,9 +494,8 @@ public class BroadcastFlowTests : IAsyncLifetime
 
         gate.Open();
 
-        await TestWait.Assert(
-            () => Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "slow.flac",
-            "the new source's manifest goes out once prepared");
+        await TestWait.Assert(() => Events[^1] is { } e && e.Cursor.Meta!.OriginalFileName == "slow.flac",
+                              "the new source's manifest goes out once prepared");
         await TestWait.Assert(() => sourceA.Disposed, "the old provider retires after commit");
         Assert.All(Events, Assert.NotNull);
     }
@@ -532,15 +521,15 @@ public class BroadcastFlowTests : IAsyncLifetime
         sourceA.RaiseChanged();
 
         await TestWait.Assert(
-            () => mgr.CurrentSnapshot?.FilePath == advanced
-                  && mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "advanced.flac",
+            () => mgr.CurrentSnapshot?.FilePath == advanced &&
+                  mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "advanced.flac",
             "the current provider remains live while handoff is pending");
         Assert.False(sourceA.Disposed);
 
         replacementGate.Open();
         await TestWait.Assert(
-            () => mgr.CurrentSnapshot?.FilePath == replacementTrack
-                  && mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "replacement.flac",
+            () => mgr.CurrentSnapshot?.FilePath == replacementTrack &&
+                  mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName == "replacement.flac",
             "the desired-provider handoff resumes after the live update commits");
         await TestWait.Assert(() => sourceA.Disposed, "the old provider retires after handoff");
         Assert.All(Events, Assert.NotNull);
@@ -556,16 +545,14 @@ public class BroadcastFlowTests : IAsyncLifetime
         var candidateSource = new FakeMusicSource { Current = Snap(candidatePath) };
 
         await mgr.BroadcastFromForTests(BroadcastProvider.Local, candidateSource);
-        await TestWait.Assert(() => mgr.BroadcastStatus.Phase == BroadcastPhase.Retrying,
-            "failure is surfaced");
+        await TestWait.Assert(() => mgr.BroadcastStatus.Phase == BroadcastPhase.Retrying, "failure is surfaced");
         Assert.Equal("live.flac", mgr.CurrentPlayerData()?.Cursor.Meta?.OriginalFileName);
 
         service.Regate(candidatePath).Open();
         candidateSource.RaiseChanged();
 
         await TestWait.Assert(
-            () => mgr.CurrentSnapshot?.FilePath == candidatePath
-                  && mgr.BroadcastStatus.Phase == BroadcastPhase.Live,
+            () => mgr.CurrentSnapshot?.FilePath == candidatePath && mgr.BroadcastStatus.Phase == BroadcastPhase.Live,
             "a new observation revision retries the same path");
         Assert.True(service.PrepareCalls.Count(path => path == candidatePath) >= 2);
     }
@@ -575,19 +562,19 @@ public class BroadcastFlowTests : IAsyncLifetime
     {
         var mgr = Create(retryTiming: new BroadcastRetryTiming
         {
-            Delays = [TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20),
-                      TimeSpan.FromMilliseconds(30)],
+            Delays =
+            [
+                TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20),
+                TimeSpan.FromMilliseconds(30),
+            ],
         });
         await StartBroadcasting(mgr, CreateTrack("live.flac"));
         var broken = CreateTrack("broken.flac");
         service.GateFor(broken).Fail(new IOException("still broken"));
 
-        await mgr.BroadcastFromForTests(
-            BroadcastProvider.Local,
-            new FakeMusicSource { Current = Snap(broken) });
-        await TestWait.Assert(
-            () => service.PrepareCalls.Count(path => path == broken) == 4,
-            "initial attempt plus the 1/2/5 retry budget");
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(broken) });
+        await TestWait.Assert(() => service.PrepareCalls.Count(path => path == broken) == 4,
+                              "initial attempt plus the 1/2/5 retry budget");
         await Task.Delay(100);
         Assert.Equal(4, service.PrepareCalls.Count(path => path == broken));
         Assert.Equal(BroadcastPhase.Failed, mgr.BroadcastStatus.Phase);
@@ -596,8 +583,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         service.Regate(broken).Open();
         mgr.RetryHandoff();
         await TestWait.Assert(
-            () => mgr.CurrentSnapshot?.FilePath == broken
-                  && mgr.BroadcastStatus.Phase == BroadcastPhase.Live,
+            () => mgr.CurrentSnapshot?.FilePath == broken && mgr.BroadcastStatus.Phase == BroadcastPhase.Live,
             "explicit retry creates a fresh bounded retry session");
     }
 
@@ -613,22 +599,17 @@ public class BroadcastFlowTests : IAsyncLifetime
         service.GateFor(candidatePath).Fail(new IOException("first attempt"));
         var candidate = new FakeMusicSource { Current = Snap(candidatePath) };
         await mgr.BroadcastFromForTests(BroadcastProvider.Local, candidate);
-        await TestWait.Assert(
-            () => service.PrepareCalls.Count(path => path == candidatePath) >= 1,
-            "first attempt fails");
+        await TestWait.Assert(() => service.PrepareCalls.Count(path => path == candidatePath) >= 1, "first attempt fails");
 
         var retryGate = service.Regate(candidatePath);
-        await TestWait.Assert(
-            () => service.PrepareCalls.Count(path => path == candidatePath) >= 2,
-            "bounded retry is running");
-        candidate.Current = Snap(candidatePath, playing: false);
+        await TestWait.Assert(() => service.PrepareCalls.Count(path => path == candidatePath) >= 2,
+                              "bounded retry is running");
+        candidate.Current = Snap(candidatePath, false);
         candidate.RaiseChanged();
         retryGate.Open();
 
-        await TestWait.Assert(
-            () => mgr.CurrentSnapshot is { FilePath: var path, IsPlaying: false }
-                  && path == candidatePath,
-            "the retry result commits the latest cursor");
+        await TestWait.Assert(() => mgr.CurrentSnapshot is { FilePath: var path, IsPlaying: false } && path == candidatePath,
+                              "the retry result commits the latest cursor");
         Assert.Equal(2, service.PrepareCalls.Count(path => path == candidatePath));
     }
 
@@ -637,17 +618,17 @@ public class BroadcastFlowTests : IAsyncLifetime
     {
         var mgr = Create(retryTiming: new BroadcastRetryTiming
         {
-            Delays = [TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20),
-                      TimeSpan.FromMilliseconds(30)],
+            Delays =
+            [
+                TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(20),
+                TimeSpan.FromMilliseconds(30),
+            ],
         });
         await StartBroadcasting(mgr, CreateTrack("live.flac"));
         var missing = Path.Combine(dir.FullName, "missing.flac");
 
-        await mgr.BroadcastFromForTests(
-            BroadcastProvider.Local,
-            new FakeMusicSource { Current = Snap(missing) });
-        await TestWait.Assert(() => mgr.BroadcastStatus.Phase == BroadcastPhase.Failed,
-            "retry budget exhausts");
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(missing) });
+        await TestWait.Assert(() => mgr.BroadcastStatus.Phase == BroadcastPhase.Failed, "retry budget exhausts");
         await Task.Delay(100);
 
         Assert.Equal(BroadcastPhase.Failed, mgr.BroadcastStatus.Phase);
@@ -665,9 +646,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         var live = await StartBroadcasting(mgr, CreateTrack("live.flac"));
         var desiredPath = CreateTrack("desired.flac");
         var desiredGate = service.GateFor(desiredPath);
-        await mgr.InstallProviderForTests(
-            BroadcastProvider.Beefweb,
-            new FakeMusicSource { Current = Snap(desiredPath) });
+        await mgr.InstallProviderForTests(BroadcastProvider.Beefweb, new FakeMusicSource { Current = Snap(desiredPath) });
         mgr.SetProvider(BroadcastProvider.Beefweb);
         Assert.True(await service.WaitForPrepare(desiredPath), "handoff prep starts");
 
@@ -678,17 +657,15 @@ public class BroadcastFlowTests : IAsyncLifetime
         await TestWait.Assert(() => mgr.CurrentPlayerData() is null, "stale live assertion stops");
 
         desiredGate.Open();
-        await TestWait.Assert(
-            () => mgr.CurrentSnapshot?.FilePath == desiredPath,
-            "desired handoff resumes without another provider event");
+        await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == desiredPath,
+                              "desired handoff resumes without another provider event");
     }
 
     [Fact]
     public async Task Disposal_awaits_providers_retired_by_a_handoff()
     {
         var mgr = Create();
-        var retirementGate = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var retirementGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var old = new FakeMusicSource
         {
             Current = Snap(CreateTrack("old.flac")),
@@ -698,9 +675,7 @@ public class BroadcastFlowTests : IAsyncLifetime
         await TestWait.Assert(() => mgr.CurrentPlayerData() is not null, "old provider commits");
 
         var replacement = CreateTrack("replacement.flac");
-        await mgr.BroadcastFromForTests(
-            BroadcastProvider.Local,
-            new FakeMusicSource { Current = Snap(replacement) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local, new FakeMusicSource { Current = Snap(replacement) });
         await TestWait.Assert(() => mgr.CurrentSnapshot?.FilePath == replacement, "replacement commits");
 
         var disposing = mgr.DisposeAsync().AsTask();
@@ -716,17 +691,15 @@ public class BroadcastFlowTests : IAsyncLifetime
     public async Task Hung_provider_retirement_does_not_block_manager_shutdown_forever()
     {
         var mgr = Create(providerDisposeTimeout: TimeSpan.FromMilliseconds(50));
-        var retirementGate = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var retirementGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var old = new FakeMusicSource
         {
             Current = Snap(CreateTrack("old.flac")),
             DisposeGate = retirementGate,
         };
         await mgr.BroadcastFromForTests(BroadcastProvider.Local, old);
-        await mgr.BroadcastFromForTests(
-            BroadcastProvider.Local,
-            new FakeMusicSource { Current = Snap(CreateTrack("replacement.flac")) });
+        await mgr.BroadcastFromForTests(BroadcastProvider.Local,
+                                        new FakeMusicSource { Current = Snap(CreateTrack("replacement.flac")) });
 
         await TestWait.Within(mgr.DisposeAsync().AsTask(), "bounded provider retirement");
         Assert.False(old.Disposed);

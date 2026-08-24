@@ -87,27 +87,32 @@ internal static class CardGroup
                 drawList.AddRectFilled(min, max, ImGui.GetColorU32(A(new Vector4(1f, 1f, 1f, 0.05f), alpha)), round);
 
             var border = selected
-                ? opt.Accent with { W = hovered ? 0.90f : 0.65f }
-                : new Vector4(0.5f, 0.5f, 0.5f, hovered ? 0.35f : 0.15f);
+                             ? opt.Accent with { W = hovered ? 0.90f : 0.65f }
+                             : new Vector4(0.5f, 0.5f, 0.5f, hovered ? 0.35f : 0.15f);
             drawList.AddRect(min, max, ImGui.GetColorU32(A(border, alpha)), round, ImDrawFlags.None, 1f * scale);
 
             var dotCenter = new Vector2(min.X + pX + dotR, min.Y + pY + (lineH * 0.5f));
             if (selected)
                 drawList.AddCircleFilled(dotCenter, dotR, ImGui.GetColorU32(A(opt.Accent with { W = 0.9f }, alpha)));
             else
-                drawList.AddCircle(dotCenter, dotR, ImGui.GetColorU32(A(new Vector4(0.5f, 0.5f, 0.5f, 0.6f * textAlpha), alpha)), 0, 1.5f * scale);
+                drawList.AddCircle(dotCenter, dotR,
+                                   ImGui.GetColorU32(A(new Vector4(0.5f, 0.5f, 0.5f, 0.6f * textAlpha), alpha)), 0,
+                                   1.5f * scale);
 
             var labelPos = new Vector2(min.X + pX + textStartX, min.Y + pY);
-            drawList.AddText(labelPos, ImGui.GetColorU32(A(ImGuiColors.DalamudWhite with { W = 0.95f * textAlpha }, alpha)), label);
+            drawList.AddText(labelPos, ImGui.GetColorU32(A(ImGuiColors.DalamudWhite with { W = 0.95f * textAlpha }, alpha)),
+                             label);
             if (note.Length > 0)
             {
                 var notePos = new Vector2(labelPos.X + ImGui.CalcTextSize(label).X + (gap * scale), labelPos.Y);
                 drawList.AddText(notePos, ImGui.GetColorU32(A(opt.Accent with { W = 0.95f }, alpha)), note);
             }
+
             if (trailingW > 0f)
             {
                 var trailPos = new Vector2(max.X - pX - trailingW, labelPos.Y);
-                drawList.AddText(trailPos, ImGui.GetColorU32(A(new Vector4(0.7f, 0.7f, 0.7f, 0.9f * textAlpha), alpha)), trailing);
+                drawList.AddText(trailPos, ImGui.GetColorU32(A(new Vector4(0.7f, 0.7f, 0.7f, 0.9f * textAlpha), alpha)),
+                                 trailing);
             }
 
             var descPos = new Vector2(labelPos.X, labelPos.Y + lineH + (labelDescGap * scale));

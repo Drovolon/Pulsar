@@ -54,23 +54,18 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
             activePlaybackId = 0;
             activeSequence = 0;
         }
+
         if (playbackId == 0) return;
-        OnUpdated?.Invoke(this, new EngineSnapshot(
-            PlaybackState.Stopped,
-            null,
-            null,
-            null,
-            DateTimeOffset.UtcNow,
-            playbackId,
-            sequence,
-            EndReason.Disconnected));
+        OnUpdated?.Invoke(
+            this,
+            new EngineSnapshot(PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow, playbackId, sequence,
+                               EndReason.Disconnected));
     }
 
-    private IRemoteEngine Live => connection.Proxy
-        ?? throw new ConnectionLostException($"{connection.HostName} is not connected");
+    private IRemoteEngine Live =>
+        connection.Proxy ?? throw new ConnectionLostException($"{connection.HostName} is not connected");
 
-    public async Task LoadAsync(
-        string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
+    public async Task LoadAsync(string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
         BeginPlayback(playbackId);
         try
@@ -85,14 +80,12 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
     }
 
     public async Task LoadBytesAsync(
-        string displayPath, byte[] audioData, TimeSpan position,
-        bool startPlaying, long playbackId, CancellationToken ct)
+        string displayPath, byte[] audioData, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
         BeginPlayback(playbackId);
         try
         {
-            await Live.LoadBytesAsync(
-                displayPath, audioData, position, startPlaying, playbackId, ct);
+            await Live.LoadBytesAsync(displayPath, audioData, position, startPlaying, playbackId, ct);
         }
         catch
         {
@@ -115,6 +108,7 @@ public sealed class ReconnectingEngine : IRemoteEngine, IAsyncDisposable
     public Task ResumeAsync(CancellationToken ct) => Live.ResumeAsync(ct);
     public Task SetVolumeAsync(float volume, CancellationToken ct) => Live.SetVolumeAsync(volume, ct);
     public Task SeekAsync(TimeSpan position, CancellationToken ct) => Live.SeekAsync(position, ct);
+
     public async Task<EngineSnapshot> GetStateAsync(CancellationToken ct)
     {
         var update = await Live.GetStateAsync(ct);

@@ -36,13 +36,24 @@ public class RpcServerTests
         private readonly CancellationTokenSource cts = new();
         public string PipeName { get; } = $"PulsarTest.{Guid.NewGuid():N}";
         public Task Task { get; }
-        public Server() => Task = RpcServer.NamedPipeServerAsync<PingTarget>(PipeName, cts.Token);
+
+        public Server()
+        {
+            Task = RpcServer.NamedPipeServerAsync<PingTarget>(PipeName, cts.Token);
+        }
 
         public async ValueTask DisposeAsync()
         {
             cts.Cancel();
-            try { await Task.WaitAsync(TestWait.Timeout); }
-            catch (OperationCanceledException) { /* the expected exit */ }
+            try
+            {
+                await Task.WaitAsync(TestWait.Timeout);
+            }
+            catch (OperationCanceledException)
+            {
+                /* the expected exit */
+            }
+
             cts.Dispose();
         }
     }
@@ -52,8 +63,11 @@ public class RpcServerTests
         public NamedPipeClientStream Pipe { get; }
         public JsonRpc Rpc { get; private set; } = null!;
         public IPingTarget Proxy { get; private set; } = null!;
-        private Client(string pipeName) =>
+
+        private Client(string pipeName)
+        {
             Pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        }
 
         public static async Task<Client> ConnectAsync(string pipeName)
         {
@@ -86,7 +100,9 @@ public class RpcServerTests
         await using var server = new Server();
         int firstId;
         await using (var first = await Client.ConnectAsync(server.PipeName))
+        {
             firstId = await TestWait.Within(first.Proxy.InstanceIdAsync(CancellationToken.None), "first id");
+        }
 
         await using var second = await Client.ConnectAsync(server.PipeName);
         var secondId = await TestWait.Within(second.Proxy.InstanceIdAsync(CancellationToken.None), "second id");
@@ -110,7 +126,6 @@ public class RpcServerTests
         using var cts = new CancellationTokenSource();
         var server = RpcServer.NamedPipeServerAsync<PingTarget>($"PulsarTest.{Guid.NewGuid():N}", cts.Token);
         cts.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => server.WaitAsync(TestWait.Timeout));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => server.WaitAsync(TestWait.Timeout));
     }
 }

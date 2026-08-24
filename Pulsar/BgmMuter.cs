@@ -21,8 +21,7 @@ internal sealed class GameBgmControl(IGameConfig gameConfig) : IGameBgmControl
         return found;
     }
 
-    public void SetMuted(bool muted)
-        => gameConfig.Set(SystemConfigOption.IsSndBgm, muted ? 1u : 0u);
+    public void SetMuted(bool muted) => gameConfig.Set(SystemConfigOption.IsSndBgm, muted ? 1u : 0u);
 }
 
 /// <summary>
@@ -54,8 +53,7 @@ internal sealed class BgmMuter(Configuration config, IGameBgmControl gameBgm) : 
         catch (Exception e)
         {
             Plugin.Log.Error(e, "Failed to update the in-game BGM mute state");
-        }
-        finally
+        } finally
         {
             gate.Release();
         }
@@ -64,8 +62,8 @@ internal sealed class BgmMuter(Configuration config, IGameBgmControl gameBgm) : 
     // runs on framework thread
     private void Apply()
     {
-        var shouldMute = (listening && config.MuteGameBgmWhileListening)
-                         || (broadcasting && config.MuteGameBgmWhileBroadcasting);
+        var shouldMute = (listening && config.MuteGameBgmWhileListening) ||
+                         (broadcasting && config.MuteGameBgmWhileBroadcasting);
         if (shouldMute == ownsMute) return;
 
         if (shouldMute)
@@ -113,8 +111,7 @@ internal sealed class BgmMuter(Configuration config, IGameBgmControl gameBgm) : 
             {
                 Plugin.Log.Error(e, "Failed to restore the in-game BGM mute state");
             }
-        }
-        finally
+        } finally
         {
             gate.Release();
         }

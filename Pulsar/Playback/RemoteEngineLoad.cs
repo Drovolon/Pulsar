@@ -14,24 +14,19 @@ internal static class RemoteEngineLoad
     extension(IRemoteEngine engine)
     {
         public Task LoadFileAsync(
-            string path, TimeSpan position,
-            bool startPlaying, long playbackId, CancellationToken ct)
-            =>
-                engine.LoadFileAsync(
-                    path, position, startPlaying, playbackId, ScdReader.ExtractAudio, ct);
+            string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct) =>
+            engine.LoadFileAsync(path, position, startPlaying, playbackId, ScdReader.ExtractAudio, ct);
 
         // used for tests
         internal Task LoadFileAsync(
-            string path, TimeSpan position,
-            bool startPlaying, long playbackId,
-            Func<string, byte[]> extractAudio, CancellationToken ct)
+            string path, TimeSpan position, bool startPlaying, long playbackId, Func<string, byte[]> extractAudio,
+            CancellationToken ct)
         {
             if (ScdReader.IsScd(path))
             {
                 try
                 {
-                    return engine.LoadBytesAsync(
-                        path, extractAudio(path), position, startPlaying, playbackId, ct);
+                    return engine.LoadBytesAsync(path, extractAudio(path), position, startPlaying, playbackId, ct);
                 }
                 catch (Exception ex)
                 {

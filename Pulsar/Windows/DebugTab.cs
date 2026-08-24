@@ -73,9 +73,12 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
         if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.FolderOpen, "Browse"))
         {
             fileDialogManager.OpenFileDialog("Select an audio file",
-                "Audio{.aac,.aiff,.flac,.m4a,.mp3,.ogg,.opus,.wav,.wma,.wv}",
-                (ok, path) => { if (ok) dbgPath = path; });
+                                             "Audio{.aac,.aiff,.flac,.m4a,.mp3,.ogg,.opus,.wav,.wma,.wv}", (ok, path) =>
+                                             {
+                                                 if (ok) dbgPath = path;
+                                             });
         }
+
         ImGui.SameLine();
         ImGui.Text("File");
 
@@ -90,6 +93,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
             dbgEpoch++;
             SendDebugSet();
         }
+
         ImGui.SameLine();
         if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Redo, "Resend (same epoch)")) SendDebugSet();
         ImGui.SameLine();
@@ -116,9 +120,7 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
     {
         try
         {
-            var enabled = Plugin.PluginInterface
-                .GetIpcSubscriber<bool>(PulsarIpcEndpoints.IsEnabled)
-                .InvokeFunc();
+            var enabled = Plugin.PluginInterface.GetIpcSubscriber<bool>(PulsarIpcEndpoints.IsEnabled).InvokeFunc();
             lastQueryResult = $"IsEnabled: {enabled}";
         }
         catch (Exception e)
@@ -132,9 +134,8 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
     {
         try
         {
-            var version = Plugin.PluginInterface
-                .GetIpcSubscriber<PulsarApiVersion>(PulsarIpcEndpoints.ApiVersion)
-                .InvokeFunc();
+            var version = Plugin.PluginInterface.GetIpcSubscriber<PulsarApiVersion>(PulsarIpcEndpoints.ApiVersion)
+                                .InvokeFunc();
             lastQueryResult = $"ApiVersion: {version.Major}.{version.Minor}";
         }
         catch (Exception e)
@@ -148,21 +149,19 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
     {
         try
         {
-            var data = Plugin.PluginInterface
-                .GetIpcSubscriber<PulsarPlayerData?>(PulsarIpcEndpoints.GetPlayerData)
-                .InvokeFunc();
+            var data = Plugin.PluginInterface.GetIpcSubscriber<PulsarPlayerData?>(PulsarIpcEndpoints.GetPlayerData)
+                             .InvokeFunc();
             if (data is null)
             {
                 lastQueryResult = "GetPlayerData: null";
                 return;
             }
 
-            lastQueryResult =
-                $"GetPlayerData: \n  file: {data.Current.Path}\n  BLAKE3: {data.Current.Blake3Hash}"
-                + $"\n  SHA-1: {data.Current.Sha1Hash}"
-                + $"\n  prefetch: {data.Prefetch?.Path}\n  prefetch BLAKE3: {data.Prefetch?.Blake3Hash}"
-                + $"\n  prefetch SHA-1: {data.Prefetch?.Sha1Hash}"
-                + $"\n  cursor: {data.Payload}";
+            lastQueryResult = $"GetPlayerData: \n  file: {data.Current.Path}\n  BLAKE3: {data.Current.Blake3Hash}" +
+                              $"\n  SHA-1: {data.Current.Sha1Hash}" +
+                              $"\n  prefetch: {data.Prefetch?.Path}\n  prefetch BLAKE3: {data.Prefetch?.Blake3Hash}" +
+                              $"\n  prefetch SHA-1: {data.Prefetch?.Sha1Hash}" +
+                              $"\n  cursor: {data.Payload}";
         }
         catch (Exception e)
         {
@@ -185,8 +184,8 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
             };
             var cursorJson = JsonSerializer.Serialize(cursor);
             Plugin.PluginInterface
-                .GetIpcSubscriber<ulong, string, string?, string, object?>(PulsarIpcEndpoints.SetPlayerData)
-                .InvokeAction((ulong)dbgIdent, dbgPath, null, cursorJson);
+                  .GetIpcSubscriber<ulong, string, string?, string, object?>(PulsarIpcEndpoints.SetPlayerData)
+                  .InvokeAction((ulong)dbgIdent, dbgPath, null, cursorJson);
         }
         catch (Exception e)
         {
@@ -198,9 +197,8 @@ internal sealed class DebugTab(Plugin plugin, FileDialogManager fileDialogManage
     {
         try
         {
-            Plugin.PluginInterface
-                .GetIpcSubscriber<ulong, object?>(PulsarIpcEndpoints.ClearPlayerData)
-                .InvokeAction((ulong)dbgIdent);
+            Plugin.PluginInterface.GetIpcSubscriber<ulong, object?>(PulsarIpcEndpoints.ClearPlayerData)
+                  .InvokeAction((ulong)dbgIdent);
         }
         catch (Exception e)
         {

@@ -47,7 +47,6 @@ public sealed class NaturalPathComparer : IComparer<string>
     {
         int i = 0, j = 0;
         while (i < a.Length && j < b.Length)
-        {
             if (char.IsDigit(a[i]) && char.IsDigit(b[j]))
             {
                 var ra = ReadDigits(a, ref i);
@@ -62,7 +61,7 @@ public sealed class NaturalPathComparer : IComparer<string>
                 i++;
                 j++;
             }
-        }
+
         return a.Length - i - (b.Length - j);
     }
 

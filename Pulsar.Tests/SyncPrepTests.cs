@@ -18,74 +18,60 @@ public class SyncPrepTests : IAsyncLifetime
     private sealed class NonCooperativePrepareService : IPrepareService
     {
         private int calls;
-        private readonly TaskCompletionSource releaseFirst = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private Task<PreparedTrack>? firstAttempt;
 
         internal Task FirstAttempt => firstAttempt!;
         internal void ReleaseFirst() => releaseFirst.TrySetResult();
 
-        public Task<PreparedTrack> PrepareAsync(
-            string originalPath,
-            string transcodeOutPath,
-            CancellationToken ct)
+        public Task<PreparedTrack> PrepareAsync(string originalPath, string transcodeOutPath, CancellationToken ct)
         {
             if (Interlocked.Increment(ref calls) == 1)
                 return firstAttempt = CompleteLate(transcodeOutPath);
             File.WriteAllBytes(transcodeOutPath, [2]);
-            return Task.FromResult(new PreparedTrack(
-                transcodeOutPath,
-                ControllablePrepareService.Blake3Hash,
-                ControllablePrepareService.Sha1Hash,
-                0));
+            return Task.FromResult(new PreparedTrack(transcodeOutPath, ControllablePrepareService.Blake3Hash,
+                                                     ControllablePrepareService.Sha1Hash, 0));
         }
 
         private async Task<PreparedTrack> CompleteLate(string transcodeOutPath)
         {
             await releaseFirst.Task;
             File.WriteAllBytes(transcodeOutPath, [1]);
-            return new PreparedTrack(
-                transcodeOutPath,
-                ControllablePrepareService.Blake3Hash,
-                ControllablePrepareService.Sha1Hash,
-                0);
+            return new PreparedTrack(transcodeOutPath, ControllablePrepareService.Blake3Hash,
+                                     ControllablePrepareService.Sha1Hash, 0);
         }
 
         public Task<PreparedTrack> PrepareBytesAsync(
-            string originalPath,
-            byte[] audioData,
-            string transcodeOutPath,
-            CancellationToken ct)
-            => PrepareAsync(originalPath, transcodeOutPath, ct);
+            string originalPath, byte[] audioData, string transcodeOutPath, CancellationToken ct) =>
+            PrepareAsync(originalPath, transcodeOutPath, ct);
     }
 
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-sp-test-");
     private readonly ControllablePrepareService service = new();
     private SyncPrep? prep;
 
-    private SyncPrep Create(long cacheCapBytes = 1L << 26) => prep = new SyncPrep(
-        new CacheManager(Path.Combine(dir.FullName, "cache")) { CacheCapBytes = cacheCapBytes }, service);
+    private SyncPrep Create(long cacheCapBytes = 1L << 26) =>
+        prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")) { CacheCapBytes = cacheCapBytes },
+                            service);
 
     public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()
     {
         if (prep is not null) await prep.DisposeAsync();
-        dir.Delete(recursive: true);
+        dir.Delete(true);
     }
 
     private string CreateTrack(string name) => TestData.CreateTrack(dir, name);
 
-    private static Task<PrepResult> Within(Task<PrepResult> task, string because)
-        => TestWait.Within(task, because);
+    private static Task<PrepResult> Within(Task<PrepResult> task, string because) => TestWait.Within(task, because);
 
     [Fact]
     public async Task Prep_after_dispose_completes_preempted_instead_of_hanging()
     {
         var sp = Create();
         var track = CreateTrack("late.flac");
-        Assert.IsType<PrepResult.Successful>(
-            await Within(sp.PrepareActive(track), "priming a result before disposal"));
+        Assert.IsType<PrepResult.Successful>(await Within(sp.PrepareActive(track), "priming a result before disposal"));
         await sp.DisposeAsync();
 
         // Reachable during unload: a source event already past BroadcastManager's fences
@@ -98,14 +84,10 @@ public class SyncPrepTests : IAsyncLifetime
     public async Task Timed_out_noncooperative_attempt_cannot_overwrite_its_retry()
     {
         var service = new NonCooperativePrepareService();
-        prep = new SyncPrep(
-            new CacheManager(Path.Combine(dir.FullName, "cache")),
-            service,
-            attemptTimeout: TimeSpan.FromMilliseconds(50));
+        prep = new SyncPrep(new CacheManager(Path.Combine(dir.FullName, "cache")), service, TimeSpan.FromMilliseconds(50));
         var stuck = CreateTrack("stuck.flac");
 
-        Assert.IsType<PrepResult.Failed>(
-            await TestWait.Within(prep.PrepareActive(stuck), "noncooperative timeout"));
+        Assert.IsType<PrepResult.Failed>(await TestWait.Within(prep.PrepareActive(stuck), "noncooperative timeout"));
         var retry = Assert.IsType<PrepResult.Successful>(
             await TestWait.Within(prep.PrepareActive(stuck), "retry starts after timeout"));
         Assert.Equal([2], File.ReadAllBytes(retry.PreparedFilePath));
@@ -114,9 +96,8 @@ public class SyncPrepTests : IAsyncLifetime
         // overwrite the retry's output.
         service.ReleaseFirst();
         await TestWait.Within(service.FirstAttempt, "abandoned physical attempt finishes");
-        await TestWait.Assert(
-            () => Directory.GetFiles(Path.Combine(dir.FullName, "cache"), "*.attempt-*").Length == 0,
-            "abandoned staging artifact is cleaned");
+        await TestWait.Assert(() => Directory.GetFiles(Path.Combine(dir.FullName, "cache"), "*.attempt-*").Length == 0,
+                              "abandoned staging artifact is cleaned");
         Assert.Equal([2], File.ReadAllBytes(retry.PreparedFilePath));
 
         await TestWait.Within(prep.DisposeAsync().AsTask(), "prep shutdown after abandoned worker");
@@ -127,26 +108,24 @@ public class SyncPrepTests : IAsyncLifetime
     {
         var sp = Create();
         var track = CreateTrack("looped.flac");
-        var first = Assert.IsType<PrepResult.Successful>(
-            await Within(sp.PrepareActive(track), "initial prep"));
+        var first = Assert.IsType<PrepResult.Successful>(await Within(sp.PrepareActive(track), "initial prep"));
 
         // A cache-served hit must refresh the access time, or LRU eviction sees the
         // DJ's hottest artifact as the coldest (nothing else touches the file).
         var stale = DateTime.UtcNow - TimeSpan.FromHours(6);
         File.SetLastAccessTimeUtc(first.PreparedFilePath, stale);
 
-        Assert.IsType<PrepResult.Successful>(
-            await Within(sp.PrepareActive(track), "cache-served replay"));
+        Assert.IsType<PrepResult.Successful>(await Within(sp.PrepareActive(track), "cache-served replay"));
 
         Assert.True(File.GetLastAccessTimeUtc(first.PreparedFilePath) > stale + TimeSpan.FromHours(1),
-            "the replay refreshes the artifact's LRU age");
+                    "the replay refreshes the artifact's LRU age");
     }
 
     [Fact]
     public async Task An_attach_promoted_active_prep_pins_its_artifact_against_eviction()
     {
         // Tiny cap: every eviction pass wants to delete everything unpinned.
-        var sp = Create(cacheCapBytes: 1);
+        var sp = Create(1);
         service.ArtifactBytes = 1024;
 
         var trackA = CreateTrack("a.flac");
@@ -183,8 +162,8 @@ public class SyncPrepTests : IAsyncLifetime
         var currentPrep = sp.PrepareActive(current);
         Assert.True(await service.WaitForPrepare(current), "worker starts on the current track");
 
-        var prefetch = sp.PreparePrefetch(next);   // queued: worker is busy
-        var active = sp.PrepareActive(next);       // track changed to the prefetched file
+        var prefetch = sp.PreparePrefetch(next); // queued: worker is busy
+        var active = sp.PrepareActive(next);     // track changed to the prefetched file
 
         currentGate.Open();
         service.GateFor(next).Open();
@@ -257,7 +236,7 @@ public class SyncPrepTests : IAsyncLifetime
         var stalePrefetch = sp.PreparePrefetch(stale);
         Assert.True(await service.WaitForPrepare(stale), "stale prefetch starts");
 
-        var active = sp.PrepareActive(activeTrack); // cancels the running prefetch
+        var active = sp.PrepareActive(activeTrack);      // cancels the running prefetch
         var futurePrefetch = sp.PreparePrefetch(future); // both pending slots are now occupied
 
         Assert.IsType<PrepResult.Preempted>(await Within(stalePrefetch, "stale work is cancelled"));
@@ -293,8 +272,8 @@ public class SyncPrepTests : IAsyncLifetime
         var first = sp.PrepareActive(track);
         Assert.True(await service.WaitForPrepare(track), "transcode starts");
 
-        var second = sp.PrepareActive(track);   // DJ paused mid-transcode
-        var third = sp.PreparePrefetch(track);  // and something prefetches it too
+        var second = sp.PrepareActive(track);  // DJ paused mid-transcode
+        var third = sp.PreparePrefetch(track); // and something prefetches it too
 
         gate.Open();
 
@@ -331,22 +310,20 @@ public class SyncPrepTests : IAsyncLifetime
         var cached = CreateTrack("cached-next.flac");
         var current = CreateTrack("current.flac");
         var stale = CreateTrack("stale-next.flac");
-        Assert.IsType<PrepResult.Successful>(
-            await Within(sp.PrepareActive(cached), "priming the next-track cache"));
+        Assert.IsType<PrepResult.Successful>(await Within(sp.PrepareActive(cached), "priming the next-track cache"));
 
         var currentGate = service.GateFor(current);
         var currentPrep = sp.PrepareActive(current);
         Assert.True(await service.WaitForPrepare(current), "active prep occupies the worker");
 
         var stalePrefetch = sp.PreparePrefetch(stale);
-        Assert.IsType<PrepResult.Successful>(
-            await Within(sp.PreparePrefetch(cached), "the latest prediction is cache-served"));
+        Assert.IsType<PrepResult.Successful>(await Within(sp.PreparePrefetch(cached),
+                                                          "the latest prediction is cache-served"));
 
         currentGate.Open();
         await Within(currentPrep, "current track completes");
 
-        Assert.IsType<PrepResult.Preempted>(
-            await Within(stalePrefetch, "the stale prediction is superseded"));
+        Assert.IsType<PrepResult.Preempted>(await Within(stalePrefetch, "the stale prediction is superseded"));
         Assert.DoesNotContain(stale, service.PrepareCalls);
     }
 
@@ -354,21 +331,20 @@ public class SyncPrepTests : IAsyncLifetime
     public async Task Eviction_never_deletes_the_active_broadcasts_artifact()
     {
         // A completing prefetch must not LRU-evict the artifact the live manifest points at.
-        var sp = Create(cacheCapBytes: 1000);
+        var sp = Create(1000);
         service.ArtifactBytes = 600;
         var onAir = CreateTrack("on-air.flac");
         var next = CreateTrack("next.flac");
 
-        var active = Assert.IsType<PrepResult.Successful>(
-            await Within(sp.PrepareActive(onAir), "active prep"));
+        var active = Assert.IsType<PrepResult.Successful>(await Within(sp.PrepareActive(onAir), "active prep"));
         using var liveArtifact = sp.PinArtifact(active.PreparedFilePath);
         File.SetLastAccessTimeUtc(active.PreparedFilePath, DateTime.UtcNow.AddHours(-1)); // oldest by LRU
 
-        Assert.IsType<PrepResult.Successful>(
-            await Within(sp.PreparePrefetch(next), "prefetch that pushes the cache over its cap"));
+        Assert.IsType<PrepResult.Successful>(await Within(sp.PreparePrefetch(next),
+                                                          "prefetch that pushes the cache over its cap"));
 
         Assert.True(File.Exists(active.PreparedFilePath),
-            "the artifact the live manifest points at survived the prefetch's eviction pass");
+                    "the artifact the live manifest points at survived the prefetch's eviction pass");
     }
 
     [Fact]

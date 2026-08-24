@@ -15,7 +15,7 @@ public class FilePlayerTests : IDisposable
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-fp-test-");
 
-    public void Dispose() => dir.Delete(recursive: true);
+    public void Dispose() => dir.Delete(true);
 
     private string CreateWav(short amplitude = 0, string name = "t.wav", int samples = 44100)
     {
@@ -25,8 +25,9 @@ public class FilePlayerTests : IDisposable
         for (var i = 0; i < samples; i++)
         {
             data[i * 2] = (byte)(amplitude & 0xFF);
-            data[i * 2 + 1] = (byte)((amplitude >> 8) & 0xFF);
+            data[(i * 2) + 1] = (byte)((amplitude >> 8) & 0xFF);
         }
+
         w.Write(data, 0, data.Length);
         return path;
     }
@@ -39,17 +40,16 @@ public class FilePlayerTests : IDisposable
         var wav = CreateWav();
         var player = new FilePlayer(() => new FakeWavePlayer());
 
-        player.Load(wav, TimeSpan.Zero, playing: false);
+        player.Load(wav, TimeSpan.Zero, false);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Paused, "paused load is applied");
 
         player.Stop();
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Stopped,
-            "player wedged on stop after a paused load");
+                              "player wedged on stop after a paused load");
 
         // The command loop must still be alive: a follow-up load has to reach Playing.
-        player.Load(wav, TimeSpan.Zero, playing: true);
-        await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing,
-            "command loop is dead after the stop");
+        player.Load(wav, TimeSpan.Zero, true);
+        await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "command loop is dead after the stop");
 
         // Bounded on purpose: a wedged player would never return, and an undisposed
         // player holds the wav open when Dispose deletes the temp dir.
@@ -63,7 +63,7 @@ public class FilePlayerTests : IDisposable
         var device = new FakeWavePlayer();
         var player = new FilePlayer(() => device);
 
-        player.Load(wav, TimeSpan.Zero, playing: true);
+        player.Load(wav, TimeSpan.Zero, true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "load reaches playing");
         Assert.Equal(PlaybackState.Playing, device.PlaybackState);
 
@@ -86,8 +86,7 @@ public class FilePlayerTests : IDisposable
     {
         var wav = CreateWav();
         using var releaseInit = new ManualResetEventSlim();
-        var initStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var initStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var device = new FakeWavePlayer
         {
             BeforeInit = () =>
@@ -100,7 +99,7 @@ public class FilePlayerTests : IDisposable
 
         try
         {
-            player.Load(wav, TimeSpan.Zero, playing: true, playbackId: 42);
+            player.Load(wav, TimeSpan.Zero, true, 42);
             await TestWait.Within(initStarted.Task, "load reaches device initialization");
 
             Assert.True(player.Snapshot is
@@ -112,16 +111,14 @@ public class FilePlayerTests : IDisposable
             });
 
             releaseInit.Set();
-            await TestWait.Assert(
-                () => player.Snapshot is
-                {
-                    State: PlaybackState.Playing,
-                    Path: var path,
-                    PlaybackId: 42,
-                } && path == wav,
-                "the complete new state commits atomically");
-        }
-        finally
+            await TestWait.Assert(() => player.Snapshot is
+                                        {
+                                            State: PlaybackState.Playing,
+                                            Path: var path,
+                                            PlaybackId: 42,
+                                        } &&
+                                        path == wav, "the complete new state commits atomically");
+        } finally
         {
             releaseInit.Set();
             await player.DisposeAsync();
@@ -134,19 +131,23 @@ public class FilePlayerTests : IDisposable
         var first = CreateWav(name: "first.wav");
         var second = CreateWav(name: "second.wav");
         var devices = new List<FakeWavePlayer>();
-        var player = new FilePlayer(() => { var d = new FakeWavePlayer(); devices.Add(d); return d; });
+        var player = new FilePlayer(() =>
+        {
+            var d = new FakeWavePlayer();
+            devices.Add(d);
+            return d;
+        });
 
-        player.Load(first, TimeSpan.Zero, playing: true);
+        player.Load(first, TimeSpan.Zero, true);
         player.Pause();
         player.Resume();
         player.Pause();
         player.Seek(TimeSpan.FromMilliseconds(500));
         player.Stop();
-        player.Load(second, TimeSpan.Zero, playing: true);
+        player.Load(second, TimeSpan.Zero, true);
 
-        await TestWait.Assert(
-            () => player.Snapshot is { State: PlaybackState.Playing, Path: var path } && path == second,
-            "the final track is playing");
+        await TestWait.Assert(() => player.Snapshot is { State: PlaybackState.Playing, Path: var path } && path == second,
+                              "the final track is playing");
         Assert.Equal(2, devices.Count);
         Assert.Equal(PlaybackState.Stopped, devices[0].PlaybackState);
         Assert.Equal(PlaybackState.Playing, devices[1].PlaybackState);
@@ -160,15 +161,14 @@ public class FilePlayerTests : IDisposable
         var device = new FakeWavePlayer();
         var player = new FilePlayer(() => device);
         var updates = 0;
-        var ended = new TaskCompletionSource<Pulsar.Common.Api.EngineSnapshot>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var ended = new TaskCompletionSource<EngineSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
         player.OnUpdated += (_, update) =>
         {
             Interlocked.Increment(ref updates);
             if (update.TerminalReason is not null) ended.TrySetResult(update);
         };
 
-        player.Load(wav, TimeSpan.Zero, playing: true, playbackId: 42);
+        player.Load(wav, TimeSpan.Zero, true, 42);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "load reaches playing");
         await TestWait.Assert(() => Volatile.Read(ref updates) == 1, "load update fires");
         var updatesBeforeEnd = updates;
@@ -177,7 +177,7 @@ public class FilePlayerTests : IDisposable
 
         var endedEvent = await TestWait.Within(ended.Task, "terminal update");
         Assert.Equal(42, endedEvent.PlaybackId);
-        Assert.Equal(Pulsar.Common.Api.EndReason.Finished, endedEvent.TerminalReason);
+        Assert.Equal(EndReason.Finished, endedEvent.TerminalReason);
         Assert.Equal(PlaybackState.Stopped, endedEvent.State);
         Assert.Equal(endedEvent, player.Snapshot);
         Assert.Equal(updatesBeforeEnd + 1, updates);
@@ -189,17 +189,15 @@ public class FilePlayerTests : IDisposable
     public async Task Unreadable_file_reports_a_failed_load()
     {
         var player = new FilePlayer(() => new FakeWavePlayer());
-        var ended = new TaskCompletionSource<Pulsar.Common.Api.EndReason>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var ended = new TaskCompletionSource<EndReason>(TaskCreationOptions.RunContinuationsAsynchronously);
         player.OnUpdated += (_, update) =>
         {
             if (update.TerminalReason is { } reason) ended.TrySetResult(reason);
         };
 
-        player.Load(Path.Combine(dir.FullName, "missing.wav"), TimeSpan.Zero, playing: true);
+        player.Load(Path.Combine(dir.FullName, "missing.wav"), TimeSpan.Zero, true);
 
-        Assert.Equal(Pulsar.Common.Api.EndReason.Failed,
-            await TestWait.Within(ended.Task, "failed-load event"));
+        Assert.Equal(EndReason.Failed, await TestWait.Within(ended.Task, "failed-load event"));
         Assert.Equal(PlaybackState.Stopped, player.Snapshot.State);
         Assert.NotNull(player.Snapshot.LastError);
 
@@ -212,19 +210,19 @@ public class FilePlayerTests : IDisposable
         var wav = CreateWav(); // 1 second long
         var player = new FilePlayer(() => new FakeWavePlayer());
 
-        player.Load(wav, TimeSpan.Zero, playing: false);
+        player.Load(wav, TimeSpan.Zero, false);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Paused, "paused load is applied");
 
         player.Seek(TimeSpan.FromMilliseconds(500));
         await TestWait.Assert(
-            () => player.Snapshot.Position is { } p && Math.Abs((p.Current - TimeSpan.FromMilliseconds(500)).TotalMilliseconds) < 50,
+            () => player.Snapshot.Position is { } p &&
+                  Math.Abs((p.Current - TimeSpan.FromMilliseconds(500)).TotalMilliseconds) < 50,
             "position lands near the seek target");
 
         // Seeking past the end clamps to the track length rather than exploding.
         player.Seek(TimeSpan.FromSeconds(30));
-        await TestWait.Assert(
-            () => player.Snapshot.Position is { } p && p.Current == p.Total,
-            "overshoot clamps to the end");
+        await TestWait.Assert(() => player.Snapshot.Position is { } p && p.Current == p.Total,
+                              "overshoot clamps to the end");
 
         // The player survives all of it.
         player.Resume();
@@ -237,12 +235,12 @@ public class FilePlayerTests : IDisposable
     {
         // Volume must survive across loads (the mixer slider isn't re-dragged per song).
         // Verify through the actual audio path: samples come out scaled.
-        var wav = CreateWav(amplitude: 16384); // ~0.5 full scale
+        var wav = CreateWav(16384); // ~0.5 full scale
         var device = new FakeWavePlayer();
         var player = new FilePlayer(() => device);
 
         player.Volume(0.5f);
-        player.Load(wav, TimeSpan.Zero, playing: true);
+        player.Load(wav, TimeSpan.Zero, true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "load reaches playing");
 
         var provider = device.Provider!;
@@ -266,7 +264,7 @@ public class FilePlayerTests : IDisposable
         var bytes = File.ReadAllBytes(CreateWav());
         var player = new FilePlayer(() => new FakeWavePlayer());
 
-        player.LoadBytes(@"D:\mods\song.scd", bytes, TimeSpan.Zero, playing: true);
+        player.LoadBytes(@"D:\mods\song.scd", bytes, TimeSpan.Zero, true);
 
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "bytes load plays");
         Assert.Equal(@"D:\mods\song.scd", player.Snapshot.Path);
@@ -285,7 +283,7 @@ public class FilePlayerTests : IDisposable
         EndReason? ended = null;
         player.OnUpdated += (_, update) => ended = update.TerminalReason ?? ended;
 
-        player.Load(wav, TimeSpan.Zero, playing: true);
+        player.Load(wav, TimeSpan.Zero, true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "playing");
 
         device.SimulateNaturalEnd(new InvalidOperationException("device died"));
@@ -300,12 +298,17 @@ public class FilePlayerTests : IDisposable
     {
         var wav = CreateWav();
         var devices = new List<FakeWavePlayer>();
-        var player = new FilePlayer(() => { var d = new FakeWavePlayer(); devices.Add(d); return d; });
+        var player = new FilePlayer(() =>
+        {
+            var d = new FakeWavePlayer();
+            devices.Add(d);
+            return d;
+        });
 
-        player.Load(wav, TimeSpan.Zero, playing: true);
+        player.Load(wav, TimeSpan.Zero, true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "first track playing");
 
-        player.Load(wav, TimeSpan.Zero, playing: true); // no intervening Stop
+        player.Load(wav, TimeSpan.Zero, true); // no intervening Stop
         await TestWait.Assert(() => devices.Count == 2, "a fresh device is built");
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "second track playing");
         Assert.Equal(PlaybackState.Stopped, devices[0].PlaybackState); // old device was stopped
@@ -317,23 +320,23 @@ public class FilePlayerTests : IDisposable
     {
         var wav = CreateWav();
         var player = new FilePlayer(() => new FakeWavePlayer());
-        player.Load(wav, TimeSpan.FromMilliseconds(500), playing: false);
+        player.Load(wav, TimeSpan.FromMilliseconds(500), false);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Paused, "paused load");
 
         player.Seek(TimeSpan.FromSeconds(-5));
         await TestWait.Assert(() => player.Snapshot.Position is { Current: var c } && c == TimeSpan.Zero,
-            "negative seek clamps to zero");
+                              "negative seek clamps to zero");
         await player.DisposeAsync();
     }
 
     [Fact]
     public async Task Volume_changes_mid_playback_shape_the_live_audio()
     {
-        var wav = CreateWav(amplitude: 16384); // ~0.5 full scale
+        var wav = CreateWav(16384); // ~0.5 full scale
         var device = new FakeWavePlayer();
         var player = new FilePlayer(() => device);
 
-        player.Load(wav, TimeSpan.Zero, playing: true);
+        player.Load(wav, TimeSpan.Zero, true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "playing");
 
         player.Volume(0.5f);
@@ -358,7 +361,7 @@ public class FilePlayerTests : IDisposable
         var events = 0;
         player.OnUpdated += (_, _) => Interlocked.Increment(ref events);
 
-        player.Load(wav, TimeSpan.Zero, playing: true);
+        player.Load(wav, TimeSpan.Zero, true);
         await TestWait.Assert(() => player.Snapshot.State == PlaybackState.Playing, "playing");
         await TestWait.Assert(() => Volatile.Read(ref events) == 1, "load update fires");
         var seen = events;

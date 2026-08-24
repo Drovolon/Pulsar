@@ -39,15 +39,11 @@ public class HostConnectionTests : IAsyncLifetime
         }
     }
 
-    private static HostSpec Spec(IReadOnlyDictionary<string, string>? env = null) => new(
-        ExePath: StubExePath,
-        PipeName: $"PulsarTest.{Guid.NewGuid():N}",
-        LogDirectory: Path.GetTempPath(),
-        LogTag: "stub",
-        Environment: env);
+    private static HostSpec Spec(IReadOnlyDictionary<string, string>? env = null) =>
+        new(StubExePath, $"PulsarTest.{Guid.NewGuid():N}", Path.GetTempPath(), "stub", Environment: env);
 
-    private HostConnection<IStubHost> Create(HostSpec spec)
-        => connection = new HostConnection<IStubHost>(spec, _ => { }, FastConnect, FastBackoff, FastCap);
+    private HostConnection<IStubHost> Create(HostSpec spec) =>
+        connection = new HostConnection<IStubHost>(spec, _ => { }, FastConnect, FastBackoff, FastCap);
 
     public Task InitializeAsync() => Task.CompletedTask;
 
@@ -55,15 +51,24 @@ public class HostConnectionTests : IAsyncLifetime
     {
         if (connection is not null) await connection.DisposeAsync();
         foreach (var pid in pids)
-        {
-            try { Process.GetProcessById(pid).Kill(); }
-            catch { /* already dead - the expected case */ }
-        }
+            try
+            {
+                Process.GetProcessById(pid).Kill();
+            }
+            catch
+            {
+                /* already dead - the expected case */
+            }
+
         foreach (var marker in markerFiles)
-        {
-            try { File.Delete(marker); }
-            catch { /* best-effort test artifact cleanup */ }
-        }
+            try
+            {
+                File.Delete(marker);
+            }
+            catch
+            {
+                /* best-effort test artifact cleanup */
+            }
     }
 
     private string CreateStartMarker()
@@ -77,9 +82,7 @@ public class HostConnectionTests : IAsyncLifetime
     {
         try
         {
-            return File.Exists(marker)
-                ? File.ReadAllLines(marker).Select(int.Parse).ToArray()
-                : [];
+            return File.Exists(marker) ? File.ReadAllLines(marker).Select(int.Parse).ToArray() : [];
         }
         catch (IOException)
         {
@@ -104,8 +107,7 @@ public class HostConnectionTests : IAsyncLifetime
         conn.Start();
 
         await WaitConnected(conn);
-        Assert.Equal("hello", await TestWait.Within(
-            conn.Proxy!.EchoAsync("hello", CancellationToken.None), "echo"));
+        Assert.Equal("hello", await TestWait.Within(conn.Proxy!.EchoAsync("hello", CancellationToken.None), "echo"));
         Assert.Equal(1, connected);
     }
 
@@ -122,8 +124,8 @@ public class HostConnectionTests : IAsyncLifetime
 
         await TestWait.Assert(() => disconnects == 1, "death observed exactly once");
         var pid2 = await WaitConnected(conn);
-        Assert.NotEqual(pid1, pid2);      // a FRESH process, not the corpse
-        Assert.Equal(1, disconnects);     // and no double-fire across the reconnect
+        Assert.NotEqual(pid1, pid2);  // a FRESH process, not the corpse
+        Assert.Equal(1, disconnects); // and no double-fire across the reconnect
     }
 
     [Fact]
@@ -144,9 +146,9 @@ public class HostConnectionTests : IAsyncLifetime
 
             var nextPid = await WaitConnected(conn);
             Assert.True(seenPids.Add(nextPid), $"cycle #{cycle} spawned a fresh PID");
-            Assert.Equal($"cycle-{cycle}", await TestWait.Within(
-                conn.Proxy!.EchoAsync($"cycle-{cycle}", CancellationToken.None),
-                $"echo after reconnect #{cycle}"));
+            Assert.Equal($"cycle-{cycle}",
+                         await TestWait.Within(conn.Proxy!.EchoAsync($"cycle-{cycle}", CancellationToken.None),
+                                               $"echo after reconnect #{cycle}"));
         }
 
         await TestWait.Assert(() => connected == 4, "all four connection events fired");
@@ -156,9 +158,8 @@ public class HostConnectionTests : IAsyncLifetime
     [Fact]
     public async Task A_missing_executable_stays_disconnected_and_disposes_cleanly()
     {
-        var conn = connection = new HostConnection<IStubHost>(
-            Spec() with { ExePath = "/nonexistent/stub-host" }, _ => { },
-            FastConnect, FastBackoff, FastCap);
+        var conn = connection = new HostConnection<IStubHost>(Spec() with { ExePath = "/nonexistent/stub-host" }, _ => { },
+                                                              FastConnect, FastBackoff, FastCap);
         conn.Start();
 
         await Task.Delay(200); // give the supervisor time to encounter the launch failure
@@ -171,21 +172,15 @@ public class HostConnectionTests : IAsyncLifetime
     public async Task A_host_that_exits_before_serving_is_restarted()
     {
         var marker = CreateStartMarker();
-        var conn = connection = new HostConnection<IStubHost>(
-            Spec(new Dictionary<string, string>
-            {
-                ["STUB_EXIT_BEFORE_SERVE"] = "1",
-                ["STUB_START_MARKER"] = marker,
-            }),
-            _ => { },
-            connectTimeout: TimeSpan.FromSeconds(5),
-            backoffUnit: FastBackoff,
-            maxBackoff: FastCap);
+        var conn = connection = new HostConnection<IStubHost>(Spec(new Dictionary<string, string>
+        {
+            ["STUB_EXIT_BEFORE_SERVE"] = "1",
+            ["STUB_START_MARKER"] = marker,
+        }), _ => { }, TimeSpan.FromSeconds(5), FastBackoff, FastCap);
         conn.Start();
 
         await TestWait.Assert(() => StartedPids(marker).Distinct().Count() >= 2,
-            "a fresh process is started promptly after the previous host exits",
-            timeout: TimeSpan.FromSeconds(1));
+                              "a fresh process is started promptly after the previous host exits", TimeSpan.FromSeconds(1));
         pids.AddRange(StartedPids(marker));
         Assert.Null(conn.Proxy);
         await conn.DisposeAsync().AsTask().WaitAsync(TestWait.Timeout);
@@ -219,8 +214,14 @@ public class HostConnectionTests : IAsyncLifetime
         Assert.Equal(0, disconnects); // cancellation suppresses OnDisconnected
         await TestWait.Assert(() =>
         {
-            try { return Process.GetProcessById(pid).HasExited; }
-            catch (ArgumentException) { return true; }
+            try
+            {
+                return Process.GetProcessById(pid).HasExited;
+            }
+            catch (ArgumentException)
+            {
+                return true;
+            }
         }, "dispose killed the stub process");
     }
 
@@ -232,7 +233,7 @@ public class HostConnectionTests : IAsyncLifetime
         conn.Start();
 
         await WaitConnected(conn); // RaiseSafely contains it; connection completes anyway
-        Assert.Equal("ok", await TestWait.Within(
-            conn.Proxy!.EchoAsync("ok", CancellationToken.None), "echo after rude subscriber"));
+        Assert.Equal(
+            "ok", await TestWait.Within(conn.Proxy!.EchoAsync("ok", CancellationToken.None), "echo after rude subscriber"));
     }
 }

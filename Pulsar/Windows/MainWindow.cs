@@ -25,13 +25,13 @@ public class MainWindow : Window, IDisposable
     private readonly ConfigTab configTab;
     private readonly DebugTab debugTab;
 
-    public MainWindow(Plugin plugin)
-        : base(GetWindowName(), ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+    public MainWindow(Plugin plugin) : base(GetWindowName(),
+                                            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(450, 400),
-            MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
+            MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
 
         this.plugin = plugin;
@@ -59,16 +59,12 @@ public class MainWindow : Window, IDisposable
     private static string GetTitlebarBuildVersion()
     {
         var assembly = Assembly.GetExecutingAssembly();
-        var informationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        if (!string.IsNullOrWhiteSpace(informationalVersion))
-        {
-            return FormatTitlebarBuildVersion(informationalVersion);
-        }
+        var informationalVersion =
+            assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informationalVersion)) return FormatTitlebarBuildVersion(informationalVersion);
 
         var version = assembly.GetName().Version;
-        return version is null
-            ? "unknown"
-            : $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
+        return version is null ? "unknown" : $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
     }
 
     private static string FormatTitlebarBuildVersion(string informationalVersion)
@@ -76,25 +72,21 @@ public class MainWindow : Window, IDisposable
         const string dirtySuffix = "-dirty";
 
         var isDirty = informationalVersion.EndsWith(dirtySuffix, StringComparison.Ordinal);
-        if (isDirty)
-        {
-            informationalVersion = informationalVersion[..^dirtySuffix.Length];
-        }
+        if (isDirty) informationalVersion = informationalVersion[..^dirtySuffix.Length];
 
         var metadataIndex = informationalVersion.IndexOf('+', StringComparison.Ordinal);
         if (metadataIndex < 0 || metadataIndex >= informationalVersion.Length - 1)
-        {
             return isDirty ? informationalVersion + "*" : informationalVersion;
-        }
 
         var version = informationalVersion[..metadataIndex];
         var sourceRevision = informationalVersion[(metadataIndex + 1)..];
         var hashIndex = sourceRevision.LastIndexOf("-g", StringComparison.Ordinal);
         var countIndex = hashIndex > 0 ? sourceRevision.LastIndexOf('-', hashIndex - 1) : -1;
-        var displayVersion = countIndex >= 0
-                             && int.TryParse(sourceRevision[(countIndex + 1)..hashIndex], NumberStyles.None, CultureInfo.InvariantCulture, out _)
-                                 ? $"{version}-{sourceRevision[(countIndex + 1)..]}"
-                                 : $"{version}+{sourceRevision}";
+        var displayVersion =
+            countIndex >= 0 &&
+            int.TryParse(sourceRevision[(countIndex + 1)..hashIndex], NumberStyles.None, CultureInfo.InvariantCulture, out _)
+                ? $"{version}-{sourceRevision[(countIndex + 1)..]}"
+                : $"{version}+{sourceRevision}";
 
         return isDirty ? displayVersion + "*" : displayVersion;
     }
@@ -128,13 +120,15 @@ public class MainWindow : Window, IDisposable
     {
         bool open;
         using (theme.IconTextFont.Push())
+        {
             open = ImGui.BeginTabItem(label);
+        }
+
         if (!open) return;
         try
         {
             draw();
-        }
-        finally
+        } finally
         {
             ImGui.EndTabItem();
         }

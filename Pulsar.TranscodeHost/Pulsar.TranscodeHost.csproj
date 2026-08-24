@@ -18,38 +18,38 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Blake3" Version="2.2.1" />
-        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
-        <PackageReference Include="NAudio" Version="3.0.0-preview.16" />
-        <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16" />
-        <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16" />
-        <PackageReference Include="NAudio.Wasapi" Version="3.0.0-preview.16" />
-        <PackageReference Include="Serilog" Version="4.3.1" />
-        <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
-        <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
-        <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
-        <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
+        <PackageReference Include="Blake3" Version="2.2.1"/>
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.5"/>
+        <PackageReference Include="NAudio" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.WinMM" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.SoundFile" Version="3.0.0-preview.16"/>
+        <PackageReference Include="NAudio.Wasapi" Version="3.0.0-preview.16"/>
+        <PackageReference Include="Serilog" Version="4.3.1"/>
+        <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0"/>
+        <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1"/>
+        <PackageReference Include="Serilog.Sinks.File" Version="7.0.0"/>
+        <PackageReference Include="StreamJsonRpc" Version="2.25.29"/>
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj" />
+        <ProjectReference Include="..\Pulsar.Common\Pulsar.Common.csproj"/>
     </ItemGroup>
 
     <ItemGroup>
-      <InternalsVisibleTo Include="Pulsar.Tests" />
+        <InternalsVisibleTo Include="Pulsar.Tests"/>
     </ItemGroup>
 
     <ItemGroup>
-      <None Include="..\native\win-x64\libsndfile.dll"
-            Link="libsndfile.dll"
-            TargetPath="libsndfile.dll"
-            CopyToOutputDirectory="PreserveNewest"
-            CopyToPublishDirectory="PreserveNewest" />
-      <None Include="..\native\win-x64\libebur128.dll"
-            Link="libebur128.dll"
-            TargetPath="libebur128.dll"
-            CopyToOutputDirectory="PreserveNewest"
-            CopyToPublishDirectory="PreserveNewest" />
+        <None Include="..\native\win-x64\libsndfile.dll"
+              Link="libsndfile.dll"
+              TargetPath="libsndfile.dll"
+              CopyToOutputDirectory="PreserveNewest"
+              CopyToPublishDirectory="PreserveNewest"/>
+        <None Include="..\native\win-x64\libebur128.dll"
+              Link="libebur128.dll"
+              TargetPath="libebur128.dll"
+              CopyToOutputDirectory="PreserveNewest"
+              CopyToPublishDirectory="PreserveNewest"/>
     </ItemGroup>
 
 </Project>

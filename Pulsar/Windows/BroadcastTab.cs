@@ -37,7 +37,9 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
     // search filter. note: doesn't affect playlist, just the results table in UI
     private string libFilter = "";
     private IReadOnlyList<LocalTrack>? lastTracks;
+
     private string lastLibFilter = "";
+
     // Name = catalog display name; Dir = folder relative to the catalog root ("" for root-level
     // files); Rel = the two joined, used for filtering and the hover tooltip.
     private readonly List<(int Index, string Name, string Dir, string Rel)> filteredTracks = [];
@@ -63,6 +65,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                     OnModeChanged();
                 }
             }
+
             ImGui.EndCombo();
         }
 
@@ -117,16 +120,13 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             { Phase: BroadcastPhase.OffAir } => "Not currently broadcasting",
             { Phase: BroadcastPhase.Failed, LiveProvider: { } live } =>
                 $"Couldn't prepare {ProviderLabel(status.DesiredProvider)}; still broadcasting from {ProviderLabel(live)}.",
-            { Phase: BroadcastPhase.Failed } =>
-                $"Couldn't prepare {ProviderLabel(status.DesiredProvider)}.",
+            { Phase: BroadcastPhase.Failed } => $"Couldn't prepare {ProviderLabel(status.DesiredProvider)}.",
             { Phase: BroadcastPhase.Retrying, LiveProvider: { } live } =>
                 $"Retrying {ProviderLabel(status.DesiredProvider)}; still broadcasting from {ProviderLabel(live)}.",
-            { Phase: BroadcastPhase.Retrying } =>
-                $"Retrying {ProviderLabel(status.DesiredProvider)}...",
+            { Phase: BroadcastPhase.Retrying } => $"Retrying {ProviderLabel(status.DesiredProvider)}...",
             { Phase: BroadcastPhase.Switching, LiveProvider: { } live } =>
                 $"Broadcasting from {ProviderLabel(live)}; switching to {ProviderLabel(status.DesiredProvider)}...",
-            { Phase: BroadcastPhase.Live, LiveProvider: { } live } =>
-                $"Broadcasting from {ProviderLabel(live)}.",
+            { Phase: BroadcastPhase.Live, LiveProvider: { } live } => $"Broadcasting from {ProviderLabel(live)}.",
             _ => $"Enabling {ProviderLabel(status.DesiredProvider)} playback...",
         };
         ImGui.TextDisabled(text);
@@ -138,8 +138,8 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         }
     }
 
-    private static string ProviderLabel(BroadcastProvider provider)
-        => provider == BroadcastProvider.Local ? "Pulsar queue" : "Beefweb";
+    private static string ProviderLabel(BroadcastProvider provider) =>
+        provider == BroadcastProvider.Local ? "Pulsar queue" : "Beefweb";
 
     private void DrawFolder()
     {
@@ -153,15 +153,13 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                 _ = plugin.Broadcast?.LoadFolder(dir);
             });
         }
+
         ImGui.SameLine();
         if (UiUtil.IconButton("folderrefresh", FontAwesomeIcon.Sync, "Refresh"))
-        {
-            if (plugin.Broadcast?.ActiveLocalSource is { } source) _ = source.Rescan();
-        }
+            if (plugin.Broadcast?.ActiveLocalSource is { } source)
+                _ = source.Rescan();
 
-        var savedFolder = plugin.Configuration.BroadcastFolders.Count > 0
-            ? plugin.Configuration.BroadcastFolders[0]
-            : null;
+        var savedFolder = plugin.Configuration.BroadcastFolders.Count > 0 ? plugin.Configuration.BroadcastFolders[0] : null;
         ImGui.SameLine();
         ImGui.TextDisabled(savedFolder ?? "(no folder)");
 
@@ -190,6 +188,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             if (plugin.Broadcast?.ActiveLocalSource is { ModDirectoryName: not null } source)
                 _ = source.Rescan();
         }
+
         ImGui.SameLine();
         ImGui.SetNextItemWidth(-1f);
         if (modCombo.Draw("##mod", preview, mods, current, out var picked))
@@ -238,9 +237,11 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                             _ = source!.SelectGroup(group.Id);
                             selected = group;
                         }
+
                         if (isSelected) ImGui.SetItemDefaultFocus();
                     }
                 }
+
                 ImGui.EndCombo();
             }
         }
@@ -260,8 +261,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
     private void ReloadBeefweb()
     {
         var c = plugin.Configuration;
-        _ = plugin.Broadcast?.LoadBeefweb(c.BeefwebPort, c.BeefwebUsername, c.BeefwebPassword,
-            c.BeefwebTransport);
+        _ = plugin.Broadcast?.LoadBeefweb(c.BeefwebPort, c.BeefwebUsername, c.BeefwebPassword, c.BeefwebTransport);
     }
 
     private void DrawBeefweb()
@@ -282,9 +282,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         UiUtil.IconColored(FontAwesomeIcon.Circle, col);
         ImGui.SameLine();
         if (connected)
-        {
             ImGui.TextUnformatted($"Connected to localhost:{c.BeefwebPort}");
-        }
         else
         {
             ImGui.TextUnformatted("Not detected.");
@@ -296,7 +294,11 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         ImGui.SetNextItemWidth(50f * ImGuiHelpers.GlobalScale);
         if (ImGui.InputInt("Port", ref port))
             c.BeefwebPort = Math.Clamp(port, 1, 65535);
-        if (ImGui.IsItemDeactivatedAfterEdit()) { c.Save(); ReloadBeefweb(); }
+        if (ImGui.IsItemDeactivatedAfterEdit())
+        {
+            c.Save();
+            ReloadBeefweb();
+        }
 
         if (ImGui.TreeNode("Advanced"))
         {
@@ -317,7 +319,13 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                 c.BeefwebTransport = sse ? BeefwebTransport.Sse : BeefwebTransport.Polling;
                 reload = true;
             }
-            if (reload) { c.Save(); ReloadBeefweb(); }
+
+            if (reload)
+            {
+                c.Save();
+                ReloadBeefweb();
+            }
+
             ImGui.TreePop();
         }
     }
@@ -342,9 +350,8 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             UiUtil.NowPlaying(theme, FontAwesomeIcon.ExclamationTriangle, $"Can't sync '{uns.Track}' ({reason})");
         }
         else
-        {
             DrawNowPlaying(snap);
-        }
+
         ImGuiHelpers.ScaledDummy(2f);
 
         var connected = plugin.Broadcast?.ActiveBeefweb?.Status.Connected ?? false;
@@ -352,12 +359,13 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         {
             var playing = snap is { IsPlaying: true };
             if (UiUtil.IconButton("bwplay", playing ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
-                    playing ? "Pause" : "Play"))
+                                  playing ? "Pause" : "Play"))
                 plugin.Broadcast?.ActiveBeefweb?.TogglePlay();
             ImGui.SameLine();
             if (UiUtil.IconButton("bwstop", FontAwesomeIcon.Stop, "Stop")) plugin.Broadcast?.ActiveBeefweb?.StopPlayback();
             ImGui.SameLine();
-            if (UiUtil.IconButton("bwprev", FontAwesomeIcon.Backward, "Previous")) plugin.Broadcast?.ActiveBeefweb?.Previous();
+            if (UiUtil.IconButton("bwprev", FontAwesomeIcon.Backward, "Previous"))
+                plugin.Broadcast?.ActiveBeefweb?.Previous();
             ImGui.SameLine();
             if (UiUtil.IconButton("bwnext", FontAwesomeIcon.Forward, "Next")) plugin.Broadcast?.ActiveBeefweb?.Next();
         }
@@ -371,8 +379,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             return;
         }
 
-        var label = !string.IsNullOrEmpty(snap.Meta.DisplayName) ? snap.Meta.DisplayName
-            : Path.GetFileName(snap.FilePath);
+        var label = !string.IsNullOrEmpty(snap.Meta.DisplayName) ? snap.Meta.DisplayName : Path.GetFileName(snap.FilePath);
         UiUtil.NowPlaying(theme, FontAwesomeIcon.Music, $"{(snap.IsPlaying ? "Playing" : "Paused")}: {label}");
 
         var total = TimeSpan.FromMilliseconds(snap.Meta.DurationMs);
@@ -381,7 +388,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             var elapsed = snap.Position + (snap.IsPlaying ? DateTimeOffset.UtcNow - snap.AsOf : TimeSpan.Zero);
             if (elapsed > total) elapsed = total;
             UiUtil.ProgressMeter(theme, (float)(elapsed / total), snap.IsPlaying,
-                $"{UiUtil.FormatTime(elapsed)} / {UiUtil.FormatTime(total)}");
+                                 $"{UiUtil.FormatTime(elapsed)} / {UiUtil.FormatTime(total)}");
         }
     }
 
@@ -417,53 +424,63 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         var queue = player.Queue;
         var upcoming = player.UpNext;
         var selectedIndex = selectedQueueId is { } selected
-            ? Enumerable.Range(0, queue.Count).FirstOrDefault(
-                i => queue[i].Id == selected, -1)
-            : -1;
+                                ? Enumerable.Range(0, queue.Count).FirstOrDefault(i => queue[i].Id == selected, -1)
+                                : -1;
         if (selectedIndex < 0) selectedQueueId = null;
 
         using (ImRaii.Disabled(selectedQueueId is null))
         {
             using (ImRaii.Disabled(selectedIndex <= 0))
-                if (UiUtil.IconButton("queueup", FontAwesomeIcon.ArrowUp, "Move up")
-                    && selectedQueueId is { } moveUp)
+            {
+                if (UiUtil.IconButton("queueup", FontAwesomeIcon.ArrowUp, "Move up") && selectedQueueId is { } moveUp)
                     player.Move(moveUp, -1);
+            }
+
             ImGui.SameLine();
             using (ImRaii.Disabled(selectedIndex < 0 || selectedIndex + 1 >= queue.Count))
-                if (UiUtil.IconButton("queuedown", FontAwesomeIcon.ArrowDown, "Move down")
-                    && selectedQueueId is { } moveDown)
+            {
+                if (UiUtil.IconButton("queuedown", FontAwesomeIcon.ArrowDown, "Move down") &&
+                    selectedQueueId is { } moveDown)
                     player.Move(moveDown, 1);
+            }
         }
+
         ImGui.SameLine();
         using (ImRaii.Disabled(selectedQueueId is null))
-            if (UiUtil.IconButton("queueremove", FontAwesomeIcon.Trash, "Remove from manual queue")
-                && selectedQueueId is { } remove)
+        {
+            if (UiUtil.IconButton("queueremove", FontAwesomeIcon.Trash, "Remove from manual queue") &&
+                selectedQueueId is { } remove)
             {
                 player.Remove(remove);
                 selectedQueueId = null;
             }
+        }
+
         ImGui.SameLine();
         using (ImRaii.Disabled(upcoming.Count(item => !item.IsQueued) < 2))
+        {
             if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Random, "Shuffle upcoming"))
                 player.ShuffleUpcoming();
+        }
+
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Shuffle source tracks (doesn't affect manual queue)");
         ImGui.SameLine();
         using (ImRaii.Disabled(queue.Count == 0))
+        {
             if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Ban, "Clear"))
             {
                 player.ClearQueue();
                 selectedQueueId = null;
             }
+        }
+
         if (ImGui.IsItemHovered()) ImGui.SetTooltip("Clear manual queue (source playback continues)");
 
-        var upNextHeight = (6f * ImGui.GetTextLineHeightWithSpacing())
-                           + (2f * ImGui.GetStyle().FramePadding.Y);
+        var upNextHeight = (6f * ImGui.GetTextLineHeightWithSpacing()) + (2f * ImGui.GetStyle().FramePadding.Y);
         using var queueChild = ImRaii.Child("upnext", new Vector2(0, upNextHeight), true);
         if (!queueChild.Success) return;
 
-        var current = player.State is PlaybackState.Playing or PlaybackState.Paused
-            ? player.CurrentTrack
-            : null;
+        var current = player.State is PlaybackState.Playing or PlaybackState.Paused ? player.CurrentTrack : null;
         if (current is not null)
         {
             var rowY = ImGui.GetCursorPosY();
@@ -496,15 +513,14 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                 if (ImGui.Selectable($"{label}  ##q{id.Value}", selectedQueueId == id))
                     selectedQueueId = id;
                 var queuedTagX = labelPos.X + ImGui.CalcTextSize($"{label}  ").X;
-                ImGui.GetWindowDrawList().AddText(
-                    new Vector2(queuedTagX, labelPos.Y),
-                    ImGui.GetColorU32(theme.QueueAccent),
-                    "[queued]");
+                ImGui.GetWindowDrawList()
+                     .AddText(new Vector2(queuedTagX, labelPos.Y), ImGui.GetColorU32(theme.QueueAccent), "[queued]");
                 if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
                 {
                     player.Play(id);
                     selectedQueueId = null;
                 }
+
                 if (ImGui.BeginPopupContextItem($"upnextctx{id.Value}"))
                 {
                     if (ImGui.MenuItem("Play now"))
@@ -512,11 +528,13 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                         player.Play(id);
                         selectedQueueId = null;
                     }
+
                     if (ImGui.MenuItem("Remove from queue"))
                     {
                         player.Remove(id);
                         selectedQueueId = null;
                     }
+
                     ImGui.EndPopup();
                 }
             }
@@ -537,12 +555,13 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
     {
         var playing = player.State == PlaybackState.Playing;
         if (UiUtil.IconButton("playpause", playing ? FontAwesomeIcon.Pause : FontAwesomeIcon.Play,
-                playing ? "Pause" : player.State == PlaybackState.Paused ? "Resume" : "Play"))
+                              playing ? "Pause" : player.State == PlaybackState.Paused ? "Resume" : "Play"))
         {
             if (playing) player.Pause();
             else if (player.State == PlaybackState.Paused) player.Resume();
             else player.Play();
         }
+
         ImGui.SameLine();
         if (UiUtil.IconButton("stop", FontAwesomeIcon.Stop, "Stop")) player.Stop();
         ImGui.SameLine();
@@ -562,8 +581,8 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         var committed = ImGui.IsItemDeactivatedAfterEdit();
         ImGui.SameLine();
         var muteToggled = UiUtil.IconButton("bcastmute",
-            broadcastMuted ? FontAwesomeIcon.VolumeMute : FontAwesomeIcon.VolumeUp,
-            broadcastMuted ? "Unmute" : "Mute");
+                                            broadcastMuted ? FontAwesomeIcon.VolumeMute : FontAwesomeIcon.VolumeUp,
+                                            broadcastMuted ? "Unmute" : "Mute");
 
         if (changed) player.Volume(broadcastMuted ? 0f : volume);
         if (committed)
@@ -571,6 +590,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             plugin.Configuration.MonitorVolume = volume;
             plugin.Configuration.Save();
         }
+
         if (muteToggled)
         {
             broadcastMuted = !broadcastMuted;
@@ -583,7 +603,9 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         var pos = player.Position;
         if (pos is null || pos.Total <= TimeSpan.Zero)
         {
-            seeking = false; pendingSeek = null; seekValue = 0f;
+            seeking = false;
+            pendingSeek = null;
+            seekValue = 0f;
             var empty = 0f;
             using var disabled = ImRaii.Disabled();
             UiUtil.Scrubber(theme, "##seek", ref empty, 1f, false, "0:00 / 0:00");
@@ -599,8 +621,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
 
         var shown = TimeSpan.FromSeconds(seeking ? seekValue : live);
         var trailing = $"{UiUtil.FormatTime(shown)} / {UiUtil.FormatTime(pos.Total)}";
-        var r = UiUtil.Scrubber(theme, "##seek", ref seekValue, total,
-            player.State == PlaybackState.Playing, trailing);
+        var r = UiUtil.Scrubber(theme, "##seek", ref seekValue, total, player.State == PlaybackState.Playing, trailing);
 
         if (r.Activated) seeking = true;
         if (r.Deactivated)
@@ -615,8 +636,8 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
     {
         var tracks = player.Library;
         var currentPath = player.State is PlaybackState.Playing or PlaybackState.Paused
-            ? player.CurrentTrack?.FilePath
-            : null;
+                              ? player.CurrentTrack?.FilePath
+                              : null;
 
         var tracksChanged = !ReferenceEquals(tracks, lastTracks);
         if (tracksChanged || libFilter != lastLibFilter)
@@ -626,15 +647,16 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                 lastScrolledIndex = -1;
                 selectedLibraryIndex = -1;
             }
+
             lastTracks = tracks;
             lastLibFilter = libFilter;
             filteredTracks.Clear();
             for (var i = 0; i < tracks.Count; i++)
             {
                 var rel = tracks[i].RelativePath;
-                if (libFilter.Length != 0
-                    && !rel.Contains(libFilter, StringComparison.OrdinalIgnoreCase)
-                    && !tracks[i].DisplayName.Contains(libFilter, StringComparison.OrdinalIgnoreCase))
+                if (libFilter.Length != 0 &&
+                    !rel.Contains(libFilter, StringComparison.OrdinalIgnoreCase) &&
+                    !tracks[i].DisplayName.Contains(libFilter, StringComparison.OrdinalIgnoreCase))
                     continue;
                 var slash = rel.LastIndexOf('/');
                 var name = tracks[i].DisplayName;
@@ -656,8 +678,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         }
 
         if (selectedLibraryIndex >= tracks.Count) selectedLibraryIndex = -1;
-        var setActiveWidth = ImGuiComponents.GetIconButtonWithTextWidth(
-            FontAwesomeIcon.Check, "Set as Active");
+        var setActiveWidth = ImGuiComponents.GetIconButtonWithTextWidth(FontAwesomeIcon.Check, "Set as Active");
         var setActiveX = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - setActiveWidth;
         using (ImRaii.Disabled(selectedLibraryIndex < 0))
         {
@@ -671,6 +692,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             if (ImGuiComponents.IconButtonWithText(FontAwesomeIcon.Play, "Play now") && selected is not null)
                 player.PlayNow(selected);
         }
+
         if (!player.View.Browser.SelectedGroupIsActive)
         {
             ImGui.SameLine();
@@ -683,14 +705,22 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
         }
 
         var currentIndex = currentPath is null
-            ? -1
-            : Enumerable.Range(0, tracks.Count).FirstOrDefault(
-                i => string.Equals(tracks[i].FilePath, currentPath, StringComparison.OrdinalIgnoreCase), -1);
+                               ? -1
+                               : Enumerable.Range(0, tracks.Count)
+                                           .FirstOrDefault(
+                                               i => string.Equals(tracks[i].FilePath, currentPath,
+                                                                  StringComparison.OrdinalIgnoreCase), -1);
         var scrollToCurrent = currentIndex != lastScrolledIndex;
         var currentDisplay = -1;
         if (scrollToCurrent && currentIndex >= 0)
+        {
             for (var d = 0; d < filteredTracks.Count; d++)
-                if (filteredTracks[d].Index == currentIndex) { currentDisplay = d; break; }
+                if (filteredTracks[d].Index == currentIndex)
+                {
+                    currentDisplay = d;
+                    break;
+                }
+        }
 
         using var hover = ImRaii.PushColor(ImGuiCol.HeaderHovered, theme.Accent with { W = 0.15f })
                                 .Push(ImGuiCol.HeaderActive, theme.Accent with { W = 0.25f });
@@ -707,6 +737,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             playingIconFont = ImGui.GetFont();
             playingIconFontSize = ImGui.GetFontSize();
         }
+
         float markerWidth;
         float queueAfterIcon;
         using (theme.IconTextFont.Push())
@@ -714,17 +745,14 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             markerWidth = ImGui.CalcTextSize(playingIcon).X;
             queueAfterIcon = ImGui.CalcTextSize($"{playingIcon} ").X;
             foreach (var positions in queueIndexes.Values)
-                markerWidth = MathF.Max(
-                    markerWidth,
-                    ImGui.CalcTextSize(QueuePositionsLabel(positions)).X);
+                markerWidth = MathF.Max(markerWidth, ImGui.CalcTextSize(QueuePositionsLabel(positions)).X);
             if (currentIndex >= 0)
             {
-                var currentQueued = QueuePositionsLabel(
-                    queueIndexes.GetValueOrDefault(tracks[currentIndex].FilePath));
+                var currentQueued = QueuePositionsLabel(queueIndexes.GetValueOrDefault(tracks[currentIndex].FilePath));
                 if (currentQueued.Length > 0)
-                    markerWidth = MathF.Max(
-                        markerWidth,
-                        ImGui.CalcTextSize($"{playingIcon} {currentQueued}").X);
+                {
+                    markerWidth = MathF.Max(markerWidth, ImGui.CalcTextSize($"{playingIcon} {currentQueued}").X);
+                }
             }
         }
 
@@ -743,29 +771,28 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                     ImGui.PushStyleColor(ImGuiCol.Header, theme.Accent with { W = 0.25f });
                     ImGui.PushStyleColor(ImGuiCol.Text, theme.Accent);
                 }
+
                 var rowX = ImGui.GetCursorPosX();
                 var markerX = ImGui.GetCursorScreenPos().X;
-                var queued = QueuePositionsLabel(
-                    queueIndexes.GetValueOrDefault(tracks[index].FilePath));
+                var queued = QueuePositionsLabel(queueIndexes.GetValueOrDefault(tracks[index].FilePath));
                 ImGui.SetCursorPosX(rowX + markerWidth + ImGui.GetStyle().ItemSpacing.X);
                 var textY = ImGui.GetCursorScreenPos().Y;
                 if (ImGui.Selectable($"{name}##t{index}", selectedLibraryIndex == index))
                     selectedLibraryIndex = index;
                 var drawList = ImGui.GetWindowDrawList();
                 if (isCurrent)
-                    drawList.AddText(
-                        playingIconFont,
-                        playingIconFontSize,
-                        new Vector2(markerX, textY),
-                        ImGui.GetColorU32(theme.Accent),
-                        playingIcon);
+                {
+                    drawList.AddText(playingIconFont, playingIconFontSize, new Vector2(markerX, textY),
+                                     ImGui.GetColorU32(theme.Accent), playingIcon);
+                }
+
                 if (queued.Length > 0)
-                    drawList.AddText(
-                        playingIconFont,
-                        playingIconFontSize,
-                        new Vector2(markerX + (isCurrent ? queueAfterIcon : 0f), textY),
-                        ImGui.GetColorU32(theme.QueueAccent),
-                        queued);
+                {
+                    drawList.AddText(playingIconFont, playingIconFontSize,
+                                     new Vector2(markerX + (isCurrent ? queueAfterIcon : 0f), textY),
+                                     ImGui.GetColorU32(theme.QueueAccent), queued);
+                }
+
                 if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
                     player.PlayNow(tracks[index]);
                 if (ImGui.BeginPopupContextItem($"trackctx{index}"))
@@ -775,6 +802,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                     if (ImGui.MenuItem("Play now")) player.PlayNow(tracks[index]);
                     ImGui.EndPopup();
                 }
+
                 if (isCurrent)
                     ImGui.PopStyleColor(2);
 
@@ -784,18 +812,18 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
                     ImGui.SameLine();
                     ImGui.TextDisabled(dir);
                 }
+
                 if (scrollToCurrent && d == currentDisplay)
                     ImGui.SetScrollHereY(0.5f);
             }
+
         clipper.End();
         clipper.Destroy();
         if (scrollToCurrent) lastScrolledIndex = currentIndex;
     }
 
-    internal static string QueuePositionsLabel(IReadOnlyList<int>? queuePositions)
-        => queuePositions is { Count: > 0 }
-            ? $"[{string.Join(",", queuePositions)}]"
-            : "";
+    internal static string QueuePositionsLabel(IReadOnlyList<int>? queuePositions) =>
+        queuePositions is { Count: > 0 } ? $"[{string.Join(",", queuePositions)}]" : "";
 
     private void DrawPlaybackIcon(FontAwesomeIcon icon, Vector4 color, float rowY)
     {

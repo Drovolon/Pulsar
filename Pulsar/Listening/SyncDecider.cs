@@ -69,9 +69,7 @@ internal static class SyncDecider
             return engine.Path is null ? new EngineAction.None() : new EngineAction.Stop();
 
         // If we're already on the same cursor epoch, there's nothing to do
-        if (current is not null &&
-            desired.CursorEpoch == current.CursorEpoch &&
-            desired.FilePath == current.FilePath)
+        if (current is not null && desired.CursorEpoch == current.CursorEpoch && desired.FilePath == current.FilePath)
             return new EngineAction.None();
 
         // If desired is to play, calculate the position the DJ is at based on their observedAt timestamp

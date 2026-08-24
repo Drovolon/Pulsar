@@ -11,8 +11,7 @@ namespace Pulsar.Concurrency;
 /// </summary>
 internal sealed class SerializedMailbox<T> : IAsyncDisposable
 {
-    private readonly Channel<T> channel = Channel.CreateUnbounded<T>(
-        new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<T> channel = Channel.CreateUnbounded<T>(new UnboundedChannelOptions { SingleReader = true });
     private readonly Func<T, ValueTask> handler;
     private readonly Action<Exception, T>? onError;
     private readonly Func<ValueTask>? onCompleted;
@@ -23,9 +22,7 @@ internal sealed class SerializedMailbox<T> : IAsyncDisposable
     private Task? disposeTask;
 
     internal SerializedMailbox(
-        Func<T, ValueTask> handler,
-        Action<Exception, T>? onError = null,
-        Func<ValueTask>? onCompleted = null)
+        Func<T, ValueTask> handler, Action<Exception, T>? onError = null, Func<ValueTask>? onCompleted = null)
     {
         this.handler = handler;
         this.onError = onError;
@@ -33,13 +30,11 @@ internal sealed class SerializedMailbox<T> : IAsyncDisposable
         loop = RunAsync();
     }
 
-    internal bool TryPost(T message)
-        => Volatile.Read(ref accepting) && channel.Writer.TryWrite(message);
+    internal bool TryPost(T message) => Volatile.Read(ref accepting) && channel.Writer.TryWrite(message);
 
     private async Task RunAsync()
     {
         await foreach (var message in channel.Reader.ReadAllAsync())
-        {
             try
             {
                 await handler(message);
@@ -49,7 +44,6 @@ internal sealed class SerializedMailbox<T> : IAsyncDisposable
                 if (onError is null) throw;
                 onError(e, message);
             }
-        }
 
         if (onCompleted is not null) await onCompleted();
     }
@@ -68,5 +62,4 @@ internal sealed class SerializedMailbox<T> : IAsyncDisposable
             return new ValueTask(disposeTask);
         }
     }
-
 }

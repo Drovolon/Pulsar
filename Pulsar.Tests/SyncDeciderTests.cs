@@ -100,9 +100,8 @@ public class SyncDeciderTests
     {
         var applied = Dj(epoch: 7);
 
-        Assert.IsType<EngineAction.Load>(SyncDecider.Decide(
-                                             applied, Dj(OtherSong, epoch: 7),
-                                             Engine(Song, 60, state: PlaybackState.Playing)));
+        Assert.IsType<EngineAction.Load>(SyncDecider.Decide(applied, Dj(OtherSong, epoch: 7),
+                                                            Engine(Song, 60, state: PlaybackState.Playing)));
     }
 
     // ---- track changes --------------------------------------------------------------

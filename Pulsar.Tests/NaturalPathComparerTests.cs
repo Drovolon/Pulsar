@@ -15,7 +15,7 @@ public class NaturalPathComparerTests
     [Fact]
     public void Numeric_runs_compare_as_numbers_not_text()
     {
-        Assert.True(Cmp("track2.mp3", "track10.mp3") < 0);   // ordinal would say 10 < 2
+        Assert.True(Cmp("track2.mp3", "track10.mp3") < 0); // ordinal would say 10 < 2
         Assert.True(Cmp("11_song.mp3", "113_song.mp3") < 0);
     }
 

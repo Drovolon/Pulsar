@@ -6,15 +6,14 @@ using Serilog;
 var hostArgs = HostArgs.Parse(args);
 MixerIdentity.Name = hostArgs.MixerName;
 
-Log.Logger = new LoggerConfiguration()
-             .MinimumLevel.Debug()
-             .WriteTo.File(
-                 path: Path.Combine(hostArgs.LogDirectory, $"{hostArgs.LogTag ?? "audio"}-.log"),
-                 rollingInterval: RollingInterval.Day,
-                 buffered: false,
-                 flushToDiskInterval: TimeSpan.FromSeconds(1),
-                 outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
-             .CreateLogger();
+Log.Logger = new LoggerConfiguration().MinimumLevel.Debug()
+                                      .WriteTo.File(
+                                          Path.Combine(hostArgs.LogDirectory, $"{hostArgs.LogTag ?? "audio"}-.log"),
+                                          rollingInterval: RollingInterval.Day, buffered: false,
+                                          flushToDiskInterval: TimeSpan.FromSeconds(1),
+                                          outputTemplate:
+                                          "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                                      .CreateLogger();
 
 try
 {
@@ -25,8 +24,10 @@ try
 
     // Self-terminate the host if the parent dies (game crashes, etc.)
     if (hostArgs.ParentProcessId is { } parentPid)
-        builder.Services.AddHostedService(sp =>
-            new ParentWatchdog(parentPid, sp.GetRequiredService<IHostApplicationLifetime>()));
+    {
+        builder.Services.AddHostedService(sp => new ParentWatchdog(
+                                              parentPid, sp.GetRequiredService<IHostApplicationLifetime>()));
+    }
 
     var host = builder.Build();
     host.Run();
@@ -34,8 +35,7 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "AudioHost crashed");
-}
-finally
+} finally
 {
     Log.CloseAndFlush();
 }

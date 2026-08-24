@@ -47,7 +47,16 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
     public Func<string, Task?>? StallPost { get; set; }
 
     /// <summary>POST paths received, in arrival order (e.g. "/api/player/stop").</summary>
-    public string[] Posts { get { lock (@lock) return [.. posts]; } }
+    public string[] Posts
+    {
+        get
+        {
+            lock (@lock)
+            {
+                return [.. posts];
+            }
+        }
+    }
 
     /// <summary>Total SSE subscriptions ever opened; grows by one per (re)connect.</summary>
     public int SseSessionsOpened => Volatile.Read(ref sessionsOpened);
@@ -56,11 +65,10 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
     public int RequestsReceived => Volatile.Read(ref requestsReceived);
 
     /// <summary>A real PlayerClient wired to this server.</summary>
-    public PlayerClient CreateClient()
-        => new(new HttpClient(this, disposeHandler: false), new Uri("http://fake-beefweb/"));
+    public PlayerClient CreateClient() => new(new HttpClient(this, false), new Uri("http://fake-beefweb/"));
 
-    public void SetPlaying(string trackPath, double positionSeconds = 5, double durationSeconds = 60,
-                           string artist = "", string title = "")
+    public void SetPlaying(
+        string trackPath, double positionSeconds = 5, double durationSeconds = 60, string artist = "", string title = "")
     {
         lock (@lock)
         {
@@ -75,7 +83,10 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
 
     public void SetPaused()
     {
-        lock (@lock) playbackState = "paused";
+        lock (@lock)
+        {
+            playbackState = "paused";
+        }
     }
 
     public void SetStopped()
@@ -91,14 +102,19 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
     public void SetOptions(params (string Id, string[] EnumNames, int Value)[] opts)
     {
         lock (@lock)
-            options = [.. Array.ConvertAll(opts, o => (object)new
-            {
-                id = o.Id,
-                name = o.Id,
-                type = "enum",
-                value = o.Value,
-                enumNames = o.EnumNames,
-            })];
+        {
+            options =
+            [
+                .. Array.ConvertAll(opts, o => (object)new
+                {
+                    id = o.Id,
+                    name = o.Id,
+                    type = "enum",
+                    value = o.Value,
+                    enumNames = o.EnumNames,
+                }),
+            ];
+        }
     }
 
     /// <summary>The active playlist: which item is playing and what paths sit at which indices.</summary>
@@ -127,7 +143,11 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
     {
         var frame = Frame();
         SsePushStream[] targets;
-        lock (@lock) targets = [.. sessions];
+        lock (@lock)
+        {
+            targets = [.. sessions];
+        }
+
         foreach (var s in targets) s.Push(frame);
     }
 
@@ -140,6 +160,7 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
             targets = [.. sessions];
             sessions.Clear();
         }
+
         foreach (var s in targets) s.Complete(error);
     }
 
@@ -151,7 +172,11 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
         var route = request.RequestUri!.AbsolutePath;
         if (request.Method == HttpMethod.Post)
         {
-            lock (@lock) posts.Add(route);
+            lock (@lock)
+            {
+                posts.Add(route);
+            }
+
             if (StallPost?.Invoke(route) is { } hang) await hang.WaitAsync(ct);
             return new HttpResponseMessage(HttpStatusCode.NoContent);
         }
@@ -161,8 +186,8 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
             "/api/player" => Json(new { player = PlayerJson() }),
             "/api/playqueue" => Json(new { playQueue = QueueJson() }),
             "/api/query/updates" => OpenSse(),
-            _ when route.StartsWith("/api/playlists/") && route.Contains("/items/")
-                => Json(new { playlistItems = PlaylistItemsJson(route) }),
+            _ when route.StartsWith("/api/playlists/") && route.Contains("/items/") => Json(
+                new { playlistItems = PlaylistItemsJson(route) }),
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         };
     }
@@ -170,6 +195,7 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
     private object PlayerJson()
     {
         lock (@lock)
+        {
             return new
             {
                 activeItem = new
@@ -185,18 +211,24 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
                 playbackState,
                 options,
             };
+        }
     }
 
     private object[] QueueJson()
     {
         lock (@lock)
-            return [.. playQueue.ConvertAll(p => (object)new
-            {
-                playlistId = playlistId ?? "q",
-                playlistIndex = 0,
-                itemIndex = 0,
-                columns = new[] { p },
-            })];
+        {
+            return
+            [
+                .. playQueue.ConvertAll(p => (object)new
+                {
+                    playlistId = playlistId ?? "q",
+                    playlistIndex = 0,
+                    itemIndex = 0,
+                    columns = new[] { p },
+                }),
+            ];
+        }
     }
 
     // Route shape: /api/playlists/{id}/items/{offset}:{count}
@@ -206,22 +238,25 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
         var offset = int.Parse(rangePart.Split(':')[0]);
         lock (@lock)
         {
-            var items = playlistItems.TryGetValue(offset, out var p)
-                ? new[] { new { columns = new[] { p } } }
-                : [];
+            var items = playlistItems.TryGetValue(offset, out var p) ? new[] { new { columns = new[] { p } } } : [];
             return new { offset, totalCount = playlistItems.Count, items };
         }
     }
 
-    private static HttpResponseMessage Json(object body) => new(HttpStatusCode.OK)
-    {
-        Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
-    };
+    private static HttpResponseMessage Json(object body) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json"),
+        };
 
     private HttpResponseMessage OpenSse()
     {
         var stream = new SsePushStream();
-        lock (@lock) sessions.Add(stream);
+        lock (@lock)
+        {
+            sessions.Add(stream);
+        }
+
         Interlocked.Increment(ref sessionsOpened);
         stream.Push(Frame()); // beefweb sends the current state upon subscribing
 
@@ -230,8 +265,8 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
     }
 
-    private byte[] Frame()
-        => Encoding.UTF8.GetBytes("data:" + JsonSerializer.Serialize(new { player = PlayerJson() }) + "\n\n");
+    private byte[] Frame() =>
+        Encoding.UTF8.GetBytes("data:" + JsonSerializer.Serialize(new { player = PlayerJson() }) + "\n\n");
 
     /// <summary>
     /// Readable stream fed by Push(); read blocks until data arrives. Complete() ends it
@@ -252,27 +287,30 @@ public sealed class FakeBeefwebServer : HttpMessageHandler
                 if (!await chunks.Reader.WaitToReadAsync(ct)) return 0;
                 if (chunks.Reader.TryRead(out var next)) current = next;
             }
+
             var n = Math.Min(buffer.Length, current.Length);
             current.Span[..n].CopyTo(buffer.Span);
             current = current[n..];
             return n;
         }
 
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
-            => ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
 
-        public override int Read(byte[] buffer, int offset, int count)
-            => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
         public override long Length => throw new NotSupportedException();
+
         public override long Position
         {
             get => throw new NotSupportedException();
             set => throw new NotSupportedException();
         }
+
         public override void Flush() { }
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();

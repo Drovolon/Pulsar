@@ -14,15 +14,11 @@ internal static class RemotePrepare
 {
     extension(IPrepareService prep)
     {
-        public Task<PreparedTrack> PrepareFileAsync(
-            string path,
-            string transcodeOutPath, CancellationToken ct)
-            =>
-                prep.PrepareFileAsync(path, transcodeOutPath, ScdReader.ExtractAudio, ct);
+        public Task<PreparedTrack> PrepareFileAsync(string path, string transcodeOutPath, CancellationToken ct) =>
+            prep.PrepareFileAsync(path, transcodeOutPath, ScdReader.ExtractAudio, ct);
 
         internal Task<PreparedTrack> PrepareFileAsync(
-            string path,
-            string transcodeOutPath, Func<string, byte[]> extractAudio, CancellationToken ct)
+            string path, string transcodeOutPath, Func<string, byte[]> extractAudio, CancellationToken ct)
         {
             if (ScdReader.IsScd(path))
             {

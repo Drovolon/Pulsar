@@ -7,7 +7,8 @@ using Serilog;
 
 namespace Pulsar.AudioHost.Playback;
 
-internal sealed class ProgressProvider(IWaveProvider source, WaveStream clock, Action<PlaybackPosition> report) : IWaveProvider
+internal sealed class ProgressProvider(IWaveProvider source, WaveStream clock, Action<PlaybackPosition> report)
+    : IWaveProvider
 {
     public WaveFormat WaveFormat => source.WaveFormat;
 
@@ -30,6 +31,7 @@ public sealed class FilePlayer
 {
     private readonly Channel<PlaybackCommand> mailbox =
         Channel.CreateUnbounded<PlaybackCommand>(new UnboundedChannelOptions { SingleReader = true });
+
     private readonly Task loop;
     private readonly Func<IWavePlayer> deviceFactory;
 
@@ -45,20 +47,19 @@ public sealed class FilePlayer
 
     private static IWavePlayer DefaultDevice() => new WasapiPlayerBuilder().WithMmcssThreadPriority().Build();
 
-    public void Load(string path, TimeSpan position, bool playing, long playbackId = 0)
-        => mailbox.Writer.TryWrite(new LoadCommand(path, position, playing, playbackId));
-    public void LoadBytes(
-        string displayPath, byte[] audioData, TimeSpan position, bool playing, long playbackId = 0)
-        => mailbox.Writer.TryWrite(new LoadBytesCommand(
-            displayPath, audioData, position, playing, playbackId));
+    public void Load(string path, TimeSpan position, bool playing, long playbackId = 0) =>
+        mailbox.Writer.TryWrite(new LoadCommand(path, position, playing, playbackId));
+
+    public void LoadBytes(string displayPath, byte[] audioData, TimeSpan position, bool playing, long playbackId = 0) =>
+        mailbox.Writer.TryWrite(new LoadBytesCommand(displayPath, audioData, position, playing, playbackId));
+
     public void Stop() => mailbox.Writer.TryWrite(new StopCommand());
     public void Pause() => mailbox.Writer.TryWrite(new PauseCommand());
     public void Resume() => mailbox.Writer.TryWrite(new ResumeCommand());
     public void Volume(float volume) => mailbox.Writer.TryWrite(new VolumeCommand(volume));
     public void Seek(TimeSpan position) => mailbox.Writer.TryWrite(new SeekCommand(position));
 
-    private EngineSnapshot published = new(
-        PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow);
+    private EngineSnapshot published = new(PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow);
     private long nextSequence;
 
     /// <summary>The last state published by the player.</summary>
@@ -80,10 +81,7 @@ public sealed class FilePlayer
 
     private static PlaybackPosition ApplySeek(WaveStream reader, TimeSpan to)
     {
-        reader.CurrentTime =
-            to < TimeSpan.Zero ? TimeSpan.Zero
-            : to > reader.TotalTime ? reader.TotalTime
-            : to;
+        reader.CurrentTime = to < TimeSpan.Zero ? TimeSpan.Zero : to > reader.TotalTime ? reader.TotalTime : to;
         return new PlaybackPosition(reader.CurrentTime, reader.TotalTime);
     }
 
@@ -96,9 +94,7 @@ public sealed class FilePlayer
             {
                 Sequence = Interlocked.Increment(ref nextSequence),
             };
-            if (ReferenceEquals(
-                    Interlocked.CompareExchange(ref published, next, current),
-                    current))
+            if (ReferenceEquals(Interlocked.CompareExchange(ref published, next, current), current))
                 return next;
         }
     }
@@ -108,8 +104,7 @@ public sealed class FilePlayer
         while (true)
         {
             var current = Snapshot;
-            if (current.PlaybackId != playbackId
-                || current.State == PlaybackState.Stopped)
+            if (current.PlaybackId != playbackId || current.State == PlaybackState.Stopped)
                 return;
             var next = current with
             {
@@ -117,9 +112,7 @@ public sealed class FilePlayer
                 ObservedAt = DateTimeOffset.UtcNow,
                 Sequence = Interlocked.Increment(ref nextSequence),
             };
-            if (ReferenceEquals(
-                    Interlocked.CompareExchange(ref published, next, current),
-                    current))
+            if (ReferenceEquals(Interlocked.CompareExchange(ref published, next, current), current))
                 return;
         }
     }
@@ -140,8 +133,7 @@ public sealed class FilePlayer
         catch (Exception e)
         {
             ReportError(e, "Playback error");
-        }
-        finally
+        } finally
         {
             device?.Dispose();
             reader?.Dispose();
@@ -165,8 +157,7 @@ public sealed class FilePlayer
             // which breaks this loop - it's not truly infinite.
             while (true)
             {
-                if (trackEnded is not null
-                    && await Task.WhenAny(next, trackEnded.Task) == trackEnded.Task)
+                if (trackEnded is not null && await Task.WhenAny(next, trackEnded.Task) == trackEnded.Task)
                 {
                     var reason = trackEnded.Task.IsFaulted ? EndReason.Failed : EndReason.Finished;
                     var endedPlaybackId = Snapshot.PlaybackId;
@@ -186,83 +177,85 @@ public sealed class FilePlayer
                 }
 
                 PlaybackCommand cmd;
-                try { cmd = await next; }
-                catch (ChannelClosedException) { break; }
+                try
+                {
+                    cmd = await next;
+                }
+                catch (ChannelClosedException)
+                {
+                    break;
+                }
+
                 next = mailbox.Reader.ReadAsync().AsTask();
 
                 if (cmd is not VolumeCommand) // these are way too chatty
-                    Log.Debug("cmd={cmd}  trackEnded={ended}", cmd, trackEnded is null ? "null" : trackEnded.Task.Status.ToString());
+                    Log.Debug("cmd={cmd}  trackEnded={ended}", cmd,
+                              trackEnded is null ? "null" : trackEnded.Task.Status.ToString());
 
                 try
                 {
                     switch (cmd)
                     {
                         case LoadCommand or LoadBytesCommand:
+                        {
+                            await UnloadAndReset();
+
+                            var (path, startAt, playing, playbackId) = cmd switch
                             {
-                                await UnloadAndReset();
+                                LoadCommand l => (l.Path, l.Position, l.Playing, l.PlaybackId),
+                                LoadBytesCommand b => (b.DisplayPath, b.Position, b.Playing, b.PlaybackId),
+                                _ => throw new InvalidOperationException(),
+                            };
 
-                                var (path, startAt, playing, playbackId) = cmd switch
+                            try
+                            {
+                                reader = cmd is LoadBytesCommand bytes
+                                             ? AudioReaderFactory.OpenBytes(bytes.AudioData)
+                                             : AudioReaderFactory.Open(path);
+                                var initialPosition = ApplySeek(reader, startAt);
+
+                                // audio data path is:
+                                // decoder -> Volume -> progress provider -> device
+                                volumeProvider = new VolumeSampleProvider(reader.ToSampleProvider()) { Volume = volume };
+                                trackEnded = BuildDevice(out device);
+                                device!.Init(new ProgressProvider(volumeProvider.ToWaveProvider(), reader,
+                                                                  position => ReportPosition(playbackId, position)));
+                                MixerIdentity.TryApply();
+
+                                PlaybackState committedState;
+                                if (playing)
                                 {
-                                    LoadCommand l => (l.Path, l.Position, l.Playing, l.PlaybackId),
-                                    LoadBytesCommand b => (b.DisplayPath, b.Position, b.Playing, b.PlaybackId),
-                                    _ => throw new InvalidOperationException(),
-                                };
-
-                                try
-                                {
-                                    reader = cmd is LoadBytesCommand bytes
-                                        ? AudioReaderFactory.OpenBytes(bytes.AudioData)
-                                        : AudioReaderFactory.Open(path);
-                                    var initialPosition = ApplySeek(reader, startAt);
-
-                                    // audio data path is:
-                                    // decoder -> Volume -> progress provider -> device
-                                    volumeProvider = new VolumeSampleProvider(reader.ToSampleProvider()) { Volume = volume };
-                                    trackEnded = BuildDevice(out device);
-                                    device!.Init(new ProgressProvider(
-                                        volumeProvider.ToWaveProvider(), reader,
-                                        position => ReportPosition(playbackId, position)));
-                                    MixerIdentity.TryApply();
-
-                                    PlaybackState committedState;
-                                    if (playing)
-                                    {
-                                        device.Play();
-                                        deviceStarted = true;
-                                        committedState = PlaybackState.Playing;
-                                    }
-                                    else
-                                    {
-                                        committedState = PlaybackState.Paused;
-                                    }
-                                    var updated = Update(current => new EngineSnapshot(
-                                        committedState,
-                                        path,
-                                        current.LastError,
-                                        initialPosition,
-                                        DateTimeOffset.UtcNow,
-                                        playbackId));
-                                    RaiseUpdated(updated);
+                                    device.Play();
+                                    deviceStarted = true;
+                                    committedState = PlaybackState.Playing;
                                 }
-                                catch (Exception e)
-                                {
-                                    ReportError(e, "Load failed");
-                                    device?.Dispose(); device = null;
-                                    reader?.Dispose(); reader = null;
-                                    trackEnded = null; volumeProvider = null; deviceStarted = false;
-                                    var terminal = Update(current => new EngineSnapshot(
-                                        PlaybackState.Stopped,
-                                        null,
-                                        current.LastError,
-                                        null,
-                                        DateTimeOffset.UtcNow,
-                                        playbackId,
-                                        TerminalReason: EndReason.Failed));
-                                    RaiseUpdated(terminal);
-                                }
+                                else
+                                    committedState = PlaybackState.Paused;
 
-                                break;
+                                var updated = Update(current => new EngineSnapshot(
+                                                         committedState, path, current.LastError, initialPosition,
+                                                         DateTimeOffset.UtcNow, playbackId));
+                                RaiseUpdated(updated);
                             }
+                            catch (Exception e)
+                            {
+                                ReportError(e, "Load failed");
+                                device?.Dispose();
+                                device = null;
+                                reader?.Dispose();
+                                reader = null;
+                                trackEnded = null;
+                                volumeProvider = null;
+                                deviceStarted = false;
+                                var terminal = Update(current => new EngineSnapshot(
+                                                          PlaybackState.Stopped, null, current.LastError, null,
+                                                          DateTimeOffset.UtcNow, playbackId,
+                                                          TerminalReason: EndReason.Failed));
+                                RaiseUpdated(terminal);
+                            }
+
+                            break;
+                        }
 
                         case ResumeCommand:
                             if (Snapshot.State == PlaybackState.Paused)
@@ -276,6 +269,7 @@ public sealed class FilePlayer
                                 });
                                 RaiseUpdated(committed);
                             }
+
                             break;
 
                         case PauseCommand:
@@ -289,6 +283,7 @@ public sealed class FilePlayer
                                 });
                                 RaiseUpdated(committed);
                             }
+
                             break;
 
                         case StopCommand:
@@ -321,6 +316,7 @@ public sealed class FilePlayer
                                 });
                                 RaiseUpdated(committed);
                             }
+
                             break;
                     }
                 }
@@ -333,8 +329,7 @@ public sealed class FilePlayer
         catch (Exception e)
         {
             ReportError(e, "Music player crashed because of actor loop error");
-        }
-        finally
+        } finally
         {
             await UnloadAndReset();
         }
@@ -344,7 +339,11 @@ public sealed class FilePlayer
         async Task UnloadAndReset()
         {
             await Unload(device, reader, trackEnded, deviceStarted);
-            device = null; reader = null; trackEnded = null; volumeProvider = null; deviceStarted = false;
+            device = null;
+            reader = null;
+            trackEnded = null;
+            volumeProvider = null;
+            deviceStarted = false;
         }
     }
 

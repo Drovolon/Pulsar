@@ -11,9 +11,7 @@ using Pulsar.Playback;
 
 namespace Pulsar.Broadcast.Local;
 
-public sealed record LocalBrowserView(
-    TrackCatalog Catalog,
-    TrackGroup SelectedGroup)
+public sealed record LocalBrowserView(TrackCatalog Catalog, TrackGroup SelectedGroup)
 {
     public bool SelectedGroupIsActive { get; init; }
 }
@@ -37,34 +35,56 @@ public sealed record LocalSourceView(LocalBrowserView Browser, LocalQueueView Qu
 public sealed class LocalSource : IMusicSource
 {
     private abstract record Message(TaskCompletionSource? Completion = null);
+
     private sealed record GroupSelected(string? Id, TaskCompletionSource Done) : Message(Done);
-    private sealed record CatalogReplaced(
-        long Request, TrackCatalog Catalog, TaskCompletionSource Done) : Message(Done);
+
+    private sealed record CatalogReplaced(long Request, TrackCatalog Catalog, TaskCompletionSource Done) : Message(Done);
+
     private sealed record BrowserReplaced(
         ITrackCatalogLoader Loader,
         TrackCatalog Catalog,
         string? ModDirectoryName,
         string? SelectedGroupId,
         TaskCompletionSource Done) : Message(Done);
+
     private sealed record PlayNowRequested(LocalTrack Track, TrackGroup Source) : Message;
+
     private sealed record ActiveSourceSet : Message;
+
     private sealed record ActiveSourceTrackPlayed(LocalTrack Track) : Message;
+
     private sealed record QueueEntryPlayed(QueueEntryId Id) : Message;
+
     private sealed record AddNextRequested(LocalTrack Track) : Message;
+
     private sealed record AddToEndRequested(LocalTrack Track) : Message;
+
     private sealed record RemoveRequested(QueueEntryId Id) : Message;
+
     private sealed record MoveRequested(QueueEntryId Id, int Offset) : Message;
+
     private sealed record ClearQueueRequested : Message;
+
     private sealed record ShuffleUpcomingRequested : Message;
+
     private sealed record PlayRequested : Message;
+
     private sealed record StopRequested : Message;
+
     private sealed record NextRequested : Message;
+
     private sealed record PreviousRequested : Message;
+
     private sealed record PauseRequested : Message;
+
     private sealed record ResumeRequested : Message;
+
     private sealed record SessionObserved(EngineObservation Value) : Message;
+
     private sealed record SessionEnded(EngineSessionEnded Value) : Message;
+
     private sealed record SessionReconnected : Message;
+
     private sealed record Barrier(TaskCompletionSource Done) : Message(Done);
 
     private ITrackCatalogLoader loader;
@@ -84,12 +104,8 @@ public sealed class LocalSource : IMusicSource
     private volatile SourceFrame? publishedFrame;
 
     private LocalSource(
-        EngineSession engine,
-        ITrackCatalogLoader loader,
-        TrackCatalog initialCatalog,
-        string? modDirectoryName,
-        string selectedGroupId,
-        TimeSpan disposeTimeout)
+        EngineSession engine, ITrackCatalogLoader loader, TrackCatalog initialCatalog, string? modDirectoryName,
+        string selectedGroupId, TimeSpan disposeTimeout)
     {
         this.engine = engine;
         this.loader = loader;
@@ -107,31 +123,19 @@ public sealed class LocalSource : IMusicSource
     }
 
     internal static Task<LocalSource> Create(
-        EngineSession engine,
-        ITrackCatalogLoader loader,
-        TrackCatalog initialCatalog,
-        string? modDirectoryName = null,
-        string? selectedGroupId = null,
-        TimeSpan? disposeTimeout = null)
+        EngineSession engine, ITrackCatalogLoader loader, TrackCatalog initialCatalog, string? modDirectoryName = null,
+        string? selectedGroupId = null, TimeSpan? disposeTimeout = null)
     {
         var selected = initialCatalog.FindGroup(selectedGroupId);
-        return Task.FromResult(new LocalSource(
-            engine,
-            loader,
-            initialCatalog,
-            modDirectoryName,
-            selected.Id,
-            disposeTimeout ?? TimeSpan.FromSeconds(2)));
+        return Task.FromResult(new LocalSource(engine, loader, initialCatalog, modDirectoryName, selected.Id,
+                                               disposeTimeout ?? TimeSpan.FromSeconds(2)));
     }
 
     internal static LocalSource CreateEmpty(EngineSession engine)
     {
         var loader = new EmptyCatalogLoader();
-        var catalog = new TrackCatalog(
-            [new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [])]);
-        return new LocalSource(
-            engine, loader, catalog, null, TrackCatalog.AllFilesId,
-            TimeSpan.FromSeconds(2));
+        var catalog = new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [])]);
+        return new LocalSource(engine, loader, catalog, null, TrackCatalog.AllFilesId, TimeSpan.FromSeconds(2));
     }
 
     public LocalSourceView View => published;
@@ -156,10 +160,10 @@ public sealed class LocalSource : IMusicSource
         var source = View.Browser.SelectedGroup;
         mailbox.TryPost(new PlayNowRequested(track, source));
     }
+
     public void SetActiveSource() => mailbox.TryPost(new ActiveSourceSet());
     public void Play(QueueEntryId id) => mailbox.TryPost(new QueueEntryPlayed(id));
-    public void PlayFromActiveSource(LocalTrack track)
-        => mailbox.TryPost(new ActiveSourceTrackPlayed(track));
+    public void PlayFromActiveSource(LocalTrack track) => mailbox.TryPost(new ActiveSourceTrackPlayed(track));
     public void AddNext(LocalTrack track) => mailbox.TryPost(new AddNextRequested(track));
     public void AddToEnd(LocalTrack track) => mailbox.TryPost(new AddToEndRequested(track));
     public void Remove(QueueEntryId id) => mailbox.TryPost(new RemoveRequested(id));
@@ -175,16 +179,13 @@ public sealed class LocalSource : IMusicSource
     public void Volume(float value) => engine.SetVolume(value);
     public void Seek(TimeSpan value) => engine.Seek(value);
 
-    public Task SelectGroup(string? groupId)
-        => PostWithCompletion(done => new GroupSelected(groupId, done));
+    public Task SelectGroup(string? groupId) => PostWithCompletion(done => new GroupSelected(groupId, done));
 
     internal Task ReplaceBrowserAsync(
-        ITrackCatalogLoader replacementLoader,
-        TrackCatalog replacementCatalog,
-        string? modDirectoryName,
-        string? selectedGroupId)
-        => PostWithCompletion(done => new BrowserReplaced(
-            replacementLoader, replacementCatalog, modDirectoryName, selectedGroupId, done));
+        ITrackCatalogLoader replacementLoader, TrackCatalog replacementCatalog, string? modDirectoryName,
+        string? selectedGroupId) =>
+        PostWithCompletion(done => new BrowserReplaced(replacementLoader, replacementCatalog, modDirectoryName,
+                                                       selectedGroupId, done));
 
     public Task Rescan()
     {
@@ -223,8 +224,7 @@ public sealed class LocalSource : IMusicSource
         }
     }
 
-    private static TaskCompletionSource NewCompletion()
-        => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource NewCompletion() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private ValueTask HandleMessage(Message message)
     {
@@ -235,20 +235,20 @@ public sealed class LocalSource : IMusicSource
         switch (message)
         {
             case GroupSelected(var groupId, _):
-                {
-                    var group = catalog.FindGroup(groupId);
-                    if (group.Id == selectedId) break;
-                    selectedId = group.Id;
-                    break;
-                }
+            {
+                var group = catalog.FindGroup(groupId);
+                if (group.Id == selectedId) break;
+                selectedId = group.Id;
+                break;
+            }
             case CatalogReplaced(var request, var replacement, _):
                 if (request != Volatile.Read(ref latestCatalogRequest)) break;
                 catalog = replacement;
                 var selected = catalog.FindGroup(selectedId);
                 selectedId = selected.Id;
                 break;
-            case BrowserReplaced(var replacementLoader, var replacementCatalog,
-                                 var modDirectoryName, var selectedGroupId, _):
+            case BrowserReplaced(var replacementLoader, var replacementCatalog, var modDirectoryName, var selectedGroupId, _)
+                :
                 loader = replacementLoader;
                 catalog = replacementCatalog;
                 selectedId = catalog.FindGroup(selectedGroupId).Id;
@@ -302,14 +302,15 @@ public sealed class LocalSource : IMusicSource
                 {
                     var group = catalog.FindGroup(selectedId);
                     targetChanged = group.Tracks.Count > 0
-                        ? playlist.PlaySource(group.Tracks, group.Tracks[0])
-                        : playlist.Play();
+                                        ? playlist.PlaySource(group.Tracks, group.Tracks[0])
+                                        : playlist.Play();
                     if (group.Tracks.Count > 0)
                         activeGroupSnapshot = group;
                     queueChanged = targetChanged;
                 }
                 else
                     targetChanged = playlist.Play();
+
                 break;
             case StopRequested:
                 targetChanged = playlist.Stop();
@@ -350,21 +351,17 @@ public sealed class LocalSource : IMusicSource
         var frameChanged = false;
         if (observationAccepted)
         {
-            var snapshot = SnapshotFrom(published, message is SessionObserved(var value)
-                ? value.Snapshot.ObservedAt
-                : DateTimeOffset.UtcNow);
-            var cursor = playbackChanged || publishedFrame is null
-                ? new SourceCursor()
-                : publishedFrame.Cursor;
+            var snapshot =
+                SnapshotFrom(
+                    published, message is SessionObserved(var value) ? value.Snapshot.ObservedAt : DateTimeOffset.UtcNow);
+            var cursor = playbackChanged || publishedFrame is null ? new SourceCursor() : publishedFrame.Cursor;
             publishedFrame = snapshot is null ? null : new SourceFrame(cursor, snapshot);
             frameChanged = playbackChanged;
         }
         else if (playbackChanged)
         {
             var snapshot = SnapshotFrom(published, publishedFrame?.Snapshot.AsOf ?? DateTimeOffset.UtcNow);
-            publishedFrame = snapshot is null
-                ? null
-                : new SourceFrame(new SourceCursor(), snapshot);
+            publishedFrame = snapshot is null ? null : new SourceFrame(new SourceCursor(), snapshot);
             frameChanged = true;
         }
 
@@ -379,6 +376,7 @@ public sealed class LocalSource : IMusicSource
                 frameChanged = true;
             }
         }
+
         try
         {
             if (playbackChanged)
@@ -386,13 +384,14 @@ public sealed class LocalSource : IMusicSource
                 OnPlaybackChanged?.Invoke(published);
                 OnSnapshotChanged?.Invoke(Current);
             }
+
             if (queueChanged) OnQueueChanged?.Invoke();
             if (frameChanged) OnChanged?.Invoke();
-        }
-        finally
+        } finally
         {
             message.Completion?.TrySetResult();
         }
+
         return ValueTask.CompletedTask;
     }
 
@@ -400,18 +399,10 @@ public sealed class LocalSource : IMusicSource
     {
         var view = playlist.View;
         var selectedGroup = catalog.FindGroup(selectedId);
-        return new LocalSourceView(
-            new LocalBrowserView(catalog, selectedGroup)
-            {
-                SelectedGroupIsActive = ReferenceEquals(selectedGroup, activeGroupSnapshot),
-            },
-            new LocalQueueView(
-                view.Queue,
-                view.Upcoming,
-                view.Position,
-                view.State,
-                view.CurrentTrack,
-                view.NextTrack));
+        return new LocalSourceView(new LocalBrowserView(catalog, selectedGroup)
+        {
+            SelectedGroupIsActive = ReferenceEquals(selectedGroup, activeGroupSnapshot),
+        }, new LocalQueueView(view.Queue, view.Upcoming, view.Position, view.State, view.CurrentTrack, view.NextTrack));
     }
 
     public SourceSnapshot? Current => publishedFrame?.Snapshot;
@@ -420,35 +411,28 @@ public sealed class LocalSource : IMusicSource
     private SourceSnapshot? SnapshotFrom(LocalSourceView view, DateTimeOffset observedAt)
     {
         if (view.Queue.State == PlaybackState.Stopped || view.Queue.CurrentTrack is null) return null;
-        return new SourceSnapshot(
-            view.Queue.CurrentTrack.FilePath,
-            ProjectNext(view.Queue.CurrentTrack.FilePath, view),
-            view.Queue.State == PlaybackState.Playing,
-            view.Queue.Position?.Current ?? TimeSpan.Zero,
-            observedAt,
-            new TrackMeta
-            {
-                DisplayName = view.Queue.CurrentTrack.DisplayName,
-                OriginalFileName = Path.GetFileName(view.Queue.CurrentTrack.FilePath),
-                DurationMs = (long)(view.Queue.Position?.Total.TotalMilliseconds ?? 0),
-            });
+        return new SourceSnapshot(view.Queue.CurrentTrack.FilePath, ProjectNext(view.Queue.CurrentTrack.FilePath, view),
+                                  view.Queue.State == PlaybackState.Playing, view.Queue.Position?.Current ?? TimeSpan.Zero,
+                                  observedAt, new TrackMeta
+                                  {
+                                      DisplayName = view.Queue.CurrentTrack.DisplayName,
+                                      OriginalFileName = Path.GetFileName(view.Queue.CurrentTrack.FilePath),
+                                      DurationMs = (long)(view.Queue.Position?.Total.TotalMilliseconds ?? 0),
+                                  });
     }
 
     private string? ProjectNext(string currentPath, LocalSourceView view)
     {
         var target = playlist.Target?.Path;
-        if (target is not null
-            && (!playlist.TargetIsConfirmed
-                || !string.Equals(target, currentPath, StringComparison.OrdinalIgnoreCase)))
+        if (target is not null &&
+            (!playlist.TargetIsConfirmed || !string.Equals(target, currentPath, StringComparison.OrdinalIgnoreCase)))
             return target;
         return view.Queue.NextTrack?.FilePath;
     }
 
-    private void OnEngineObserved(EngineObservation observation)
-        => mailbox.TryPost(new SessionObserved(observation));
+    private void OnEngineObserved(EngineObservation observation) => mailbox.TryPost(new SessionObserved(observation));
 
-    private void OnEngineEnded(EngineSessionEnded ended)
-        => mailbox.TryPost(new SessionEnded(ended));
+    private void OnEngineEnded(EngineSessionEnded ended) => mailbox.TryPost(new SessionEnded(ended));
 
     private void OnEngineReconnected() => mailbox.TryPost(new SessionReconnected());
 
@@ -477,6 +461,7 @@ public sealed class LocalSource : IMusicSource
         {
             Plugin.Log.Debug($"LocalSource: terminal stop failed: {e.Message}");
         }
+
         lifetimeCts.Dispose();
     }
 
@@ -485,8 +470,8 @@ public sealed class LocalSource : IMusicSource
     private sealed class EmptyCatalogLoader : ITrackCatalogLoader
     {
         public string RootDirectory => "";
-        public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult(new TrackCatalog(
-                [new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [])]));
+
+        public Task<TrackCatalog> LoadAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new TrackCatalog([new TrackGroup(TrackCatalog.AllFilesId, TrackCatalog.AllFilesName, [])]));
     }
 }

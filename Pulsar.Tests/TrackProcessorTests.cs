@@ -14,7 +14,7 @@ namespace Pulsar.Tests;
 public class TrackProcessorTests : IDisposable
 {
     private readonly DirectoryInfo dir = Directory.CreateTempSubdirectory("pulsar-transcode-test-");
-    public void Dispose() => dir.Delete(recursive: true);
+    public void Dispose() => dir.Delete(true);
 
     private string P(string name) => Path.Combine(dir.FullName, name);
 
@@ -24,8 +24,7 @@ public class TrackProcessorTests : IDisposable
         return Convert.ToHexString(hash.AsSpan());
     }
 
-    private static string Sha1Of(string path)
-        => Convert.ToHexString(SHA1.HashData(File.ReadAllBytes(path)));
+    private static string Sha1Of(string path) => Convert.ToHexString(SHA1.HashData(File.ReadAllBytes(path)));
 
     // A full-scale 997 Hz sine measures ≈ -3.01 LUFS; amplitude scales it linearly in dB.
     private static double ExpectedLufs(double amplitude) => (20 * Math.Log10(amplitude)) - 3.01;
@@ -33,12 +32,12 @@ public class TrackProcessorTests : IDisposable
     // libsndfile's Opus VBR quality is a [0,1] double solved from a per-channel target
     // bitrate: quality = (bps - 6000) / 250_000, clamped.
     [Theory]
-    [InlineData(6_000, 0.0)]       // exact floor
-    [InlineData(80_000, 0.296)]    // our stereo default: 160k/2
-    [InlineData(1_000_000, 1.0)]   // clamps high
-    [InlineData(0, 0.0)]           // clamps low
-    public void Opus_quality_solves_for_the_target_bitrate(int bpsPerChannel, double expected)
-        => Assert.Equal(expected, TrackProcessor.OpusQualityForBitrate(bpsPerChannel), 3);
+    [InlineData(6_000, 0.0)]     // exact floor
+    [InlineData(80_000, 0.296)]  // our stereo default: 160k/2
+    [InlineData(1_000_000, 1.0)] // clamps high
+    [InlineData(0, 0.0)]         // clamps low
+    public void Opus_quality_solves_for_the_target_bitrate(int bpsPerChannel, double expected) =>
+        Assert.Equal(expected, TrackProcessor.OpusQualityForBitrate(bpsPerChannel), 3);
 
     [Fact]
     public void High_bitrate_input_is_transcoded_to_the_out_path()
@@ -65,7 +64,7 @@ public class TrackProcessorTests : IDisposable
 
         var track = TrackProcessor.Process(src, outPath, CancellationToken.None);
 
-        Assert.Equal(src, track.SyncPath);                      // the DJ's own file syncs as-is
+        Assert.Equal(src, track.SyncPath); // the DJ's own file syncs as-is
         Assert.False(File.Exists(outPath), "no artifact for a passthrough");
         Assert.Equal(Blake3Of(src), track.Blake3Hash);
         Assert.Equal(Sha1Of(src), track.Sha1Hash);
@@ -86,7 +85,7 @@ public class TrackProcessorTests : IDisposable
     {
         // The no-transcode path must DRAIN the analyzer tap, not skip it: an audible
         // sine in a low-bitrate FLAC still gets a real gain.
-        var src = TestAudio.WriteQuietFlac(P("quiet-tone.flac"), 8000, 1, 5, amplitude: 0.1);
+        var src = TestAudio.WriteQuietFlac(P("quiet-tone.flac"), 8000, 1, 5, 0.1);
         var track = TrackProcessor.Process(src, P("qt.t"), CancellationToken.None);
 
         Assert.Equal(src, track.SyncPath);
@@ -110,8 +109,7 @@ public class TrackProcessorTests : IDisposable
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        Assert.ThrowsAny<OperationCanceledException>(
-            () => TrackProcessor.Process(src, outPath, cts.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => TrackProcessor.Process(src, outPath, cts.Token));
 
         Assert.False(File.Exists(outPath), "no output on cancellation");
         Assert.False(File.Exists(outPath + ".tmp"), "no orphaned .tmp");
@@ -122,8 +120,7 @@ public class TrackProcessorTests : IDisposable
     {
         var src = TestAudio.WriteWav(P("b.wav"), 48000, 1, 2, TestAudio.Sine(48000, 0.25));
         var fromPath = TrackProcessor.Process(src, P("b1.t"), CancellationToken.None);
-        var fromBytes = TrackProcessor.ProcessBytes(
-            src, File.ReadAllBytes(src), P("b2.t"), CancellationToken.None);
+        var fromBytes = TrackProcessor.ProcessBytes(src, File.ReadAllBytes(src), P("b2.t"), CancellationToken.None);
 
         Assert.Equal(fromPath.GainDb, fromBytes.GainDb, 1); // same audio, same measurement
     }

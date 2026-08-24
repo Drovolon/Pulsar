@@ -18,13 +18,10 @@ public class DiscriminatorTests
 
     /// <summary>An observation as the feed would produce it, `atSeconds` after Base.</summary>
     private static Observation Obs(
-        string? path = "/music/a.flac",
-        PlaybackState state = PlaybackState.Playing,
-        double positionSeconds = 10,
-        double atSeconds = 0)
-        => new(path, state, TimeSpan.FromSeconds(positionSeconds), TimeSpan.FromSeconds(180),
-               Title: "", Artist: "", AsOf: DateTimeOffset.UtcNow,
-               MonoStamp: Base + (long)(atSeconds * Stopwatch.Frequency));
+        string? path = "/music/a.flac", PlaybackState state = PlaybackState.Playing, double positionSeconds = 10,
+        double atSeconds = 0) =>
+        new(path, state, TimeSpan.FromSeconds(positionSeconds), TimeSpan.FromSeconds(180), "", "", DateTimeOffset.UtcNow,
+            Base + (long)(atSeconds * Stopwatch.Frequency));
 
     [Fact]
     public void First_sample_of_a_playing_track_is_a_track_change()
@@ -38,7 +35,7 @@ public class DiscriminatorTests
     {
         // Connecting to an idle player must not wake the pipeline.
         var d = new Discriminator();
-        Assert.Null(d.Classify(Obs(path: null, state: PlaybackState.Stopped, positionSeconds: 0)));
+        Assert.Null(d.Classify(Obs(null, PlaybackState.Stopped, 0)));
     }
 
     [Fact]
@@ -66,10 +63,9 @@ public class DiscriminatorTests
     public void A_new_path_is_a_track_change()
     {
         var d = new Discriminator();
-        d.Classify(Obs(path: "/music/a.flac"));
+        d.Classify(Obs("/music/a.flac"));
 
-        Assert.Equal(CursorEvent.TrackChange,
-            d.Classify(Obs(path: "/music/b.flac", positionSeconds: 0, atSeconds: 1)));
+        Assert.Equal(CursorEvent.TrackChange, d.Classify(Obs("/music/b.flac", positionSeconds: 0, atSeconds: 1)));
     }
 
     [Fact]
@@ -78,10 +74,9 @@ public class DiscriminatorTests
         // Track advanced AND paused in the same sample: reporting only a state change
         // would leave listeners on the old file.
         var d = new Discriminator();
-        d.Classify(Obs(path: "/music/a.flac"));
+        d.Classify(Obs("/music/a.flac"));
 
-        Assert.Equal(CursorEvent.TrackChange,
-            d.Classify(Obs(path: "/music/b.flac", state: PlaybackState.Paused, positionSeconds: 0, atSeconds: 1)));
+        Assert.Equal(CursorEvent.TrackChange, d.Classify(Obs("/music/b.flac", PlaybackState.Paused, 0, 1)));
     }
 
     [Fact]
@@ -91,7 +86,7 @@ public class DiscriminatorTests
         d.Classify(Obs(positionSeconds: 10, atSeconds: 0));
 
         Assert.Equal(CursorEvent.StateChange,
-            d.Classify(Obs(state: PlaybackState.Paused, positionSeconds: 10.2, atSeconds: 0.2)));
+                     d.Classify(Obs(state: PlaybackState.Paused, positionSeconds: 10.2, atSeconds: 0.2)));
         // Paused player re-observed later: cursor unmoved, nothing happened.
         Assert.Null(d.Classify(Obs(state: PlaybackState.Paused, positionSeconds: 10.2, atSeconds: 3)));
     }
@@ -114,7 +109,6 @@ public class DiscriminatorTests
         var d = new Discriminator();
         d.Classify(Obs(state: PlaybackState.Paused, positionSeconds: 10, atSeconds: 0));
 
-        Assert.Equal(CursorEvent.Seek,
-            d.Classify(Obs(state: PlaybackState.Paused, positionSeconds: 11, atSeconds: 1)));
+        Assert.Equal(CursorEvent.Seek, d.Classify(Obs(state: PlaybackState.Paused, positionSeconds: 11, atSeconds: 1)));
     }
 }

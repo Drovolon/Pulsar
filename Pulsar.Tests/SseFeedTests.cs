@@ -42,8 +42,7 @@ public class SseFeedTests : IAsyncLifetime
     [Fact]
     public async Task Subscribing_delivers_the_current_state_immediately()
     {
-        server.SetPlaying("/music/a.flac", positionSeconds: 42, durationSeconds: 300,
-                          artist: "Band", title: "Song");
+        server.SetPlaying("/music/a.flac", 42, 300, "Band", "Song");
         Start();
 
         // beefweb sends the state as of subscription - no DJ action needed.
@@ -65,7 +64,7 @@ public class SseFeedTests : IAsyncLifetime
 
         server.SetPaused();
         server.PushUpdate();
-        server.SetPlaying("/music/b.flac", positionSeconds: 0);
+        server.SetPlaying("/music/b.flac", 0);
         server.PushUpdate();
 
         await TestWait.Assert(() => probe.Seen.Length >= 3, "both pushed frames");
@@ -90,9 +89,7 @@ public class SseFeedTests : IAsyncLifetime
 
         // The DJ moved on while we were away; the resubscribe's initial frame catches us up.
         server.SetPlaying("/music/b.flac");
-        await TestWait.Assert(
-            () => probe.Seen is [.., { RawPath: "/music/b.flac" }],
-            "state after reconnect");
+        await TestWait.Assert(() => probe.Seen is [.., { RawPath: "/music/b.flac" }], "state after reconnect");
         Assert.True(feed.Connected);
         Assert.Equal(2, server.SseSessionsOpened);
         Assert.Equal([true, false, true], probe.Connectivity);
@@ -112,15 +109,12 @@ public class SseFeedTests : IAsyncLifetime
             await TestWait.Assert(() => !feed.Connected, $"drop #{cycle + 1} reported");
 
             server.SetPlaying(paths[cycle]);
-            await TestWait.Assert(
-                () => feed.Connected && probe.Seen is [.., { RawPath: var path }] && path == paths[cycle],
-                $"reconnect #{cycle + 1} catches up");
+            await TestWait.Assert(() => feed.Connected && probe.Seen is [.., { RawPath: var path }] && path == paths[cycle],
+                                  $"reconnect #{cycle + 1} catches up");
             Assert.Equal(cycle + 2, server.SseSessionsOpened);
         }
 
-        Assert.Equal(
-            [true, false, true, false, true, false, true],
-            probe.Connectivity);
+        Assert.Equal([true, false, true, false, true, false, true], probe.Connectivity);
     }
 
     [Fact]

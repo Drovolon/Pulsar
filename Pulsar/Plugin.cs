@@ -19,15 +19,30 @@ namespace Pulsar;
 
 public sealed class Plugin : IAsyncDalamudPlugin
 {
-    [PluginService] internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
-    [PluginService] internal static ICommandManager CommandManager { get; private set; } = null!;
-    [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
-    [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
-    [PluginService] internal static IGameConfig GameConfig { get; private set; } = null!;
+    [PluginService]
+    internal static IDalamudPluginInterface PluginInterface { get; private set; } = null!;
+
+    [PluginService]
+    internal static ICommandManager CommandManager { get; private set; } = null!;
+
+    [PluginService]
+    internal static IObjectTable ObjectTable { get; private set; } = null!;
+
+    [PluginService]
+    internal static IDataManager DataManager { get; private set; } = null!;
+
+    [PluginService]
+    internal static IGameConfig GameConfig { get; private set; } = null!;
+
     // These three have internal setters (not private): Pulsar.Tests installs fakes for them.
-    [PluginService] internal static IPluginLog Log { get; set; } = null!;
-    [PluginService] internal static IFramework Framework { get; set; } = null!;
-    [PluginService] internal static IChatGui Chat { get; set; } = null!;
+    [PluginService]
+    internal static IPluginLog Log { get; set; } = null!;
+
+    [PluginService]
+    internal static IFramework Framework { get; set; } = null!;
+
+    [PluginService]
+    internal static IChatGui Chat { get; set; } = null!;
 
     private const string CommandName = "/pulsar";
 
@@ -43,8 +58,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
     private ApplicationCoordinator? Coordinator { get; set; }
     private DebugLoopbackController? DebugLoopback { get; set; }
 
-    internal void SetDebugLoopback(bool enabled)
-        => DebugLoopback?.SetEnabled(enabled);
+    internal void SetDebugLoopback(bool enabled) => DebugLoopback?.SetEnabled(enabled);
 
     internal void RefreshBgmMute() => Coordinator?.RefreshBgmMute();
 
@@ -67,7 +81,7 @@ public sealed class Plugin : IAsyncDalamudPlugin
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the Pulsar UI"
+            HelpMessage = "Open the Pulsar UI",
         });
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
@@ -83,21 +97,19 @@ public sealed class Plugin : IAsyncDalamudPlugin
         var audioExe = Path.Combine(hostDir, "audio", "Pulsar.AudioHost.exe");
 
         ListenEngine = new ReconnectingEngine(new HostSpec(
-            audioExe, PipeNames.AudioListening, logDir, "audio-listening",
-            MixerName: "Pulsar (Listening)"));
+                                                  audioExe, PipeNames.AudioListening, logDir, "audio-listening",
+                                                  "Pulsar (Listening)"));
         BroadcastEngine = new ReconnectingEngine(new HostSpec(
-            audioExe, PipeNames.AudioBroadcast, logDir, "audio-broadcast",
-            MixerName: "Pulsar (Broadcast)"));
-        Prepare = new ReconnectingPrepareService(new HostSpec(
-            Path.Combine(hostDir, "transcode", "Pulsar.TranscodeHost.exe"),
-            PipeNames.TranscodeHost, logDir, "transcode"));
+                                                     audioExe, PipeNames.AudioBroadcast, logDir, "audio-broadcast",
+                                                     "Pulsar (Broadcast)"));
+        Prepare = new ReconnectingPrepareService(new HostSpec(Path.Combine(hostDir, "transcode", "Pulsar.TranscodeHost.exe"),
+                                                              PipeNames.TranscodeHost, logDir, "transcode"));
 
         Listening = new ListeningManager(ListenEngine, Configuration);
 
         Penumbra = new PenumbraIntegration(PluginInterface);
-        SyncPrep = new SyncPrep(
-            new CacheManager(Path.Combine(PluginInterface.ConfigDirectory.FullName, "synccache")),
-            Prepare);
+        SyncPrep = new SyncPrep(new CacheManager(Path.Combine(PluginInterface.ConfigDirectory.FullName, "synccache")),
+                                Prepare);
         Broadcast = new BroadcastManager(BroadcastEngine, Penumbra, SyncPrep, Configuration);
 
         ListenEngine.OnReconnected += Listening.OnEngineReconnected;
@@ -106,13 +118,9 @@ public sealed class Plugin : IAsyncDalamudPlugin
         Ipc = new IpcProvider(PluginInterface, Listening, Broadcast);
         Ipc.Prepare();
         DebugLoopback = new DebugLoopbackController(Ipc);
-        Coordinator = new ApplicationCoordinator(
-            Broadcast,
-            Listening,
-            Ipc,
-            DebugLoopback,
-            new ListeningNotifier(Configuration),
-            new BgmMuter(Configuration, new GameBgmControl(GameConfig)));
+        Coordinator = new ApplicationCoordinator(Broadcast, Listening, Ipc, DebugLoopback,
+                                                 new ListeningNotifier(Configuration),
+                                                 new BgmMuter(Configuration, new GameBgmControl(GameConfig)));
         DebugLoopback.SetEnabled(Configuration.DebugLoopbackEnabled);
 
         ListenEngine.Start();
@@ -141,11 +149,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
                     break;
                 case BroadcastMode.Beefweb:
                     await Broadcast.LoadBeefweb(Configuration.BeefwebPort, Configuration.BeefwebUsername,
-                        Configuration.BeefwebPassword, Configuration.BeefwebTransport);
+                                                Configuration.BeefwebPassword, Configuration.BeefwebTransport);
                     break;
             }
-        }
-        finally
+        } finally
         {
             // TODO: investigate a better solution for NotifyReady.
             // I noticed Lightless checks whether Dalamud reports the plugin is loaded, in addition to
@@ -185,10 +192,10 @@ public sealed class Plugin : IAsyncDalamudPlugin
                 if (Broadcast is not null) await Broadcast.DisposeAsync();
                 if (Listening is not null) await Listening.DisposeAsync();
             }
+
             Ipc?.Dispose();
             if (SyncPrep is not null) await SyncPrep.DisposeAsync();
-        }
-        finally
+        } finally
         {
             // Always, always, always tear down the subprocesses if we spawned them,
             // even if something else in the dispose path throws some exception.

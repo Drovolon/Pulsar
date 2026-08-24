@@ -18,13 +18,14 @@ internal sealed class PrefetchTiming
 internal sealed class PrefetchScheduler : IAsyncDisposable
 {
     private abstract record Message;
+
     private sealed record SourceObserved(SourceFrame? Frame) : Message;
+
     private sealed record Tick(ScheduledTick Schedule) : Message;
-    private sealed record PreparationCompleted(
-        SourceCursor Cursor,
-        string CurrentPath,
-        string NextPath,
-        PrepResult Result) : Message;
+
+    private sealed record PreparationCompleted(SourceCursor Cursor, string CurrentPath, string NextPath, PrepResult Result)
+        : Message;
+
     private sealed record Cleared(TaskCompletionSource Completion) : Message;
 
     private sealed class ScheduledTick
@@ -42,9 +43,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     private ScheduledTick? scheduledTick;
 
     internal PrefetchScheduler(
-        SyncPrep prep,
-        PrefetchTiming timing,
-        Action<SourceCursor, string, string, PrepResult.Successful> onPrepared)
+        SyncPrep prep, PrefetchTiming timing, Action<SourceCursor, string, string, PrepResult.Successful> onPrepared)
     {
         this.prep = prep;
         this.timing = timing;
@@ -52,8 +51,7 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError, OnCompleted);
     }
 
-    internal void Observe(SourceFrame? value)
-        => mailbox.TryPost(new SourceObserved(value));
+    internal void Observe(SourceFrame? value) => mailbox.TryPost(new SourceObserved(value));
 
     /// <summary>
     /// Detaches from the live source before its owner disposes it. Once this completes,
@@ -80,14 +78,10 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
                     schedule.Cts.Dispose();
                     HandleTick();
                 }
+
                 break;
-            case PreparationCompleted(
-                var prepCursor,
-                var prepCurrent,
-                var prepNext,
-                var result):
-                HandlePreparationCompleted(
-                    prepCursor, prepCurrent, prepNext, result);
+            case PreparationCompleted(var prepCursor, var prepCurrent, var prepNext, var result):
+                HandlePreparationCompleted(prepCursor, prepCurrent, prepNext, result);
                 break;
             case Cleared(var completion):
                 Clear();
@@ -144,16 +138,16 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         var untilLead = remainingMs - timing.LeadMs;
         if (untilLead > 0)
         {
-            Plugin.Log.Debug($"prefetch timer: lead tick in {untilLead / 1000}s "
-                             + $"(remaining {remainingMs / 1000}s of {durationMs / 1000}s)");
+            Plugin.Log.Debug($"prefetch timer: lead tick in {untilLead / 1000}s " +
+                             $"(remaining {remainingMs / 1000}s of {durationMs / 1000}s)");
             Schedule(untilLead);
         }
         else
         {
             finalPending = true;
-            Plugin.Log.Debug($"prefetch timer: final tick in "
-                             + $"{Math.Max(0, remainingMs - timing.FinalMs) / 1000}s "
-                             + $"(remaining {remainingMs / 1000}s, inside {timing.LeadMs / 1000}s lead)");
+            Plugin.Log.Debug($"prefetch timer: final tick in " +
+                             $"{Math.Max(0, remainingMs - timing.FinalMs) / 1000}s " +
+                             $"(remaining {remainingMs / 1000}s, inside {timing.LeadMs / 1000}s lead)");
             ScheduleFinal(remainingMs);
         }
     }
@@ -164,13 +158,10 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
         var snapshot = current?.Snapshot;
         var next = snapshot?.NextFilePath;
         Plugin.Log.Debug($"prefetch tick fired: next={(next is null ? "(null)" : Path.GetFileName(next))}");
-        if (current is { } active
-            && snapshot is { IsPlaying: true }
-            && next is not null)
+        if (current is { } active && snapshot is { IsPlaying: true } && next is not null)
         {
             Plugin.Log.Debug($"start-prefetch next: {Path.GetFileName(next)}");
-            _ = ReportPreparation(
-                prep.PreparePrefetch(next), active.Cursor, snapshot.FilePath, next);
+            _ = ReportPreparation(prep.PreparePrefetch(next), active.Cursor, snapshot.FilePath, next);
         }
 
         if (!finalPending && snapshot is { IsPlaying: true, Meta.DurationMs: > 0 } live)
@@ -184,16 +175,12 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
     private static long RemainingMs(SourceSnapshot snapshot)
     {
         var elapsed = snapshot.IsPlaying ? DateTimeOffset.UtcNow - snapshot.AsOf : TimeSpan.Zero;
-        return snapshot.Meta.DurationMs
-               - (long)snapshot.Position.TotalMilliseconds
-               - (long)Math.Max(0, elapsed.TotalMilliseconds);
+        return snapshot.Meta.DurationMs -
+               (long)snapshot.Position.TotalMilliseconds -
+               (long)Math.Max(0, elapsed.TotalMilliseconds);
     }
 
-    private async Task ReportPreparation(
-        Task<PrepResult> task,
-        SourceCursor prepCursor,
-        string prepCurrent,
-        string prepNext)
+    private async Task ReportPreparation(Task<PrepResult> task, SourceCursor prepCursor, string prepCurrent, string prepNext)
     {
         PrepResult result;
         try
@@ -205,38 +192,30 @@ internal sealed class PrefetchScheduler : IAsyncDisposable
             result = new PrepResult.Failed(e);
         }
 
-        mailbox.TryPost(new PreparationCompleted(
-            prepCursor, prepCurrent, prepNext, result));
+        mailbox.TryPost(new PreparationCompleted(prepCursor, prepCurrent, prepNext, result));
     }
 
-    private void HandlePreparationCompleted(
-        SourceCursor prepCursor,
-        string prepCurrent,
-        string prepNext,
-        PrepResult result)
+    private void HandlePreparationCompleted(SourceCursor prepCursor, string prepCurrent, string prepNext, PrepResult result)
     {
         var live = frame;
-        if (!ReferenceEquals(live?.Cursor, prepCursor)
-            || live.Snapshot.FilePath != prepCurrent
-            || live.Snapshot.NextFilePath != prepNext
-            || result is not PrepResult.Successful success
-            || !File.Exists(success.PreparedFilePath))
+        if (!ReferenceEquals(live?.Cursor, prepCursor) ||
+            live.Snapshot.FilePath != prepCurrent ||
+            live.Snapshot.NextFilePath != prepNext ||
+            result is not PrepResult.Successful success ||
+            !File.Exists(success.PreparedFilePath))
             return;
 
         onPrepared(prepCursor, prepCurrent, prepNext, success);
     }
 
-    private void ScheduleFinal(long remainingMs)
-        => Schedule(Math.Max(0, remainingMs - timing.FinalMs));
+    private void ScheduleFinal(long remainingMs) => Schedule(Math.Max(0, remainingMs - timing.FinalMs));
 
     private void Schedule(long delayMs)
     {
         CancelDelay();
         var schedule = new ScheduledTick();
         scheduledTick = schedule;
-        _ = PostTickAfterDelay(
-            TimeSpan.FromMilliseconds(Math.Clamp(delayMs, 0, int.MaxValue)),
-            schedule);
+        _ = PostTickAfterDelay(TimeSpan.FromMilliseconds(Math.Clamp(delayMs, 0, int.MaxValue)), schedule);
     }
 
     private async Task PostTickAfterDelay(TimeSpan delay, ScheduledTick schedule)

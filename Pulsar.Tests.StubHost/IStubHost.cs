@@ -20,8 +20,7 @@ public class StubServer : IStubHost, IRemoteEngine
 {
     public const string ExitAfterLoadPath = "stub://exit-after-load";
 
-    private EngineSnapshot snapshot = new(
-        NAudio.Wave.PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow);
+    private EngineSnapshot snapshot = new(NAudio.Wave.PlaybackState.Stopped, null, null, null, DateTimeOffset.UtcNow);
     private long sequence;
 
     public event EventHandler<EngineSnapshot>? OnUpdated;
@@ -35,26 +34,19 @@ public class StubServer : IStubHost, IRemoteEngine
         return Task.CompletedTask;
     }
 
-    public Task LoadAsync(
-        string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
+    public Task LoadAsync(string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
-        snapshot = new EngineSnapshot(
-            startPlaying ? NAudio.Wave.PlaybackState.Playing : NAudio.Wave.PlaybackState.Paused,
-            path,
-            null,
-            new PlaybackPosition(position, TimeSpan.FromMinutes(3)),
-            DateTimeOffset.UtcNow,
-            playbackId,
-            ++sequence);
+        snapshot = new EngineSnapshot(startPlaying ? NAudio.Wave.PlaybackState.Playing : NAudio.Wave.PlaybackState.Paused,
+                                      path, null, new PlaybackPosition(position, TimeSpan.FromMinutes(3)),
+                                      DateTimeOffset.UtcNow, playbackId, ++sequence);
         OnUpdated?.Invoke(this, snapshot);
         if (path == ExitAfterLoadPath) ExitSoon();
         return Task.CompletedTask;
     }
 
     public Task LoadBytesAsync(
-        string displayPath, byte[] audioData, TimeSpan position,
-        bool startPlaying, long playbackId, CancellationToken ct)
-        => LoadAsync(displayPath, position, startPlaying, playbackId, ct);
+        string displayPath, byte[] audioData, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct) =>
+        LoadAsync(displayPath, position, startPlaying, playbackId, ct);
 
     public Task StopAsync(CancellationToken ct)
     {

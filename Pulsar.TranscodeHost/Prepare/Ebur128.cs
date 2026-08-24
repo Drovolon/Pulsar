@@ -6,9 +6,9 @@ internal static class Ebur128Interop
 {
     // Confirmed against the bundled ebur128.h (libebur128 1.2.6):
     //   MODE_M = 1<<0; MODE_I = (1<<2)|MODE_M = 5; TRUE_PEAK = (1<<5)|(1<<4)|MODE_M = 49.
-    private const int MODE_M = 1 << 0;                                  // 1
-    public const int MODE_I = (1 << 2) | MODE_M;                        // 5 (integrated loudness)
-    public const int MODE_TRUE_PEAK = (1 << 5) | (1 << 4) | MODE_M;     // 49 (true peak, includes sample peak)
+    private const int MODE_M = 1 << 0;                              // 1
+    public const int MODE_I = (1 << 2) | MODE_M;                    // 5 (integrated loudness)
+    public const int MODE_TRUE_PEAK = (1 << 5) | (1 << 4) | MODE_M; // 49 (true peak, includes sample peak)
 
     [DllImport("libebur128", CallingConvention = CallingConvention.Cdecl)]
     public static extern nint ebur128_init(uint channels, uint samplerate, int mode);
@@ -49,7 +49,9 @@ internal sealed class LoudnessAnalyzer : IDisposable
         if (interleaved.IsEmpty) return;
         var frames = (nuint)(interleaved.Length / channels);
         fixed (float* p = interleaved)
+        {
             Ebur128Interop.ebur128_add_frames_float(state, p, frames);
+        }
     }
 
     /// <returns>(integrated LUFS, max true peak in dBTP). LUFS is a huge negative number for silence.</returns>
@@ -61,12 +63,11 @@ internal sealed class LoudnessAnalyzer : IDisposable
             // as a failure case and ignore (rather than apply a spurious -18 gain, thinking lufs==0)
             lufs = double.NegativeInfinity;
         }
+
         double peak = 0;
         for (uint ch = 0; ch < channels; ch++)
-        {
             if (Ebur128Interop.ebur128_true_peak(state, ch, out var p) == 0)
                 peak = Math.Max(peak, p);
-        }
         var peakDb = peak > 0 ? 20.0 * Math.Log10(peak) : -144.0;
         return (lufs, peakDb);
     }

@@ -23,7 +23,8 @@ public static class AudioReaderFactory
         catch (Exception e)
         {
             // libsndfile doesn't support AAC/M4A/WMA/ALAC, but Windows Media Foundation does.
-            Log.Debug("libsndfile declined {GetFileName} ({message}); trying Media Foundation.", Path.GetFileName(path), e.Message);
+            Log.Debug("libsndfile declined {GetFileName} ({message}); trying Media Foundation.", Path.GetFileName(path),
+                      e.Message);
             return new MediaFoundationReader(path);
         }
     }
@@ -31,8 +32,5 @@ public static class AudioReaderFactory
     /// <summary>
     /// Open raw bytes, used for .scd. Only uses libsndfile, since we only support loading Vorbis .scd's.
     /// </summary>
-    public static WaveStream OpenBytes(byte[] data)
-    {
-        return new SoundFileReader(new MemoryStream(data, writable: false));
-    }
+    public static WaveStream OpenBytes(byte[] data) => new SoundFileReader(new MemoryStream(data, false));
 }

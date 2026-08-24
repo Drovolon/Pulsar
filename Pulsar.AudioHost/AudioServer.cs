@@ -22,16 +22,14 @@ public class AudioServer : IRemoteEngine, IAsyncDisposable
         filePlayer.OnUpdated += (_, snapshot) => OnUpdated?.Invoke(this, snapshot);
     }
 
-    public Task LoadAsync(
-        string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
+    public Task LoadAsync(string path, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
         filePlayer.Load(path, position, startPlaying, playbackId);
         return Task.CompletedTask;
     }
 
     public Task LoadBytesAsync(
-        string displayPath, byte[] audioData, TimeSpan position,
-        bool startPlaying, long playbackId, CancellationToken ct)
+        string displayPath, byte[] audioData, TimeSpan position, bool startPlaying, long playbackId, CancellationToken ct)
     {
         filePlayer.LoadBytes(displayPath, audioData, position, startPlaying, playbackId);
         return Task.CompletedTask;
@@ -67,13 +65,11 @@ public class AudioServer : IRemoteEngine, IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    public Task<EngineSnapshot> GetStateAsync(CancellationToken ct)
-    {
-        return Task.FromResult(filePlayer.Snapshot with
+    public Task<EngineSnapshot> GetStateAsync(CancellationToken ct) =>
+        Task.FromResult(filePlayer.Snapshot with
         {
             ObservedAt = DateTimeOffset.UtcNow,
         });
-    }
 
     public event EventHandler<EngineSnapshot>? OnUpdated;
 

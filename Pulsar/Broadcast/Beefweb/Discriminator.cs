@@ -8,7 +8,7 @@ public enum CursorEvent
 {
     TrackChange,
     StateChange, // e.g. playing -> paused
-    Seek
+    Seek,
 }
 
 /// <summary>

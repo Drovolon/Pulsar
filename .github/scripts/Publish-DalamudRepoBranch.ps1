@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $resolvedRepoJson = (Resolve-Path -LiteralPath $RepoJsonPath).Path
-$worktreePath = Join-Path ([IO.Path]::GetTempPath()) "pulsar-repo-$([Guid]::NewGuid())"
+$worktreePath = Join-Path ([IO.Path]::GetTempPath()) "pulsar-repo-$([Guid]::NewGuid() )"
 
 function Assert-GitSuccess([string] $Operation)
 {
@@ -52,7 +52,7 @@ try
     Assert-GitSuccess "staging repo.json"
 
     $status = git -C $worktreePath status --short
-    if ([string]::IsNullOrWhiteSpace($status))
+    if ( [string]::IsNullOrWhiteSpace($status))
     {
         Write-Host "repo branch is already up to date"
         return
@@ -68,5 +68,5 @@ try
 }
 finally
 {
-    git -C $repoRoot worktree remove $worktreePath --force 2>$null
+    git -C $repoRoot worktree remove $worktreePath --force 2> $null
 }

@@ -11,8 +11,7 @@ namespace Pulsar.Windows;
 /// A single-line combo that expands into a search box + clipped, filtered list.
 /// Similar to Luna/Penumbra/Glamourer.
 /// </summary>
-internal sealed class FilterCombo<T>(Func<T, string> getLabel, float listHeight = 320f)
-    where T : class
+internal sealed class FilterCombo<T>(Func<T, string> getLabel, float listHeight = 320f) where T : class
 {
     private string filter = "";
     private bool wasOpen;
@@ -50,8 +49,8 @@ internal sealed class FilterCombo<T>(Func<T, string> getLabel, float listHeight 
             lastItems = items;
             lastFilter = filter;
             filtered = filter.Length == 0
-                ? [.. items]
-                : [.. items.Where(i => getLabel(i).Contains(filter, StringComparison.OrdinalIgnoreCase))];
+                           ? [.. items]
+                           : [.. items.Where(i => getLabel(i).Contains(filter, StringComparison.OrdinalIgnoreCase))];
         }
 
         using var child = ImRaii.Child("##list", new Vector2(0f, listHeight), true);
@@ -71,6 +70,7 @@ internal sealed class FilterCombo<T>(Func<T, string> getLabel, float listHeight 
                         ImGui.CloseCurrentPopup();
                     }
                 }
+
             clipper.End();
             clipper.Destroy();
         }

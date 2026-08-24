@@ -30,8 +30,10 @@ public class WorkerTests
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
-            Exception? exception, Func<TState, Exception?, string> formatter)
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
         {
             if (logLevel >= LogLevel.Error) Interlocked.Increment(ref errors);
         }
@@ -52,11 +54,10 @@ public class WorkerTests
             rpc.StartListening();
 
             var snap = await TestWait.Within(engine.GetStateAsync(CancellationToken.None),
-                "state over a real pipe into a real AudioServer");
+                                             "state over a real pipe into a real AudioServer");
             Assert.Equal(PlaybackState.Stopped, snap.State);
             Assert.Null(snap.Path);
-        }
-        finally
+        } finally
         {
             await worker.StopAsync(CancellationToken.None).WaitAsync(TestWait.Timeout);
         }
@@ -76,13 +77,11 @@ public class WorkerTests
         await transcode.StartAsync(CancellationToken.None);
         try
         {
-            await Task.WhenAll(
-                TestWait.Assert(() => audioLog.Errors >= 2, "audio worker retries serving"),
-                TestWait.Assert(() => transcodeLog.Errors >= 2, "transcode worker retries serving"));
+            await Task.WhenAll(TestWait.Assert(() => audioLog.Errors >= 2, "audio worker retries serving"),
+                               TestWait.Assert(() => transcodeLog.Errors >= 2, "transcode worker retries serving"));
             Assert.False(audio.ExecuteTask!.IsCompleted);
             Assert.False(transcode.ExecuteTask!.IsCompleted);
-        }
-        finally
+        } finally
         {
             await audio.StopAsync(CancellationToken.None).WaitAsync(TestWait.Timeout);
             await transcode.StopAsync(CancellationToken.None).WaitAsync(TestWait.Timeout);

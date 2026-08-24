@@ -39,39 +39,34 @@ internal sealed class UiTheme : IDisposable
 
     public UiTheme(IDalamudPluginInterface pi)
     {
-        HeaderFont = pi.UiBuilder.FontAtlas.NewGameFontHandle(new(GameFontFamilyAndSize.Axis18));
+        HeaderFont = pi.UiBuilder.FontAtlas.NewGameFontHandle(new GameFontStyle(GameFontFamilyAndSize.Axis18));
 
-        MediumFont = pi.UiBuilder.FontAtlas.NewDelegateFontHandle(e =>
-            e.OnPreBuild(tk =>
+        MediumFont = pi.UiBuilder.FontAtlas.NewDelegateFontHandle(e => e.OnPreBuild(tk =>
+        {
+            var font = tk.AddDalamudDefaultFont(-1.2f);
+            tk.AddFontAwesomeIconFont(new SafeFontConfig
             {
-                var font = tk.AddDalamudDefaultFont(-1.2f);
-                tk.AddFontAwesomeIconFont(new SafeFontConfig
-                {
-                    SizePx = UiBuilder.DefaultFontSizePx * 1.2f,
-                    MergeFont = font,
-                });
-            }));
+                SizePx = UiBuilder.DefaultFontSizePx * 1.2f,
+                MergeFont = font,
+            });
+        }));
 
-        IconTextFont = pi.UiBuilder.FontAtlas.NewDelegateFontHandle(e =>
-            e.OnPreBuild(tk =>
+        IconTextFont = pi.UiBuilder.FontAtlas.NewDelegateFontHandle(e => e.OnPreBuild(tk =>
+        {
+            var font = tk.AddDalamudDefaultFont(-1f);
+            tk.AddFontAwesomeIconFont(new SafeFontConfig
             {
-                var font = tk.AddDalamudDefaultFont(-1f);
-                tk.AddFontAwesomeIconFont(new SafeFontConfig
-                {
-                    // Size and spacing were tweaked til they looked decent.
-                    SizePx = UiBuilder.DefaultFontSizePx * 0.75f,
-                    MergeFont = font,
-                    GlyphExtraSpacing = new Vector2(UiBuilder.DefaultFontSizePx * 0.3f, 0f),
-                });
-            }));
+                // Size and spacing were tweaked til they looked decent.
+                SizePx = UiBuilder.DefaultFontSizePx * 0.75f,
+                MergeFont = font,
+                GlyphExtraSpacing = new Vector2(UiBuilder.DefaultFontSizePx * 0.3f, 0f),
+            });
+        }));
     }
 
     /// <summary>Completes once every font handle has finished building.</summary>
     public Task WaitFontsReadyAsync(CancellationToken ct) =>
-        Task.WhenAll(
-            HeaderFont.WaitAsync(ct),
-            MediumFont.WaitAsync(ct),
-            IconTextFont.WaitAsync(ct));
+        Task.WhenAll(HeaderFont.WaitAsync(ct), MediumFont.WaitAsync(ct), IconTextFont.WaitAsync(ct));
 
     public void Dispose()
     {

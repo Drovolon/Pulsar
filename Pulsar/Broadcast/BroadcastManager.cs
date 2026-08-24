@@ -14,10 +14,28 @@ using Pulsar.Playback;
 
 namespace Pulsar.Broadcast;
 
-public enum BroadcastMode { Folder, Mod, Beefweb }
-public enum BroadcastProvider { Local, Beefweb }
+public enum BroadcastMode
+{
+    Folder,
+    Mod,
+    Beefweb,
+}
 
-public enum BroadcastPhase { OffAir, Starting, Live, Switching, Retrying, Failed }
+public enum BroadcastProvider
+{
+    Local,
+    Beefweb,
+}
+
+public enum BroadcastPhase
+{
+    OffAir,
+    Starting,
+    Live,
+    Switching,
+    Retrying,
+    Failed,
+}
 
 public sealed record BroadcastStatusView(
     BroadcastProvider DesiredProvider,
@@ -28,8 +46,7 @@ public sealed record BrowserLoadView(bool Loading, string? Error);
 
 internal sealed class BroadcastRetryTiming
 {
-    internal TimeSpan[] Delays { get; init; } =
-        [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)];
+    internal TimeSpan[] Delays { get; init; } = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)];
 }
 
 internal abstract record BroadcastOutput
@@ -39,9 +56,7 @@ internal abstract record BroadcastOutput
         private List<SyncPrep.ArtifactLease>? artifacts;
         internal BroadcastPlayerData? Data { get; }
 
-        internal PlayerDataChanged(
-            BroadcastPlayerData? data,
-            List<SyncPrep.ArtifactLease>? artifacts = null)
+        internal PlayerDataChanged(BroadcastPlayerData? data, List<SyncPrep.ArtifactLease>? artifacts = null)
         {
             Data = data;
             this.artifacts = artifacts;
@@ -54,6 +69,7 @@ internal abstract record BroadcastOutput
             foreach (var artifact in owned) artifact.Dispose();
         }
     }
+
     public sealed record BroadcastingChanged(bool Value) : BroadcastOutput;
 }
 
@@ -64,27 +80,31 @@ internal abstract record BroadcastOutput
 public sealed class BroadcastManager : IAsyncDisposable
 {
     private abstract record Message;
-    private sealed record IntentChanged(
-        BroadcastProvider? Provider,
-        bool? OnAir,
-        TaskCompletionSource? Completion = null) : Message;
+
+    private sealed record IntentChanged(BroadcastProvider? Provider, bool? OnAir, TaskCompletionSource? Completion = null)
+        : Message;
+
     private sealed record ProviderChanged(ProviderInstance Provider) : Message;
-    private sealed record UnsyncableObserved(
-        ProviderInstance Provider,
-        UnsyncableSource Source) : Message;
-    private sealed record ProviderReplaced(
-        BroadcastProvider Kind,
-        IMusicSource Source,
-        TaskCompletionSource Completion) : Message;
+
+    private sealed record UnsyncableObserved(ProviderInstance Provider, UnsyncableSource Source) : Message;
+
+    private sealed record ProviderReplaced(BroadcastProvider Kind, IMusicSource Source, TaskCompletionSource Completion)
+        : Message;
+
     private sealed record PrepCompleted(PreparationAttempt Attempt, PrepResult Result) : Message;
+
     private sealed record RetryDue(RetrySchedule Schedule) : Message;
+
     private sealed record RetryRequested : Message;
+
     private sealed record DisposalCompleted(Task Disposal) : Message;
+
     private sealed record PrefetchCompleted(
         SourceCursor Cursor,
         string CurrentPath,
         string NextPath,
         PrepResult.Successful Result) : Message;
+
     private sealed record EngineReconnected : Message;
 
     private sealed class ProviderInstance(BroadcastProvider kind, IMusicSource source)
@@ -95,10 +115,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         internal Action<UnsyncableSource>? UnsyncableHandler { get; set; }
     }
 
-    private sealed record PreparationTarget(
-        ProviderInstance Provider,
-        SourceCursor Cursor,
-        PrepInput Input);
+    private sealed record PreparationTarget(ProviderInstance Provider, SourceCursor Cursor, PrepInput Input);
 
     private sealed class PreparationAttempt(PreparationTarget target)
     {
@@ -125,12 +142,14 @@ public sealed class BroadcastManager : IAsyncDisposable
         PreparedTrack Track,
         SyncPrep.ArtifactLease Artifact,
         BroadcastPlayerData Data);
+
     private sealed record PreparedPrefetch(
         SourceCursor Cursor,
         string CurrentPath,
         string OriginalPath,
         PreparedTrack Track,
         SyncPrep.ArtifactLease Artifact);
+
     private sealed record PublishedState(
         SourceSnapshot? Snapshot,
         BroadcastPlayerData? PlayerData,
@@ -165,26 +184,20 @@ public sealed class BroadcastManager : IAsyncDisposable
     private bool lastBroadcasting;
     private BroadcastPlayerData? lastAnnounced;
 
-    private readonly Channel<BroadcastOutput> outputs = Channel.CreateUnbounded<BroadcastOutput>(
-        new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<BroadcastOutput> outputs =
+        Channel.CreateUnbounded<BroadcastOutput>(new UnboundedChannelOptions { SingleReader = true });
+
     internal ChannelReader<BroadcastOutput> Outputs => outputs.Reader;
 
     private volatile PublishedState published = new(
-        null,
-        null,
-        new BroadcastStatusView(BroadcastProvider.Local, null, BroadcastPhase.OffAir));
+        null, null, new BroadcastStatusView(BroadcastProvider.Local, null, BroadcastPhase.OffAir));
 
-    internal BroadcastManager(IRemoteEngine engine, IModResolver penumbra, SyncPrep prep, Configuration config)
-        : this(engine, penumbra, prep, config, new PrefetchTiming()) { }
+    internal BroadcastManager(IRemoteEngine engine, IModResolver penumbra, SyncPrep prep, Configuration config) : this(
+        engine, penumbra, prep, config, new PrefetchTiming()) { }
 
     internal BroadcastManager(
-        IRemoteEngine engine,
-        IModResolver penumbra,
-        SyncPrep prep,
-        Configuration config,
-        PrefetchTiming prefetchTiming,
-        BroadcastRetryTiming? retryTiming = null,
-        TimeSpan? providerDisposeTimeout = null)
+        IRemoteEngine engine, IModResolver penumbra, SyncPrep prep, Configuration config, PrefetchTiming prefetchTiming,
+        BroadcastRetryTiming? retryTiming = null, TimeSpan? providerDisposeTimeout = null)
     {
         this.penumbra = penumbra;
         this.prep = prep;
@@ -193,8 +206,8 @@ public sealed class BroadcastManager : IAsyncDisposable
         this.providerDisposeTimeout = providerDisposeTimeout ?? TimeSpan.FromSeconds(5);
         engineSession = new EngineSession(engine);
         prefetch = new PrefetchScheduler(prep, prefetchTiming,
-            (cursor, current, next, result) =>
-                Post(new PrefetchCompleted(cursor, current, next, result)));
+                                         (cursor, current, next, result) =>
+                                             Post(new PrefetchCompleted(cursor, current, next, result)));
         lifetimeToken = lifetimeCts.Token;
         mailbox = new SerializedMailbox<Message>(HandleMessage, OnMessageError, OnCompleted);
         currentLocal = Attach(BroadcastProvider.Local, LocalSource.CreateEmpty(engineSession));
@@ -207,6 +220,7 @@ public sealed class BroadcastManager : IAsyncDisposable
     public bool OnAir => published.Status.Phase != BroadcastPhase.OffAir;
     public BroadcastStatusView BroadcastStatus => published.Status;
     public BrowserLoadView BrowserLoad => browserLoad;
+
     /// <summary>The snapshot represented by CurrentPlayerData, or null when off air.</summary>
     public SourceSnapshot? CurrentSnapshot => published.Snapshot;
 
@@ -218,29 +232,33 @@ public sealed class BroadcastManager : IAsyncDisposable
     public async Task LoadFolder(string directory)
     {
         FolderTrackCatalogLoader loader;
-        try { loader = new FolderTrackCatalogLoader(directory); }
+        try
+        {
+            loader = new FolderTrackCatalogLoader(directory);
+        }
         catch (Exception e)
         {
             Plugin.Log.Error(e, "Failed to load broadcast source");
             FailBrowserLoad(e);
             return;
         }
+
         await LoadLocalSource(loader, null, null);
     }
 
-    public async Task LoadBeefweb(
-        int port,
-        string? user,
-        string? pass,
-        BeefwebTransport transport)
+    public async Task LoadBeefweb(int port, string? user, string? pass, BeefwebTransport transport)
     {
         Watcher watcher;
-        try { watcher = Watcher.Create(port, user, pass, transport); }
+        try
+        {
+            watcher = Watcher.Create(port, user, pass, transport);
+        }
         catch (Exception e)
         {
             Plugin.Log.Error(e, "Failed to load broadcast source");
             return;
         }
+
         await SetBeefwebSource(watcher);
     }
 
@@ -255,10 +273,9 @@ public sealed class BroadcastManager : IAsyncDisposable
         ModTrackCatalogLoader loader;
         try
         {
-            var directory = penumbra.ResolveModDirectory(modDirectoryName)
-                ?? throw new InvalidOperationException(
-                    $"Could not resolve Penumbra mod '{modDirectoryName}' "
-                    + "(Penumbra unavailable or mod missing)");
+            var directory = penumbra.ResolveModDirectory(modDirectoryName) ??
+                            throw new InvalidOperationException($"Could not resolve Penumbra mod '{modDirectoryName}' " +
+                                                                "(Penumbra unavailable or mod missing)");
             loader = new ModTrackCatalogLoader(directory);
         }
         catch (Exception e)
@@ -267,13 +284,12 @@ public sealed class BroadcastManager : IAsyncDisposable
             FailBrowserLoad(e);
             return;
         }
+
         await LoadLocalSource(loader, modDirectoryName, selectedGroupId);
     }
 
     internal async Task LoadLocalSource(
-        ITrackCatalogLoader loader,
-        string? modDirectoryName = null,
-        string? selectedGroupId = null)
+        ITrackCatalogLoader loader, string? modDirectoryName = null, string? selectedGroupId = null)
     {
         var request = Interlocked.Increment(ref browserLoadRequest);
         browserLoad = new BrowserLoadView(true, null);
@@ -289,8 +305,10 @@ public sealed class BroadcastManager : IAsyncDisposable
                 SetProvider(BroadcastProvider.Local);
                 if (request == Volatile.Read(ref browserLoadRequest))
                     browserLoad = new BrowserLoadView(false, null);
+            } finally
+            {
+                sourceGate.Release();
             }
-            finally { sourceGate.Release(); }
         }
         catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
         {
@@ -311,8 +329,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         await ChangeIntent(kind, true);
     }
 
-    internal Task InstallProviderForTests(BroadcastProvider kind, IMusicSource source)
-        => ReplaceProvider(kind, source);
+    internal Task InstallProviderForTests(BroadcastProvider kind, IMusicSource source) => ReplaceProvider(kind, source);
 
     private async Task ReplaceProvider(BroadcastProvider kind, IMusicSource source)
     {
@@ -322,6 +339,7 @@ public sealed class BroadcastManager : IAsyncDisposable
             await source.DisposeAsync();
             return;
         }
+
         await completion.Task;
     }
 
@@ -331,8 +349,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         browserLoad = new BrowserLoadView(false, error.Message);
     }
 
-    private static TaskCompletionSource NewCompletion()
-        => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource NewCompletion() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private async Task ChangeIntent(BroadcastProvider? provider, bool? enabled)
     {
@@ -355,6 +372,7 @@ public sealed class BroadcastManager : IAsyncDisposable
                     onAir = value;
                     ClearFailure();
                 }
+
                 Reconcile();
                 completion?.TrySetResult();
                 break;
@@ -363,10 +381,10 @@ public sealed class BroadcastManager : IAsyncDisposable
                 Reconcile();
                 break;
             case UnsyncableObserved(var provider, var source):
-                if (onAir
-                    && config.NotifyUnsyncableBroadcast
-                    && desiredProvider == BroadcastProvider.Beefweb
-                    && ReferenceEquals(currentBeefweb, provider))
+                if (onAir &&
+                    config.NotifyUnsyncableBroadcast &&
+                    desiredProvider == BroadcastProvider.Beefweb &&
+                    ReferenceEquals(currentBeefweb, provider))
                     NotifyUnsyncable(source);
                 break;
             case ProviderReplaced(var kind, var source, var completion):
@@ -382,6 +400,7 @@ public sealed class BroadcastManager : IAsyncDisposable
                     completion.TrySetException(e);
                     throw;
                 }
+
                 break;
             case PrepCompleted(var attempt, var result):
                 CompletePreparation(attempt, result);
@@ -404,6 +423,7 @@ public sealed class BroadcastManager : IAsyncDisposable
                 engineSession.OnEngineReconnected();
                 break;
         }
+
         PublishState();
         ReleaseUnusedProviders();
         return ValueTask.CompletedTask;
@@ -419,9 +439,9 @@ public sealed class BroadcastManager : IAsyncDisposable
 
         // Folder, Mod, and Mod Group share the local queue. Stop its monitor when
         // switching to Beefweb so hidden controls do not keep playing.
-        if (previous == BroadcastProvider.Local
-            && selected == BroadcastProvider.Beefweb
-            && currentLocal.Source is LocalSource local)
+        if (previous == BroadcastProvider.Local &&
+            selected == BroadcastProvider.Beefweb &&
+            currentLocal.Source is LocalSource local)
             local.Stop();
     }
 
@@ -448,6 +468,7 @@ public sealed class BroadcastManager : IAsyncDisposable
                 provider.UnsyncableHandler = value => Post(new UnsyncableObserved(provider, value));
                 watcher.OnUnsyncable += provider.UnsyncableHandler;
             }
+
             return provider;
         }
         catch
@@ -467,8 +488,9 @@ public sealed class BroadcastManager : IAsyncDisposable
         if (ReferenceEquals(activeAttempt?.Target.Provider, old)) activeAttempt = null;
     }
 
-    private ProviderInstance? CurrentProvider(BroadcastProvider kind)
-        => kind == BroadcastProvider.Local ? currentLocal : currentBeefweb;
+    private ProviderInstance? CurrentProvider(BroadcastProvider kind) =>
+        kind == BroadcastProvider.Local ? currentLocal : currentBeefweb;
+
     private ProviderInstance? DesiredProviderInstance() => CurrentProvider(desiredProvider);
 
     private void Reconcile()
@@ -501,15 +523,17 @@ public sealed class BroadcastManager : IAsyncDisposable
             if (activeAttempt is { } attempt && !IsLiveRefresh(attempt)) activeAttempt = null;
             return;
         }
-        if (committed is { } already
-            && ReferenceEquals(already.Provider, desired)
-            && ReferenceEquals(already.Cursor, desiredFrame.Cursor))
+
+        if (committed is { } already &&
+            ReferenceEquals(already.Provider, desired) &&
+            ReferenceEquals(already.Cursor, desiredFrame.Cursor))
         {
             activeAttempt = null;
             ClearFailureFor(desired, already.Input);
             RefreshProjection(already, desiredFrame);
             return;
         }
+
         StartPreparation(desired, desiredFrame);
     }
 
@@ -517,7 +541,10 @@ public sealed class BroadcastManager : IAsyncDisposable
     {
         var liveRefresh = ReferenceEquals(committed?.Provider, provider);
         PrepInput input;
-        try { input = PrepInput.Capture(frame.Snapshot.FilePath); }
+        try
+        {
+            input = PrepInput.Capture(frame.Snapshot.FilePath);
+        }
         catch (Exception e)
         {
             Plugin.Log.Error(e, "Cannot inspect preparation input {path}", frame.Snapshot.FilePath);
@@ -530,16 +557,13 @@ public sealed class BroadcastManager : IAsyncDisposable
 
         var target = new PreparationTarget(provider, frame.Cursor, input);
         if (activeAttempt is { } running && running.Target == target) return;
-        var retrying = failure is { Schedule: null, Exhausted: false } retry
-                       && ReferenceEquals(retry.Provider, provider)
-                       && retry.Input == input;
-        if (!retrying && failure is { } failed
-            && ReferenceEquals(failed.Provider, provider)
-            && failed.Input == input)
+        var retrying = failure is { Schedule: null, Exhausted: false } retry &&
+                       ReferenceEquals(retry.Provider, provider) &&
+                       retry.Input == input;
+        if (!retrying && failure is { } failed && ReferenceEquals(failed.Provider, provider) && failed.Input == input)
             return;
 
-        if (failure is { } oldFailure
-            && (!ReferenceEquals(oldFailure.Provider, provider) || oldFailure.Input != input))
+        if (failure is { } oldFailure && (!ReferenceEquals(oldFailure.Provider, provider) || oldFailure.Input != input))
             ClearFailure();
 
         var attempt = new PreparationAttempt(target);
@@ -549,21 +573,19 @@ public sealed class BroadcastManager : IAsyncDisposable
             CommitPrepared(attempt, prepared, artifact);
             return;
         }
+
         prefetch.Observe(null);
         _ = ReportPreparation(prep.PrepareActive(input), attempt);
     }
 
-    private bool TryPrepared(
-        PrepInput input,
-        out PreparedTrack prepared,
-        out SyncPrep.ArtifactLease artifact)
+    private bool TryPrepared(PrepInput input, out PreparedTrack prepared, out SyncPrep.ArtifactLease artifact)
     {
         if (prep.TryAcquire(input, out var success, out artifact))
         {
-            prepared = new PreparedTrack(
-                success.PreparedFilePath, success.Blake3Hash, success.Sha1Hash, success.GainDb);
+            prepared = new PreparedTrack(success.PreparedFilePath, success.Blake3Hash, success.Sha1Hash, success.GainDb);
             return true;
         }
+
         prepared = null!;
         artifact = null!;
         return false;
@@ -572,12 +594,16 @@ public sealed class BroadcastManager : IAsyncDisposable
     private async Task ReportPreparation(Task<PrepResult> task, PreparationAttempt attempt)
     {
         PrepResult result;
-        try { result = await task; }
+        try
+        {
+            result = await task;
+        }
         catch (Exception e)
         {
             Plugin.Log.Error(e, "sync-prep failed");
             result = new PrepResult.Failed(e);
         }
+
         Post(new PrepCompleted(attempt, result));
     }
 
@@ -587,9 +613,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         var target = attempt.Target;
         var liveRefresh = IsLiveRefresh(attempt);
         var latest = target.Provider.Source.Frame;
-        if (latest is null
-            || !ReferenceEquals(latest.Cursor, target.Cursor)
-            || !target.Input.IsCurrent())
+        if (latest is null || !ReferenceEquals(latest.Cursor, target.Cursor) || !target.Input.IsCurrent())
         {
             activeAttempt = null;
             Reconcile();
@@ -597,10 +621,9 @@ public sealed class BroadcastManager : IAsyncDisposable
         }
 
         // Refresh the current provider before completing a handoff.
-        if (!liveRefresh
-            && committed is { } current
-            && (current.Provider.Source.Frame is not { } currentLive
-                || !ReferenceEquals(currentLive.Cursor, current.Cursor)))
+        if (!liveRefresh &&
+            committed is { } current &&
+            (current.Provider.Source.Frame is not { } currentLive || !ReferenceEquals(currentLive.Cursor, current.Cursor)))
         {
             activeAttempt = null;
             Reconcile();
@@ -616,14 +639,12 @@ public sealed class BroadcastManager : IAsyncDisposable
 
         switch (result)
         {
-            case PrepResult.Successful success
-                when success.Input == target.Input
-                     && prep.TryAcquire(target.Input, out var acquired, out var artifact):
-                CommitPrepared(attempt, new PreparedTrack(
-                    acquired.PreparedFilePath,
-                    acquired.Blake3Hash,
-                    acquired.Sha1Hash,
-                    acquired.GainDb), artifact);
+            case PrepResult.Successful success when success.Input == target.Input &&
+                                                    prep.TryAcquire(target.Input, out var acquired, out var artifact):
+                CommitPrepared(
+                    attempt,
+                    new PreparedTrack(acquired.PreparedFilePath, acquired.Blake3Hash, acquired.Sha1Hash, acquired.GainDb),
+                    artifact);
                 break;
             case PrepResult.Failed:
             case PrepResult.Successful:
@@ -639,10 +660,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         }
     }
 
-    private void CommitPrepared(
-        PreparationAttempt attempt,
-        PreparedTrack prepared,
-        SyncPrep.ArtifactLease artifact)
+    private void CommitPrepared(PreparationAttempt attempt, PreparedTrack prepared, SyncPrep.ArtifactLease artifact)
     {
         if (!TryGetCurrentFrame(attempt, out var latest))
         {
@@ -651,6 +669,7 @@ public sealed class BroadcastManager : IAsyncDisposable
             Reconcile();
             return;
         }
+
         var old = committed;
         var oldPrefetch = preparedPrefetch;
         activeAttempt = null;
@@ -658,14 +677,8 @@ public sealed class BroadcastManager : IAsyncDisposable
         preparedPrefetch = null;
         var epoch = ++cursorEpoch;
         var data = Map(latest.Snapshot, prepared, null, epoch);
-        committed = new CommittedBroadcast(
-            attempt.Target.Provider,
-            attempt.Target.Cursor,
-            attempt.Target.Input,
-            latest.Snapshot,
-            prepared,
-            artifact,
-            data);
+        committed = new CommittedBroadcast(attempt.Target.Provider, attempt.Target.Cursor, attempt.Target.Input,
+                                           latest.Snapshot, prepared, artifact, data);
         Emit(data);
         old?.Artifact.Dispose();
         oldPrefetch?.Artifact.Dispose();
@@ -680,9 +693,7 @@ public sealed class BroadcastManager : IAsyncDisposable
         var target = attempt.Target;
 
         var candidateBefore = target.Provider.Source.Frame;
-        if (candidateBefore is null
-            || !ReferenceEquals(candidateBefore.Cursor, target.Cursor)
-            || !target.Input.IsCurrent())
+        if (candidateBefore is null || !ReferenceEquals(candidateBefore.Cursor, target.Cursor) || !target.Input.IsCurrent())
             return false;
 
         var liveRefresh = IsLiveRefresh(attempt);
@@ -692,14 +703,14 @@ public sealed class BroadcastManager : IAsyncDisposable
             if (live is null || !ReferenceEquals(live.Cursor, current.Cursor))
                 return false;
         }
+
         if (!liveRefresh && !ReferenceEquals(DesiredProviderInstance(), target.Provider))
             return false;
         latest = candidateBefore;
         return true;
     }
 
-    private bool IsLiveRefresh(PreparationAttempt attempt)
-        => ReferenceEquals(committed?.Provider, attempt.Target.Provider);
+    private bool IsLiveRefresh(PreparationAttempt attempt) => ReferenceEquals(committed?.Provider, attempt.Target.Provider);
 
     private void StopCommittedProvider()
     {
@@ -725,19 +736,16 @@ public sealed class BroadcastManager : IAsyncDisposable
     {
         if (!ReferenceEquals(current.Cursor, latest.Cursor)) return;
         PreparedPrefetch? retiredPrefetch = null;
-        if (preparedPrefetch is { } ready
-            && (!ReferenceEquals(latest.Cursor, ready.Cursor)
-                || latest.Snapshot.FilePath != ready.CurrentPath
-                || latest.Snapshot.NextFilePath != ready.OriginalPath))
+        if (preparedPrefetch is { } ready &&
+            (!ReferenceEquals(latest.Cursor, ready.Cursor) ||
+             latest.Snapshot.FilePath != ready.CurrentPath ||
+             latest.Snapshot.NextFilePath != ready.OriginalPath))
         {
             retiredPrefetch = ready;
             preparedPrefetch = null;
         }
-        var data = Map(
-            latest.Snapshot,
-            current.Track,
-            LivePrefetch(),
-            current.Data.Cursor.CursorEpoch);
+
+        var data = Map(latest.Snapshot, current.Track, LivePrefetch(), current.Data.Cursor.CursorEpoch);
         committed = current with { Snapshot = latest.Snapshot, Data = data };
         Emit(data);
         retiredPrefetch?.Artifact.Dispose();
@@ -746,21 +754,19 @@ public sealed class BroadcastManager : IAsyncDisposable
 
     private void RecordFailure(ProviderInstance provider, PrepInput input)
     {
-        var failures = failure is { } previous
-                       && ReferenceEquals(previous.Provider, provider)
-                       && previous.Input == input
-            ? previous.Failures + 1
-            : 1;
+        var failures = failure is { } previous && ReferenceEquals(previous.Provider, provider) && previous.Input == input
+                           ? previous.Failures + 1
+                           : 1;
         ClearFailure();
         if (failures > retryDelays.Length)
         {
-            failure = new FailureState(provider, input, failures, null, Exhausted: true);
+            failure = new FailureState(provider, input, failures, null, true);
             PublishState();
             return;
         }
 
         var retry = new RetrySchedule();
-        failure = new FailureState(provider, input, failures, retry, Exhausted: false);
+        failure = new FailureState(provider, input, failures, retry, false);
         _ = PostRetryAfterDelay(retry, retryDelays[failures - 1]);
         PublishState();
     }
@@ -778,16 +784,15 @@ public sealed class BroadcastManager : IAsyncDisposable
 
     private void CompleteRetry(RetrySchedule retry)
     {
-        if (failure is not { } waiting
-            || !ReferenceEquals(waiting.Schedule, retry))
+        if (failure is not { } waiting || !ReferenceEquals(waiting.Schedule, retry))
             return;
         retry.Cancellation.Dispose();
         failure = waiting with { Schedule = null };
 
-        if (!onAir
-            || (!ReferenceEquals(DesiredProviderInstance(), waiting.Provider)
-                && !ReferenceEquals(committed?.Provider, waiting.Provider))
-            || waiting.Provider.Source.Frame is not { } frame)
+        if (!onAir ||
+            (!ReferenceEquals(DesiredProviderInstance(), waiting.Provider) &&
+             !ReferenceEquals(committed?.Provider, waiting.Provider)) ||
+            waiting.Provider.Source.Frame is not { } frame)
         {
             ClearFailure();
             Reconcile();
@@ -795,33 +800,37 @@ public sealed class BroadcastManager : IAsyncDisposable
         }
 
         PrepInput latestInput;
-        try { latestInput = PrepInput.Capture(frame.Snapshot.FilePath); }
+        try
+        {
+            latestInput = PrepInput.Capture(frame.Snapshot.FilePath);
+        }
         catch
         {
-            if (waiting.Input.LastWriteTicks == 0
-                && waiting.Input.Length == 0
-                && waiting.Input.FilePath == frame.Snapshot.FilePath)
+            if (waiting.Input.LastWriteTicks == 0 &&
+                waiting.Input.Length == 0 &&
+                waiting.Input.FilePath == frame.Snapshot.FilePath)
             {
                 RecordFailure(waiting.Provider, waiting.Input);
                 Reconcile();
                 return;
             }
+
             latestInput = default;
         }
+
         if (latestInput != waiting.Input)
         {
             ClearFailure();
             Reconcile();
             return;
         }
+
         StartPreparation(waiting.Provider, frame);
     }
 
     private void ClearFailureFor(ProviderInstance provider, PrepInput input)
     {
-        if (failure is { } value
-            && ReferenceEquals(value.Provider, provider)
-            && value.Input == input)
+        if (failure is { } value && ReferenceEquals(value.Provider, provider) && value.Input == input)
             ClearFailure();
     }
 
@@ -832,46 +841,36 @@ public sealed class BroadcastManager : IAsyncDisposable
             retry.Cancellation.Cancel();
             retry.Cancellation.Dispose();
         }
+
         failure = null;
     }
 
-    private void CompletePrefetch(
-        SourceCursor cursor,
-        string currentPath,
-        string nextPath,
-        PrepResult.Successful result)
+    private void CompletePrefetch(SourceCursor cursor, string currentPath, string nextPath, PrepResult.Successful result)
     {
-        if (committed is not { } current
-            || !ReferenceEquals(current.Cursor, cursor)
-            || current.Snapshot.FilePath != currentPath
-            || current.Provider.Source.Frame is not { } live
-            || !ReferenceEquals(live.Cursor, cursor)
-            || live.Snapshot.FilePath != currentPath
-            || live.Snapshot.NextFilePath != nextPath
-            || result.Input.FilePath != nextPath
-            || !result.Input.IsCurrent())
+        if (committed is not { } current ||
+            !ReferenceEquals(current.Cursor, cursor) ||
+            current.Snapshot.FilePath != currentPath ||
+            current.Provider.Source.Frame is not { } live ||
+            !ReferenceEquals(live.Cursor, cursor) ||
+            live.Snapshot.FilePath != currentPath ||
+            live.Snapshot.NextFilePath != nextPath ||
+            result.Input.FilePath != nextPath ||
+            !result.Input.IsCurrent())
             return;
         if (!prep.TryAcquire(result.Input, out var acquired, out var artifact)) return;
         var oldPrefetch = preparedPrefetch;
         preparedPrefetch = null;
-        preparedPrefetch = new PreparedPrefetch(
-            cursor,
-            currentPath,
-            nextPath,
-            new PreparedTrack(
-                acquired.PreparedFilePath,
-                acquired.Blake3Hash,
-                acquired.Sha1Hash,
-                acquired.GainDb),
-            artifact);
+        preparedPrefetch = new PreparedPrefetch(cursor, currentPath, nextPath,
+                                                new PreparedTrack(acquired.PreparedFilePath, acquired.Blake3Hash,
+                                                                  acquired.Sha1Hash, acquired.GainDb), artifact);
         var data = Map(live.Snapshot, current.Track, LivePrefetch(), current.Data.Cursor.CursorEpoch);
         committed = current with { Snapshot = live.Snapshot, Data = data };
         Emit(data);
         oldPrefetch?.Artifact.Dispose();
     }
 
-    private PreparedTrack? LivePrefetch()
-        => preparedPrefetch is { Track: var track } && File.Exists(track.SyncPath) ? track : null;
+    private PreparedTrack? LivePrefetch() =>
+        preparedPrefetch is { Track: var track } && File.Exists(track.SyncPath) ? track : null;
 
     private static void NotifyUnsyncable(UnsyncableSource source)
     {
@@ -885,13 +884,12 @@ public sealed class BroadcastManager : IAsyncDisposable
             _ => "could not be read",
         };
 
-        if (source.Reason == UnsyncableReason.FileDoesNotExist
-            && Dalamud.Utility.Util.IsWine())
-            reason = "failed a Linux file existence check; try enabling 'Hack: Force locale to C.utf8' in XIVLauncher if the path contains non-Latin characters";
+        if (source.Reason == UnsyncableReason.FileDoesNotExist && Dalamud.Utility.Util.IsWine())
+            reason =
+                "failed a Linux file existence check; try enabling 'Hack: Force locale to C.utf8' in XIVLauncher if the path contains non-Latin characters";
 
-        ChatNotifier.Warning(
-            "Can't broadcast: ",
-            $"'{source.Track}' {reason}. We can't sync this. Your listeners won't hear it.");
+        ChatNotifier.Warning("Can't broadcast: ",
+                             $"'{source.Track}' {reason}. We can't sync this. Your listeners won't hear it.");
     }
 
     private void PublishState()
@@ -899,20 +897,18 @@ public sealed class BroadcastManager : IAsyncDisposable
         var desired = DesiredProviderInstance();
         var desiredFrame = desired?.Source.Frame;
         var live = committed?.Provider;
-        var handoffPending = onAir
-                             && failure is null
-                             && desiredFrame is not null
-                             && (live is null || !ReferenceEquals(live, desired)
-                                              || !ReferenceEquals(
-                                                  committed?.Cursor,
-                                                  desiredFrame.Cursor));
-        var phase = !onAir ? BroadcastPhase.OffAir
-            : failure is { Exhausted: true } ? BroadcastPhase.Failed
-            : failure is not null ? BroadcastPhase.Retrying
-            : handoffPending && live is not null ? BroadcastPhase.Switching
-            : handoffPending ? BroadcastPhase.Starting
-            : live is not null ? BroadcastPhase.Live
-            : BroadcastPhase.Starting;
+        var handoffPending = onAir &&
+                             failure is null &&
+                             desiredFrame is not null &&
+                             (live is null ||
+                              !ReferenceEquals(live, desired) ||
+                              !ReferenceEquals(committed?.Cursor, desiredFrame.Cursor));
+        var phase = !onAir ? BroadcastPhase.OffAir :
+                    failure is { Exhausted: true } ? BroadcastPhase.Failed :
+                    failure is not null ? BroadcastPhase.Retrying :
+                    handoffPending && live is not null ? BroadcastPhase.Switching :
+                    handoffPending ? BroadcastPhase.Starting :
+                    live is not null ? BroadcastPhase.Live : BroadcastPhase.Starting;
         var status = new BroadcastStatusView(desiredProvider, live?.Kind, phase);
         published = new PublishedState(committed?.Snapshot, committed?.Data, status);
     }
@@ -936,9 +932,11 @@ public sealed class BroadcastManager : IAsyncDisposable
                     currentArtifact.Dispose();
                     throw new IOException($"Cannot publish missing prefetch artifact: {data.PrefetchPath}");
                 }
+
                 artifacts.Add(prefetchArtifact);
             }
         }
+
         lastAnnounced = data;
         var publication = new BroadcastOutput.PlayerDataChanged(data, artifacts);
         if (!outputs.Writer.TryWrite(publication)) publication.Dispose();
@@ -951,19 +949,9 @@ public sealed class BroadcastManager : IAsyncDisposable
         outputs.Writer.TryWrite(new BroadcastOutput.BroadcastingChanged(value));
     }
 
-    private BroadcastPlayerData Map(
-        SourceSnapshot snapshot,
-        PreparedTrack current,
-        PreparedTrack? prefetch,
-        long epoch)
-        => new(
-            current.SyncPath,
-            current.Blake3Hash,
-            current.Sha1Hash,
-            prefetch?.SyncPath ?? "",
-            prefetch?.Blake3Hash ?? "",
-            prefetch?.Sha1Hash ?? "",
-            new PulsarCursor
+    private BroadcastPlayerData Map(SourceSnapshot snapshot, PreparedTrack current, PreparedTrack? prefetch, long epoch) =>
+        new(current.SyncPath, current.Blake3Hash, current.Sha1Hash, prefetch?.SyncPath ?? "", prefetch?.Blake3Hash ?? "",
+            prefetch?.Sha1Hash ?? "", new PulsarCursor
             {
                 PositionMs = (long)snapshot.Position.TotalMilliseconds,
                 IsPlaying = snapshot.IsPlaying,
@@ -976,9 +964,9 @@ public sealed class BroadcastManager : IAsyncDisposable
     {
         foreach (var provider in new List<ProviderInstance>(providers))
         {
-            if (ReferenceEquals(provider, committed?.Provider)
-                || ReferenceEquals(provider, activeAttempt?.Target.Provider)
-                || ReferenceEquals(provider, CurrentProvider(provider.Kind)))
+            if (ReferenceEquals(provider, committed?.Provider) ||
+                ReferenceEquals(provider, activeAttempt?.Target.Provider) ||
+                ReferenceEquals(provider, CurrentProvider(provider.Kind)))
                 continue;
             Retire(provider);
         }
@@ -989,21 +977,28 @@ public sealed class BroadcastManager : IAsyncDisposable
         if (!providers.Remove(provider)) return;
         if (provider.ChangedHandler is { } changedHandler)
         {
-            try { provider.Source.OnChanged -= changedHandler; }
+            try
+            {
+                provider.Source.OnChanged -= changedHandler;
+            }
             catch (Exception e)
             {
                 Plugin.Log.Verbose($"retired broadcast provider detach failed: {e.Message}");
             }
         }
-        if (provider.Source is Watcher watcher
-            && provider.UnsyncableHandler is { } unsyncableHandler)
+
+        if (provider.Source is Watcher watcher && provider.UnsyncableHandler is { } unsyncableHandler)
         {
-            try { watcher.OnUnsyncable -= unsyncableHandler; }
+            try
+            {
+                watcher.OnUnsyncable -= unsyncableHandler;
+            }
             catch (Exception e)
             {
                 Plugin.Log.Verbose($"retired Beefweb warning detach failed: {e.Message}");
             }
         }
+
         var disposal = DisposeProvider(provider.Source);
         retirements.Add(disposal);
         _ = ReportDisposal(disposal);
@@ -1018,24 +1013,37 @@ public sealed class BroadcastManager : IAsyncDisposable
     private async Task DisposeProvider(IMusicSource source)
     {
         Task disposal;
-        try { disposal = source.DisposeAsync().AsTask(); }
+        try
+        {
+            disposal = source.DisposeAsync().AsTask();
+        }
         catch (Exception e)
         {
             Plugin.Log.Verbose($"broadcast provider disposal failed: {e.Message}");
             return;
         }
-        try { await disposal.WaitAsync(providerDisposeTimeout); }
+
+        try
+        {
+            await disposal.WaitAsync(providerDisposeTimeout);
+        }
         catch (TimeoutException)
         {
             Plugin.Log.Warning("Timed out retiring broadcast provider {provider}", source.GetType().Name);
             _ = ObserveLateDisposal(disposal);
         }
-        catch (Exception e) { Plugin.Log.Verbose($"retired broadcast provider disposal failed: {e.Message}"); }
+        catch (Exception e)
+        {
+            Plugin.Log.Verbose($"retired broadcast provider disposal failed: {e.Message}");
+        }
     }
 
     private static async Task ObserveLateDisposal(Task disposal)
     {
-        try { await disposal; }
+        try
+        {
+            await disposal;
+        }
         catch (Exception e)
         {
             Plugin.Log.Verbose($"abandoned broadcast provider disposal failed: {e.Message}");
