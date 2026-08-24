@@ -23,7 +23,7 @@ public sealed class ParentWatchdog(int parentProcessId, IHostApplicationLifetime
         try
         {
             using var parent = Process.GetProcessById(parentProcessId);
-            await parent.WaitForExitAsync(lifetime.ApplicationStopping);
+            await Task.Run(parent.WaitForExit).WaitAsync(lifetime.ApplicationStopping);
             Log.Information("Parent process {pid} exited; shutting down", parentProcessId);
         }
         catch (OperationCanceledException)
