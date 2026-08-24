@@ -29,6 +29,7 @@ jobs:
                 with:
                     ref: ${{ github.event.release.tag_name }}
                     fetch-depth: 0
+                    submodules: recursive
 
             -   name: Install .NET
                 uses: actions/setup-dotnet@v5
