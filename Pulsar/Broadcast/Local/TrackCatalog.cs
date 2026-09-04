@@ -106,13 +106,19 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
         foreach (var track in baseCatalog.AllFiles.Tracks) byRelativePath.TryAdd(track.RelativePath, track);
         var groups = new List<TrackGroup> { baseCatalog.AllFiles };
 
+        // support new penumbra
+        if (TryReadEmbeddedGroups(byRelativePath, groups, cancellationToken)) return new TrackCatalog(groups);
+
         foreach (var groupFile in Directory.EnumerateFiles(RootDirectory, "group_*.json", SearchOption.TopDirectoryOnly)
                                            .OrderBy(path => path, NaturalPathComparer.Instance))
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                if (TryReadGroup(groupFile, byRelativePath, out var group)) groups.Add(group);
+                using var document = ParseJson(groupFile);
+                if (TryReadGroup(document.RootElement, Path.GetFileName(groupFile),
+                                 Path.GetFileNameWithoutExtension(groupFile), byRelativePath, out var group))
+                    groups.Add(group);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
             {
@@ -123,17 +129,59 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
         return new TrackCatalog(groups);
     }
 
-    private static bool TryReadGroup(
-        string groupFile, IReadOnlyDictionary<string, LocalTrack> byRelativePath, out TrackGroup group)
+    private bool TryReadEmbeddedGroups(
+        IReadOnlyDictionary<string, LocalTrack> byRelativePath, ICollection<TrackGroup> groups,
+        CancellationToken cancellationToken)
     {
-        group = null!;
-        using var document = JsonDocument.Parse(File.ReadAllBytes(groupFile), new JsonDocumentOptions
+        var metaFile = Path.Combine(RootDirectory, "meta.json");
+        if (!File.Exists(metaFile)) return false;
+
+        try
+        {
+            using var document = ParseJson(metaFile);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("Groups", out var embeddedGroups) ||
+                embeddedGroups.ValueKind != JsonValueKind.Array)
+                return false;
+
+            var groupIndex = 0;
+            foreach (var embeddedGroup in embeddedGroups.EnumerateArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var id = embeddedGroup.ValueKind == JsonValueKind.Object &&
+                         embeddedGroup.TryGetProperty("Id", out var idElement) &&
+                         idElement.ValueKind == JsonValueKind.String &&
+                         !string.IsNullOrWhiteSpace(idElement.GetString())
+                             ? idElement.GetString()!
+                             : $"meta.json#group-{groupIndex + 1:D3}";
+                if (TryReadGroup(embeddedGroup, id, $"Group {groupIndex + 1}", byRelativePath, out var group))
+                    groups.Add(group);
+                groupIndex++;
+            }
+
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Plugin.Log.Warning(e, "Ignoring unreadable Penumbra metadata file {path}", metaFile);
+            return false;
+        }
+    }
+
+    private static JsonDocument ParseJson(string path) =>
+        JsonDocument.Parse(File.ReadAllBytes(path), new JsonDocumentOptions
         {
             AllowTrailingCommas = true,
             CommentHandling = JsonCommentHandling.Skip,
             MaxDepth = 32,
         });
-        var root = document.RootElement;
+
+    private static bool TryReadGroup(
+        JsonElement root, string id, string fallbackName,
+        IReadOnlyDictionary<string, LocalTrack> byRelativePath, out TrackGroup group)
+    {
+        group = null!;
         if (root.ValueKind != JsonValueKind.Object ||
             !root.TryGetProperty("Type", out var type) ||
             type.ValueKind != JsonValueKind.String ||
@@ -217,8 +265,8 @@ public sealed class ModTrackCatalogLoader(string rootDirectory) : ITrackCatalogL
                    groupName.ValueKind == JsonValueKind.String &&
                    !string.IsNullOrWhiteSpace(groupName.GetString())
                        ? groupName.GetString()!
-                       : Path.GetFileNameWithoutExtension(groupFile);
-        group = new TrackGroup(Path.GetFileName(groupFile), name, tracks);
+                       : fallbackName;
+        group = new TrackGroup(id, name, tracks);
         return true;
     }
 

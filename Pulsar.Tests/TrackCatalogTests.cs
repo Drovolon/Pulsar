@@ -99,6 +99,64 @@ public sealed class TrackCatalogTests : IDisposable
     }
 
     [Fact]
+    public async Task Mod_catalog_reads_penumbra_v4_groups_embedded_in_metadata()
+    {
+        Track("soundy/songs/one.scd");
+        Track("soundy/songs/two.scd");
+        Group("meta.json", """
+                           {
+                             "FileVersion": 4,
+                             "Groups": [
+                               {
+                                 "Type": "Single",
+                                 "Id": "5d4841fe-72c2-48c2-bfea-bc738bb145a8",
+                                 "Name": "MUSIC // ROCK",
+                                 "Options": [
+                                   { "Id": "10000000-0000-0000-0000-000000000001", "Name": "One", "Files": {
+                                       "sound/dam.scd": "soundy\\songs\\one.scd" } },
+                                   { "Id": "10000000-0000-0000-0000-000000000002", "Name": "Two", "Files": {
+                                       "sound/dam.scd": "soundy\\songs\\two.scd" } }
+                                 ]
+                               }
+                             ]
+                           }
+                           """);
+
+        var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
+
+        Assert.Equal(2, catalog.Groups.Count);
+        var rock = catalog.Groups[1];
+        Assert.Equal("5d4841fe-72c2-48c2-bfea-bc738bb145a8", rock.Id);
+        Assert.Equal("MUSIC // ROCK", rock.Name);
+        Assert.Equal(["One", "Two"], rock.Tracks.Select(track => track.DisplayName));
+    }
+
+    [Fact]
+    public async Task Embedded_penumbra_v4_groups_take_precedence_over_legacy_group_files()
+    {
+        Track("songs/one.scd");
+        Track("songs/two.scd");
+        Group("meta.json", """
+                           { "FileVersion": 4, "Groups": [
+                             { "Type": "Single", "Id": "new-group", "Name": "NEW", "Options": [
+                               { "Name": "One", "Files": { "sound/dam.scd": "songs/one.scd" } },
+                               { "Name": "Two", "Files": { "sound/dam.scd": "songs/two.scd" } }
+                             ] }
+                           ] }
+                           """);
+        Group("group_001_old.json", """
+                                      { "Name": "OLD", "Type": "Single", "Options": [
+                                        { "Name": "One", "Files": { "sound/dam.scd": "songs/one.scd" } },
+                                        { "Name": "Two", "Files": { "sound/dam.scd": "songs/two.scd" } }
+                                      ] }
+                                      """);
+
+        var catalog = await new ModTrackCatalogLoader(dir.FullName).LoadAsync();
+
+        Assert.Equal([TrackCatalog.AllFilesName, "NEW"], catalog.Groups.Select(group => group.Name));
+    }
+
+    [Fact]
     public async Task Malformed_root_groups_and_valid_backup_groups_leave_only_all_files()
     {
         Track("song.scd");
