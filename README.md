@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Drovolon/Pulsar/main/Pulsar/images/logo.png" />
+  <img src="https://raw.githubusercontent.com/Drovolon/Pulsar/main/Pulsar/images/logo.png" width="256" height="256" />
 </p>
 
 # Pulsar
