@@ -40,6 +40,9 @@
 
     <ItemGroup>
         <Content Include="Pulsar.json"/>
+        <Content Include="images/icon.png">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
 
     <Target Name="SetPulsarSourceRevisionId" BeforeTargets="InitializeSourceControlInformationFromSourceControlManager;InitializeSourceControlInformation" Condition="'$(SourceRevisionId)' == ''">

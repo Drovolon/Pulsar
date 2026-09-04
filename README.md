@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Drovolon/Pulsar/main/Pulsar/images/icon.png" />
+</p>
+
 # Pulsar
 
 **NOTE: PULSAR IS AN UNRELEASED WORK IN PROGRESS.** Release ETA: late August / early Sept.

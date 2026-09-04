@@ -3,6 +3,7 @@
     "Name": "Pulsar",
     "Punchline": "A plugin to sync sound files.",
     "Description": "A plugin to sync sound files. /pulsar to open config. Requires a compatible sync plugin, like Lightless.",
+    "IconUrl": "https://raw.githubusercontent.com/Drovolon/Pulsar/main/Pulsar/images/icon.png",
     "ApplicableVersion": "any",
     "Tags": [
         "sync",
