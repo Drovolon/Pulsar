@@ -4,14 +4,11 @@
 
 # Pulsar
 
-**NOTE: PULSAR IS AN UNRELEASED WORK IN PROGRESS.** Release ETA: late August / early Sept.
-
 Pulsar is a music plugin for the Mare family of syncing services. To use Pulsar:
 
 * Both the DJ **and** the listener must have Pulsar installed.
 * Both must be using a sync service that supports Pulsar.
-    * At the time of writing: none does.
-    * At release: Lightless will.
+    * At the time of writing: Lightless does.
     * We hope other syncs will integrate it, too. (That's why it's a separate plugin and not integrated directly in
       Lightless.)
 
