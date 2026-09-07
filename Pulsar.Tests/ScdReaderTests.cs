@@ -149,6 +149,19 @@ public class ScdReaderTests : IDisposable
     }
 
     [Fact]
+    public void Folder_conversion_writes_the_lumina_vorbis_stream_unchanged()
+    {
+        WriteVorbisScd("audio.scd", "OggS"u8.ToArray(), [1, 2, 3, 4]);
+        using var gameData = CreateDiskOnlyGameData();
+        var output = Path.Combine(dir.FullName, "output");
+
+        ScdFolderConverter.Convert(dir.FullName, output, path => ScdReader.ExtractAudio(path, gameData),
+                                   _ => { }, CancellationToken.None);
+
+        Assert.Equal([.. "OggS"u8, 1, 2, 3, 4], File.ReadAllBytes(Path.Combine(output, "audio.ogg")));
+    }
+
+    [Fact]
     public async Task Scd_dispatch_sends_extracted_bytes_to_both_hosts()
     {
         var path = Write("wire.scd", [.. "SEDBSSCF"u8]);

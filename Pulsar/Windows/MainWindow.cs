@@ -40,7 +40,7 @@ public class MainWindow : Window, IDisposable
 
         listeningTab = new ListeningTab(plugin, theme);
         broadcastTab = new BroadcastTab(plugin, fileDialogManager, theme);
-        configTab = new ConfigTab(plugin, theme);
+        configTab = new ConfigTab(plugin, fileDialogManager, theme);
         debugTab = new DebugTab(plugin, fileDialogManager);
     }
 
@@ -94,6 +94,7 @@ public class MainWindow : Window, IDisposable
     public void Dispose()
     {
         fileDialogManager.Reset();
+        configTab.Dispose();
         theme.Dispose();
     }
 
