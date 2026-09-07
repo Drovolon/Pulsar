@@ -44,6 +44,50 @@ public class ListeningManagerTests : IAsyncLifetime
 
     // ---- liveness --------------------------------------------------------------------
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Startup_without_a_host_keeps_processing_intent_and_reconciles_on_connection(bool autoPlay)
+    {
+        engine.Intercept = op => op == "GetState" ? new StreamJsonRpc.ConnectionLostException("host starting") : null;
+        var lm = Create();
+        lm.SetMasterVolume(0.25f);
+        lm.AddOrUpdatePair(1, "Alice", Playing(AliceTrack));
+
+        var output = await TestWait.Within(lm.Outputs.ReadAsync().AsTask(), "source discovery before host connection");
+        Assert.IsType<ListeningOutput.NearbyBroadcastDetected>(output);
+        Assert.Empty(engine.Calls);
+
+        lm.SetAutoPlay(autoPlay);
+        lm.AddOrUpdatePair(1, "Alice", Playing(BobTrack, 2));
+        await TestWait.Assert(() => lm.AutoPlay == autoPlay && lm.View is [{ FilePath: BobTrack }],
+                              "latest settings and source data are accepted while disconnected");
+        Assert.Empty(engine.Calls);
+
+        var refreshed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.Intercept = op =>
+        {
+            if (op == "GetState") refreshed.TrySetResult();
+            return null;
+        };
+        lm.OnEngineReconnected();
+        await TestWait.Within(refreshed.Task, "reconnect triggers a fresh state query");
+        if (autoPlay)
+        {
+            await TestWait.Assert(() => lm.ActiveNowPlaying && engine.Snapshot.Path == BobTrack,
+                                  "connection applies the latest target without another pair update");
+            Assert.Equal(0.25f, engine.LastVolume);
+            Assert.Equal(1, LoadCount);
+        }
+        else
+        {
+            lm.AddOrUpdatePair(2, "Bob", Playing(BobTrack));
+            await TestWait.Within(lm.Outputs.ReadAsync().AsTask(), "source discovery after reconnect");
+            Assert.Equal(0, LoadCount);
+            Assert.False(lm.ActiveNowPlaying);
+        }
+    }
+
     [Fact]
     public async Task Mutators_never_block_even_while_the_reconcile_loop_is_parked_in_a_wedged_rpc()
     {

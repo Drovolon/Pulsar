@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using NAudio.Wave;
 using Pulsar.Common.Api;
 using Pulsar.Playback;
+using StreamJsonRpc;
 
 namespace Pulsar.Listening;
 
@@ -432,7 +433,20 @@ public class ListeningManager : IAsyncDisposable
         if (activeId is { } aid)
             active = pairs[aid];
 
-        var snapshot = await engineSession.RefreshAsync(token);
+        EngineSnapshot snapshot;
+        try
+        {
+            snapshot = await engineSession.RefreshAsync(token);
+        }
+        catch (ConnectionLostException)
+        {
+            // Happens during startup and if the listening host restarts. Otherwise, this logs an error
+            // which annoys me ("Pulsar is producing errors..." notification from Dalamud).
+            // OnEngineReconnected will trigger a fresh reconcile once the host is available.
+            Plugin.Log.Debug("Listening reconciliation deferred: waiting for the audio host to connect");
+            return;
+        }
+
         PublishEngineSnapshot(snapshot);
         var current = activeId == appliedSourceId ? appliedData : null;
         var action = SyncDecider.Decide(current, active?.Data, snapshot);
