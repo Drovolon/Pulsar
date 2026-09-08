@@ -17,8 +17,9 @@ public static class AudioReaderFactory
     {
         try
         {
-            // Try libsndfile first. We ship the .dll, so this should be cross-platform (for what it supports)
-            return new SoundFileReader(path);
+            // NAudio's SoundFileReader uses sf_open, which doesn't support UTF-8, apparently.
+            // So we open ourselves in .NET land, then pass the stream to NAudio.
+            return new OwnedSoundFileReader(File.OpenRead(path));
         }
         catch (Exception e)
         {
@@ -32,5 +33,61 @@ public static class AudioReaderFactory
     /// <summary>
     /// Open raw bytes, used for .scd. Only uses libsndfile, since we only support loading Vorbis .scd's.
     /// </summary>
-    public static WaveStream OpenBytes(byte[] data) => new SoundFileReader(new MemoryStream(data, false));
+    public static WaveStream OpenBytes(byte[] data) => new OwnedSoundFileReader(new MemoryStream(data, false));
+
+    // SoundFileReader leaves its input stream open. Own both resources for the returned reader's lifetime.
+    private sealed class OwnedSoundFileReader : WaveStream, ISampleProvider
+    {
+        private readonly Stream input;
+        private readonly SoundFileReader reader;
+
+        public OwnedSoundFileReader(Stream input)
+        {
+            this.input = input;
+            try
+            {
+                reader = new SoundFileReader(input);
+            }
+            catch
+            {
+                input.Dispose();
+                throw;
+            }
+        }
+
+        public override WaveFormat WaveFormat => reader.WaveFormat;
+        public override bool CanSeek => reader.CanSeek;
+        public override long Length => reader.Length;
+        public override long Position
+        {
+            get => reader.Position;
+            set => reader.Position = value;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => reader.Read(buffer, offset, count);
+        public override int Read(Span<byte> buffer) => reader.Read(buffer);
+        public int Read(Span<float> buffer) => reader.Read(buffer);
+
+        protected override void Dispose(bool disposing)
+        {
+            try
+            {
+                if (disposing)
+                {
+                    try
+                    {
+                        reader.Dispose();
+                    }
+                    finally
+                    {
+                        input.Dispose();
+                    }
+                }
+            }
+            finally
+            {
+                base.Dispose(disposing);
+            }
+        }
+    }
 }
