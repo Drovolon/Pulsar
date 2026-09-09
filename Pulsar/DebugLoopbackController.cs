@@ -43,6 +43,7 @@ internal sealed class DebugLoopbackController : IAsyncDisposable
 
     private ValueTask HandleMessage(Message message)
     {
+        Plugin.Log.Debug("debug loopback processed: {message}", message);
         switch (message)
         {
             case EnabledSet(var value):

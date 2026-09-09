@@ -127,7 +127,8 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             { Phase: BroadcastPhase.Switching, LiveProvider: { } live } =>
                 $"Broadcasting from {ProviderLabel(live)}; switching to {ProviderLabel(status.DesiredProvider)}...",
             { Phase: BroadcastPhase.Live, LiveProvider: { } live } => $"Broadcasting from {ProviderLabel(live)}.",
-            _ => $"Enabling {ProviderLabel(status.DesiredProvider)} playback...",
+            { Phase: BroadcastPhase.Starting, LiveProvider: null } => $"Starting... (make sure you're playing something below)",
+            _ => $"Enabling...",
         };
         ImGui.TextDisabled(text);
         if (status is { Phase: BroadcastPhase.Failed })

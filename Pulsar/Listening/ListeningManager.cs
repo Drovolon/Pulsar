@@ -260,6 +260,7 @@ public class ListeningManager : IAsyncDisposable
 
     private void Apply(Message message)
     {
+        Plugin.Log.Debug("ListeningManager applying {message}", message);
         switch (message)
         {
             case PairUpdated(var ident, var displayName, var data):
@@ -428,6 +429,7 @@ public class ListeningManager : IAsyncDisposable
         var previousAppliedData = appliedData;
         var activeId = ResolveActive();
         selectedSourceId = activeId;
+        Plugin.Log.Debug("selected source: {selectedSourceId}", selectedSourceId ?? 0);
 
         PairState? active = null;
         if (activeId is { } aid)
@@ -447,9 +449,11 @@ public class ListeningManager : IAsyncDisposable
             return;
         }
 
+        Plugin.Log.Debug("engine snapshot: {snapshot}", snapshot);
         PublishEngineSnapshot(snapshot);
         var current = activeId == appliedSourceId ? appliedData : null;
         var action = SyncDecider.Decide(current, active?.Data, snapshot);
+        Plugin.Log.Debug("decided action: {action}", action);
 
         if (action is EngineAction.Wait)
         {

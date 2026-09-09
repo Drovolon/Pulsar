@@ -914,6 +914,7 @@ public sealed class BroadcastManager : IAsyncDisposable
                     live is not null ? BroadcastPhase.Live : BroadcastPhase.Starting;
         var status = new BroadcastStatusView(desiredProvider, live?.Kind, phase);
         published = new PublishedState(committed?.Snapshot, committed?.Data, status);
+        Plugin.Log.Debug("Published state: {@published}", published);
     }
 
     private void Emit(BroadcastPlayerData? data)
