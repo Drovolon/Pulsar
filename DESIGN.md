@@ -27,6 +27,7 @@ These are a rough sketch of how I wanted the design to play out.
 * Implementing audio file tag (ID3v2) support (again, use media player)
 * Implementing our own file sync solution - let the sync platforms handle that
 * Syncing any kind of DSP (equalizer, etc.) - sync is purely `(file, playback cursor)`
+* Supporting audio streams instead of files
 * Supporting anything except audio
 
 ## Ecosystem Position
@@ -73,9 +74,6 @@ The plugin supervises and restarts hosts gracefully. For example, while listenin
 Pulsar.AudioHost.Listening process would result in a brief interruption in music playback. Notably, when the new process
 is spawned, the plugin re-loads the previous track *where it left off*. So it *literally* sounds like playback skipping
 some number of milliseconds.
-
-Additionally, `Pulsar.Tests` and `Pulsar.Tests.StubHost` are pretty comprehensive test projects. Caveat emptor: both
-test projects were LLM-generated, albeit with a lot of guidance.
 
 ### Actors
 
@@ -276,7 +274,7 @@ libsndfile.
 
 This was an area of in-depth research during initial design. I ultimately made these choices:
 
-* Managed audio libraries like Concertus (for Opus) have crash safety and security benefits, but appear to be much less
+* Managed audio libraries like Concentus (for Opus) have crash safety and security benefits, but appear to be much less
   maintained than the native, unmanaged libraries like libopus and libsndfile.
 * Since managed code was out, I decided to separate the audio processing code from the game process through the host
   subprocesses. This added a huge amount of complexity, but in return the game is insulated from unmanaged exceptions

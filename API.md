@@ -47,7 +47,9 @@ This *shouldn't* be too difficult to sync:
 4. on the receiving client, if `data == null`, call `ClearPlayerData(addr)`
 5. otherwise, download the files, then call `SetPlayerData(addr, currentPath, prefetchPath, payload)`
 
-When the client leaves visibility, is paused, etc., call `ClearPlayerData(addr)`.
+When the client leaves visibility, is paused, etc., call `ClearPlayerData(addr)`. **NOTE**: this is really important,
+and something I ran into while doing the Lightless integration - most other plugins don't require this to be
+carefully handled since their effects are tied to players. But Pulsar's not.
 
 And of course, subscribe to the `PlayerDataChanged`, `Ready`, and `Disposing` messages.
 
