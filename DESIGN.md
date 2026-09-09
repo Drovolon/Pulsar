@@ -34,7 +34,7 @@ These are a rough sketch of how I wanted the design to play out.
 The big TL;DR of how Pulsar slots into this ecosystem:
 
 * User broadcasts some music from an IMusicSource (LocalPlaybackSource, Beefweb Watcher)
-* Sync plugins get player data from either GetPlayerData () IPC or OnPlayerDataChanged () messages
+* Sync plugins get player data from either GetPlayerData() IPC or OnPlayerDataChanged() messages
 * Player data has:
     1. the current active file that should be synced (& its BLAKE3 and SHA-1 hashes)
     2. one file (& hashes) to sync for prefetch, when we can figure out what plays next
@@ -49,7 +49,7 @@ The big TL;DR of how Pulsar slots into this ecosystem:
 * The listener's client will show it as an available listening source; depending on whether they're broadcasting
   themselves, whether they're listening to someone else, whether they have autoplay enabled, etc., it may or may not
   start automatically playing
-* If the broadcaster leaves visibility, or logs off, etc., the sync plugin calls ClearPlayerData ()
+* If the broadcaster leaves visibility, or logs off, etc., the sync plugin calls ClearPlayerData()
 * On receiving the clear, Pulsar tears down that pair state, which may include stopping playback, switching to another
   source, etc.
 
@@ -246,17 +246,17 @@ An example may be easiest, and it's probably illustrative of data flow:
 * ApplicationCoordinator informs the ListeningManager that broadcasting has begun
 * The ListeningManager disables/ignores autoplay going forward, til broadcasting ends
 * ApplicationCoordinator forwards that data to the DebugLoopbackController
-* (If enabled) the DebugLoopbackController will call SetPlayerData () with that payload
+* (If enabled) the DebugLoopbackController will call SetPlayerData() with that payload
 * ListeningManager will show it as a "debug loopback" pair (address = ulong.MaxValue sentinel)
 * In the Listening tab of the plugin, select the "debug loopback" pair (pinning it)
 * ListeningManager notices the new pin and asks SyncDecider how to make the engine match the desired pair state
-* (If it wasn't playing already) SyncDecider will likely return EngineAction.Load () with the file path and cursor
+* (If it wasn't playing already) SyncDecider will likely return EngineAction.Load() with the file path and cursor
 * ListeningManager will submit the load target to EngineSession
 * EngineSession will invoke RemoteEngineLoad.LoadFileAsync
 * RemoteEngineLoad will:
     * if it's an .scd file: use Dalamud's Lumina instance to parse the .scd file and extract the raw Vorbis bytes, then
-      call IRemoteEngine.LoadBytesAsync ()
-    * if it's anything else: call IRemoteEngine.LoadAsync () with the raw file path
+      call IRemoteEngine.LoadBytesAsync()
+    * if it's anything else: call IRemoteEngine.LoadAsync() with the raw file path
 * IRemoteEngine is a StreamJsonRpc client connected to the NamedPipe for Pulsar.AudioHost.Listening - so the method call
   turns into a MessagePack'd RPC over a local pipe
 * The audio host process receives the Load RPC (in the `AudioServer` class), which in turn passes the call through to
@@ -266,7 +266,7 @@ An example may be easiest, and it's probably illustrative of data flow:
 * FilePlayer hands NAudio the loaded `WaveStream` and tells it to play audio
 
 This same path applies for syncs, too, except the source of the pair data isn't the debug loopback coordinator - it's
-the sync plugin itself, calling SetPlayerData () IPC.
+the sync plugin itself, calling SetPlayerData() IPC.
 
 ## Audio Libraries
 
