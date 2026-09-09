@@ -27,8 +27,28 @@ https://raw.githubusercontent.com/Drovolon/Pulsar/repo/repo.json
 * [DESIGN.md](./DESIGN.md) - technical information
 * [CONTRIBUTING.md](./CONTRIBUTING.md) - how to contribute (for developers)
 * [API.md](./API.md) - IPC API docs and general sync integration guide
-* [AI-DECLARATION.md](./AI-DECLARATION.md) - declaration of "AI" (LLM) usage
 
 ## About the Author
 
 Pulsar was created by Drovolon, one of the developers of Lightless. (Discord: @drovolon)
+
+# Technical
+
+## Support
+
+Join the [Magitek Industries Discord](https://discord.gg/aQPcTjzrYr). Get the Pulsar
+role and ask in `#pulsar-support`.
+
+## Reporting Bugs
+
+Please open a GitHub Issue. Include reproduction steps and ideally Dalamud logs
+at the debug level.
+
+## Release Process
+
+The dev build is pinned at 0.0.3, for reasons. Otherwise, to perform a release,
+create a GitHub release with a *tag* like `vX.X.X.X`. Pre-releases will automatically
+be deployed to testing; full releases go to stable. Release title doesn't matter.
+Description goes into the in-game changelog for that release.
+
+Promoting a pre-release to release *should* work too, but I haven't tested it.
