@@ -120,7 +120,7 @@ internal sealed class BroadcastTab(Plugin plugin, FileDialogManager fileDialogMa
             { Phase: BroadcastPhase.OffAir } => "Not currently broadcasting",
             { Phase: BroadcastPhase.Failed, LiveProvider: { } live } =>
                 $"Couldn't prepare {ProviderLabel(status.DesiredProvider)}; still broadcasting from {ProviderLabel(live)}.",
-            { Phase: BroadcastPhase.Failed } => $"Couldn't prepare {ProviderLabel(status.DesiredProvider)}.",
+            { Phase: BroadcastPhase.Failed } => $"Track preparation for {ProviderLabel(status.DesiredProvider)} failed.",
             { Phase: BroadcastPhase.Retrying, LiveProvider: { } live } =>
                 $"Retrying {ProviderLabel(status.DesiredProvider)}; still broadcasting from {ProviderLabel(live)}.",
             { Phase: BroadcastPhase.Retrying } => $"Retrying {ProviderLabel(status.DesiredProvider)}...",
